@@ -15,10 +15,15 @@ export interface EngineEvents {
   onPosition?: (samples: number, loopLen: number) => void;
 }
 
+// Injected by vite.config.ts at build time.
+declare const __BUILD_ID__: string;
+
 // BASE_URL ends with '/'; resolves correctly both at the root and under a
-// subpath deployment such as GitHub Pages (/<repo>/).
-const WASM_URL = import.meta.env.BASE_URL + 'dsp.wasm';
-const WORKLET_URL = import.meta.env.BASE_URL + 'worklet.js';
+// subpath deployment such as GitHub Pages (/<repo>/). The ?v= query ties the
+// stable-named assets to this build so a redeploy never pairs a fresh main
+// bundle with a stale cached worklet or wasm binary.
+const WASM_URL = `${import.meta.env.BASE_URL}dsp.wasm?v=${__BUILD_ID__}`;
+const WORKLET_URL = `${import.meta.env.BASE_URL}worklet.js?v=${__BUILD_ID__}`;
 const PROCESSOR_NAME = 'sheliak-processor';
 const READY_TIMEOUT_MS = 10000;
 
