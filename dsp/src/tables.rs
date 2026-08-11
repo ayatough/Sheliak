@@ -149,8 +149,8 @@ fn sine_spectrum() -> Spectrum {
 fn saw_spectrum() -> Spectrum {
     // x(t) = 2t - 1  =>  b_k = -2/(πk)
     let mut s = empty_spectrum();
-    for k in 1..=MAX_HARM {
-        s[k].im = -2.0 / (std::f32::consts::PI * k as f32);
+    for (k, c) in s.iter_mut().enumerate().skip(1) {
+        c.im = -2.0 / (std::f32::consts::PI * k as f32);
     }
     s
 }
@@ -174,11 +174,11 @@ fn tri_spectrum() -> Spectrum {
 /// coefficients follow as `a_k = 2·Re(c_k)`, `b_k = −2·Im(c_k)`.
 fn pulse_spectrum(d: f32) -> Spectrum {
     let mut s = empty_spectrum();
-    for k in 1..=MAX_HARM {
+    for (k, c) in s.iter_mut().enumerate().skip(1) {
         let theta = 2.0 * std::f32::consts::PI * k as f32 * d;
         let inv = 1.0 / (std::f32::consts::PI * k as f32);
-        s[k].re = 2.0 * theta.sin() * inv;
-        s[k].im = 2.0 * (1.0 - theta.cos()) * inv;
+        c.re = 2.0 * theta.sin() * inv;
+        c.im = 2.0 * (1.0 - theta.cos()) * inv;
     }
     s
 }
@@ -203,9 +203,9 @@ fn fold_spectrum(amount: f32, planner: &mut FftPlanner<f32>) -> Spectrum {
     fft.process(&mut buf);
     let norm = 2.0 / FOLD_FFT as f32;
     let mut s = empty_spectrum();
-    for k in 1..=MAX_HARM {
-        s[k].re = buf[k].re * norm;
-        s[k].im = -buf[k].im * norm;
+    for (k, c) in s.iter_mut().enumerate().skip(1) {
+        c.re = buf[k].re * norm;
+        c.im = -buf[k].im * norm;
     }
     s
 }

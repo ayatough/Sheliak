@@ -36,7 +36,12 @@ impl Ramp {
     }
 
     /// Value at the block start, then step forward one sample.
+    ///
+    /// Deliberately named `next` even though this is not an `Iterator`: it is
+    /// the innermost audio-loop call and must stay a trivially inlinable
+    /// two-instruction step.
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> f32 {
         let v = self.v;
         self.v += self.inc;

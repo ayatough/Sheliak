@@ -4,9 +4,31 @@
 //! This is the safe, target-independent API. `lib.rs` is nothing but a thin
 //! `extern "C"` shell around it, so the whole DSP core can be driven from
 //! native code (and is, by `tests/verify.rs`).
+//!
+//! # Parameter classes
+//!
+//! * **Continuous** (levels, morph, detune, spread, tune, cutoff, res, drive,
+//!   key track, master gain) go through one-pole smoothers; cutoff and tuning
+//!   are smoothed in the log domain. They apply to sounding voices at once.
+//! * **Discrete** (polyphony, filter mode, LFO wave, mod routing, seed, glide)
+//!   switch immediately — accepted MVP behaviour per SPEC §2. Switching the
+//!   filter *mode* under a sounding note can step, since the SVF state means
+//!   something different in each mode; everything else is click-free.
+//! * **Latched at note-on** (table id, unison count, phase randomisation):
+//!   rebuilding a unison stack under a sounding voice would splice in
+//!   oscillators at unrelated phases, so those take effect on the next note.
+//!
+//! # Determinism
+//!
+//! Given the same sample rate, the same parameter blocks and the same event
+//! sequence *at the same sample offsets*, output is bit-identical (this is what
+//! `tests/verify.rs::determinism_is_bit_exact` asserts, and what the worklet
+//! guarantees because it derives event offsets from a sample counter).
+//! Parameter smoothing is solved per block, so it is the event schedule — not
+//! wall-clock timing or buffer sizes chosen at random — that the output
+//! depends on.
 
 use crate::envelope::EnvConfig;
-use crate::filter::prewarp;
 use crate::params::*;
 use crate::smoother::{Ramp, Smoother, DEFAULT_TAU};
 use crate::tables::{self, Table};
@@ -50,6 +72,7 @@ pub struct BlockCtx<'a> {
     pub env_amp: EnvConfig,
     pub env_filter: EnvConfig,
     pub lfo_wave: u32,
+    pub lfo_rate: f32,
     pub mods: [ModSlot; MOD_SLOTS],
 }
 
@@ -298,10 +321,8 @@ impl Engine {
             if v.state != State::Active {
                 continue;
             }
-            if v.released {
-                if best_released.is_none_or(|(_, a)| v.age < a) {
-                    best_released = Some((i, v.age));
-                }
+            if v.released && best_released.is_none_or(|(_, a)| v.age < a) {
+                best_released = Some((i, v.age));
             }
             if best.is_none_or(|(_, a)| v.age < a) {
                 best = Some((i, v.age));
@@ -395,6 +416,7 @@ impl Engine {
                 env_amp: self.env_amp,
                 env_filter: self.env_filter,
                 lfo_wave: self.lfo_wave,
+                lfo_rate: self.lfo_rate,
                 mods: self.mods,
             };
             for v in self.voices.iter_mut() {
@@ -412,9 +434,9 @@ impl Engine {
 
     fn block_params(&mut self, n: usize) -> BlockParams {
         let mut osc = [OscBlock::default(); 2];
-        for i in 0..2 {
+        for (i, ob) in osc.iter_mut().enumerate() {
             let s = &mut self.osc_s[i];
-            osc[i] = OscBlock {
+            *ob = OscBlock {
                 enabled: self.osc_d[i].enabled,
                 level: s.level.block(n),
                 morph: s.morph.advance(n),
@@ -449,13 +471,6 @@ impl Engine {
             self.process(l, r);
             i += len;
         }
-    }
-
-    /// Cutoff actually used for a note, after key tracking (test helper).
-    pub fn debug_cutoff_g(&self, note: f32) -> f32 {
-        let kt = self.keytrack.current() * (note - 60.0) * 100.0;
-        let hz = (self.cutoff_log2.current() + kt / 1200.0).exp2();
-        prewarp(hz, self.sample_rate)
     }
 
     /// Table registry (test helper).

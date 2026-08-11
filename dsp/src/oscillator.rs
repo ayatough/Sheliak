@@ -54,7 +54,10 @@ pub fn detune_offsets(n: usize) -> [f32; MAX_UNISON] {
     }
     let n = n.min(MAX_UNISON);
     for (i, o) in out.iter_mut().take(n).enumerate() {
-        let x = -1.0 + 2.0 * i as f32 / (n - 1) as f32;
+        // Written as (2i − (n−1)) / (n−1) rather than −1 + 2i/(n−1) so that
+        // mirrored indices produce *exactly* negated floats.
+        let x = (2 * i) as f32 - (n - 1) as f32;
+        let x = x / (n - 1) as f32;
         *o = x.abs().powf(1.2) * if x < 0.0 { -1.0 } else { 1.0 };
     }
     out
@@ -68,7 +71,7 @@ pub fn pan_positions(n: usize) -> [f32; MAX_UNISON] {
     }
     let n = n.min(MAX_UNISON);
     for (i, o) in out.iter_mut().take(n).enumerate() {
-        *o = -1.0 + 2.0 * i as f32 / (n - 1) as f32;
+        *o = ((2 * i) as f32 - (n - 1) as f32) / (n - 1) as f32;
     }
     out
 }
@@ -126,9 +129,15 @@ pub fn frame_pos(frames: usize, morph: f32) -> (u32, u32, f32) {
     }
     let pos = morph.clamp(0.0, 1.0) * (frames - 1) as f32;
     let i0 = pos.floor();
+    let frac = pos - i0;
     let a = i0 as usize;
+    if frac == 0.0 {
+        // Frame-aligned (morph = 0 is the common case): collapse to a single
+        // frame so the inner loop does half the interpolation work.
+        return (a as u32, a as u32, 0.0);
+    }
     let b = (a + 1).min(frames - 1);
-    (a as u32, b as u32, pos - i0)
+    (a as u32, b as u32, frac)
 }
 
 pub struct Osc {

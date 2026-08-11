@@ -266,6 +266,9 @@ impl Voice {
             return;
         }
 
+        // Patch edits to the LFO rate must reach sounding voices too.
+        self.lfo.set_rate(ctx.lfo_rate, ctx.sample_rate);
+
         let m = self.eval_mods(ctx, &ctx.mods);
         let prev = self.prev_mod;
 
