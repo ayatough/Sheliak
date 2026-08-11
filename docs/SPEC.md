@@ -127,7 +127,8 @@ Worklet (`web/public/worklet.js`) は自己完結の plain JS。メッセージ:
 
 ```
 main → worklet:
-  { type: 'load-wasm', module: WebAssembly.Module }   // worklet内で new WebAssembly.Instance (同期)
+  { type: 'load-wasm', bytes: ArrayBuffer }            // worklet内で同期コンパイル+インスタンス化。
+                                                       // Module転送はChromeがCOOP/COEPなしでは黙って落とすため不可
   { type: 'patch', params: Float32Array }              // PARAM_COUNT個。wasmメモリに書いて apply_patch()
   { type: 'loop', loop: LoopIR | null }                // null = 停止。次のループ境界を待たず即時差し替え可
   { type: 'transport', playing: boolean }
@@ -182,6 +183,6 @@ interface LoopEvent {
 
 - `scripts/build-wasm.sh`: `cargo build --release --target wasm32-unknown-unknown` +
   `RUSTFLAGS="-C target-feature=+simd128"` → `web/public/dsp.wasm` へコピー
-- web: `npm run dev` / `npm run build` (Vite)。wasm は `fetch('/dsp.wasm')` → `WebAssembly.compile`
-  (メインスレッド) → module を postMessage で worklet へ。
+- web: `npm run dev` / `npm run build` (Vite)。wasm は `fetch('/dsp.wasm')` (メインスレッド) →
+  バイト列を postMessage (transfer) で worklet へ → worklet 内で同期コンパイル。
 - `AudioContext` 生成/`resume()` はユーザージェスチャ内。サンプルレートはハードコードしない。

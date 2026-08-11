@@ -54,7 +54,7 @@ class SheliakProcessor extends AudioWorkletProcessor {
     if (!msg || typeof msg !== 'object') return;
     switch (msg.type) {
       case 'load-wasm':
-        this.loadWasm(msg.module);
+        this.loadWasm(msg.bytes);
         break;
       case 'patch':
         this.applyPatch(msg.params);
@@ -72,8 +72,13 @@ class SheliakProcessor extends AudioWorkletProcessor {
 
   // ------------------------------------------------------------------ wasm
 
-  loadWasm(module) {
+  loadWasm(bytes) {
     try {
+      // Compile from raw bytes: Chrome refuses to structured-clone a
+      // WebAssembly.Module into a worklet without cross-origin isolation, so
+      // the main thread sends the binary instead. Synchronous compilation is
+      // allowed off the main thread and takes only a few ms for this module.
+      const module = new WebAssembly.Module(bytes);
       const instance = new WebAssembly.Instance(module, {});
       const ex = instance.exports;
       const required = [

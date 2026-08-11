@@ -1,7 +1,10 @@
 // AudioContext / AudioWorklet lifecycle.
 //
-// The wasm module is compiled on the main thread (worklets cannot fetch) and
-// transferred to the processor as a WebAssembly.Module (SPEC.md §9).
+// The wasm binary is fetched on the main thread (worklets cannot fetch) and
+// transferred to the processor as raw bytes; the worklet compiles it
+// synchronously. Transferring a compiled WebAssembly.Module would be nicer,
+// but Chrome silently drops Module postMessage without cross-origin isolation
+// (COOP/COEP), which we deliberately avoid (REQUIREMENTS §5.1).
 
 import type { LoopIR } from '../dsl/loop.ts';
 
@@ -79,7 +82,7 @@ export class AudioEngine {
     if (!ctx) throw new Error('no AudioContext');
     this.setState('loading', 'compiling dsp.wasm…');
 
-    const module = await this.fetchWasm();
+    const bytes = await this.fetchWasm();
 
     this.setState('loading', 'loading worklet…');
     try {
@@ -114,7 +117,7 @@ export class AudioEngine {
       };
     });
 
-    node.port.postMessage({ type: 'load-wasm', module });
+    node.port.postMessage({ type: 'load-wasm', bytes }, [bytes]);
     await ready;
 
     const analyser = ctx.createAnalyser();
@@ -134,7 +137,7 @@ export class AudioEngine {
     if (this.playing) this.setPlaying(true);
   }
 
-  private async fetchWasm(): Promise<WebAssembly.Module> {
+  private async fetchWasm(): Promise<ArrayBuffer> {
     let res: Response;
     try {
       res = await fetch(WASM_URL);
@@ -150,11 +153,7 @@ export class AudioEngine {
     if (!(magic[0] === 0x00 && magic[1] === 0x61 && magic[2] === 0x73 && magic[3] === 0x6d)) {
       throw new Error(`${WASM_URL} is not a WebAssembly binary — run ./scripts/build-wasm.sh first`);
     }
-    try {
-      return await WebAssembly.compile(bytes);
-    } catch (e) {
-      throw new Error(`could not compile ${WASM_URL}: ${message(e)}`);
-    }
+    return bytes;
   }
 
   // ------------------------------------------------------------- messaging
