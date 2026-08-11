@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sheliak — Wavetable WASM Synth</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot" id="state-dot"></span>
+        <strong>Sheliak</strong>
+        <span class="sub">wavetable wasm synth</span>
+      </div>
+      <div class="transport">
+        <button id="play" class="play" type="button">▶ Play</button>
+        <span id="status" class="status">stopped — click Play to start audio</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="pane editor-pane">
+        <div class="pane-head">
+          <span>document.md</span>
+          <span id="meta" class="meta"></span>
+        </div>
+        <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+      </section>
+
+      <section class="pane side">
+        <canvas id="scope" class="scope" width="640" height="140"></canvas>
+        <div class="posbar"><span id="pos"></span></div>
+
+        <div id="errors" class="errors" hidden></div>
+
+        <details class="expanded">
+          <summary>展開済みパラメータ</summary>
+          <pre id="expanded"></pre>
+        </details>
+
+        <details class="expanded">
+          <summary>Loop IR</summary>
+          <pre id="loopview"></pre>
+        </details>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
