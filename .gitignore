@@ -1,0 +1,6 @@
+/dsp/target/
+/web/node_modules/
+/web/dist/
+/web/public/dsp.wasm
+*.log
+.DS_Store
