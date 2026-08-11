@@ -14,3 +14,16 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[dev-dependencies]
+# Spectrum analysis for the aliasing test. Same version as the main dependency
+# (used at table-build time only), so this adds nothing to the build.
+rustfft = "6.4"
+
+[profile.test]
+# Table generation and 1-second offline renders are FFT/DSP heavy; unoptimised
+# test runs take minutes. This only affects `cargo test`.
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
