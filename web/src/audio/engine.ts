@@ -12,8 +12,10 @@ export interface EngineEvents {
   onPosition?: (samples: number, loopLen: number) => void;
 }
 
-const WASM_URL = '/dsp.wasm';
-const WORKLET_URL = '/worklet.js';
+// BASE_URL ends with '/'; resolves correctly both at the root and under a
+// subpath deployment such as GitHub Pages (/<repo>/).
+const WASM_URL = import.meta.env.BASE_URL + 'dsp.wasm';
+const WORKLET_URL = import.meta.env.BASE_URL + 'worklet.js';
 const PROCESSOR_NAME = 'sheliak-processor';
 const READY_TIMEOUT_MS = 10000;
 
