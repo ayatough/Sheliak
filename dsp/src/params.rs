@@ -149,6 +149,7 @@ pub const MBCOMP_RELEASE_S: usize = 5;
 pub const MBCOMP_MAKEUP: usize = 6; // linear
 
 // Engine limits
+pub const MAX_TRACKS: usize = 8;
 pub const MAX_VOICES: usize = 16;
 pub const MAX_UNISON: usize = 7;
 pub const MAX_BLOCK: usize = 128;

@@ -29,19 +29,26 @@ scripts/        ビルドスクリプト (wasm → web/public/dsp.wasm へコピ
 
 DSPコアは DSL を一切知らない。入力は正規化済みパラメータブロック (f32 配列) とノートイベントのみ。
 
+v0.3 からマルチトラック (最大 MAX_TRACKS=8)。各トラックは独立したパッチ (パラメータブロック
++ ボイス群 + FXチェーン) を持ち、ウェーブテーブルのミップマップは全トラックで共有する。
+トラック出力は合算し、マスターで軽いソフトクリップガード (|x| > ~0.95 でのみ作用) をかける。
+
 ```
 exports:
   memory: WebAssembly.Memory
   init(sample_rate: f32)            // 全状態リセット + テーブル/ミップマップ生成。ここでのみアロケーション可
-  params_ptr() -> u32               // f32 × PARAM_COUNT のブロック先頭 (wasmメモリ内オフセット)
-  apply_patch()                     // パラメータブロックを読み込んで反映 (アロケーションなし)
-  note_on(note: f32, velocity: f32) // note: MIDIノート番号 (小数可), velocity: 0..1。即時発音
-  note_off(note: f32)
-  all_notes_off()                   // 高速フェード付き全消音
+  params_ptr(track: u32) -> u32     // トラックの f32 × PARAM_COUNT ブロック先頭 (wasmメモリ内オフセット)
+  apply_patch(track: u32)           // トラックのパラメータブロックを読み込んで反映 (アロケーションなし)
+  note_on(track: u32, note: f32, velocity: f32) // note: MIDIノート番号 (小数可), velocity: 0..1。即時発音
+  note_off(track: u32, note: f32)
+  all_notes_off()                   // 全トラック高速フェード付き全消音
   process(nframes: u32)             // nframes ≤ 128。out_l/out_r に書き込む
   out_l_ptr() -> u32                // f32 × 128 の出力バッファ (L)
   out_r_ptr() -> u32                // f32 × 128 の出力バッファ (R)
 ```
+
+- track は 0..MAX_TRACKS-1。範囲外は無視 (panicしない)。
+- パッチ未適用のトラックは無音 (OSC無効)。CPUはアクティブなトラック分のみ消費すること。
 
 - **サンプル精度のイベント**: Worklet 側が 128 フレームのレンダークォンタムをイベント境界で分割し、
   `process(n1); note_on(...); process(n2); ...` のように呼ぶ。DSP側にイベントキューは不要。
@@ -165,6 +172,10 @@ fx:
 ```
 
 - `type:` は dist/distortion, eq, chorus, phaser, flanger, delay, reverb, comp/mbcomp を受理
+- `osc: []` (空リスト) はオシレータなし = ノイズ専用パッチ (ハイハット等)。`osc:` 省略時は
+  従来通りデフォルトの saw 1基
+- ドラムはパッチDSLで合成する (専用音源なし)。例: キック = sine + `mod: env.filter → pitch`
+  の高速ピッチ落下 + 短い amp env、ハット = `osc: []` + noise + hp12 + 短い decay
 - delay の `time` は絶対時間 (`ms`/`s`) と音楽的時間 (`3/16` 等, BPMから換算) の両対応
 - `ratio`, `stages` は裸の数値可。EQゲイン・コンプスレッショルドは dB 必須
 - ループ記法の和音 `[C3 Eb3 G3]` は v0.1 から対応済み
@@ -178,7 +189,8 @@ Worklet (`web/public/worklet.js`) は自己完結の plain JS。メッセージ:
 main → worklet:
   { type: 'load-wasm', bytes: ArrayBuffer }            // worklet内で同期コンパイル+インスタンス化。
                                                        // Module転送はChromeがCOOP/COEPなしでは黙って落とすため不可
-  { type: 'patch', params: Float32Array }              // PARAM_COUNT個。wasmメモリに書いて apply_patch()
+  { type: 'patch', track: number, params: Float32Array } // PARAM_COUNT個。wasmメモリに書いて apply_patch(track)
+  { type: 'clear-tracks', keep: number }               // track >= keep を無効化 (パッチ削除時)
   { type: 'loop', loop: LoopIR | null }                // null = 停止。次のループ境界を待たず即時差し替え可
   { type: 'transport', playing: boolean }
 worklet → main:
@@ -195,12 +207,16 @@ interface LoopIR {
 }
 interface LoopEvent {
   offsetSamples: number;             // ループ先頭からのオフセット
+  track: number;                     // 0..MAX_TRACKS-1
   kind: 0 | 1;                       // 0 = noteOn, 1 = noteOff
   note: number;                      // MIDIノート番号
   velocity: number;                  // 0..1 (noteOnのみ)
 }
 ```
 
+- **トラック割り当て (v0.3)**: ドキュメント内の ```synth フェンスの出現順がトラックインデックス
+  (0..7)。loop フェンスの各行 `id: ...` は同名の synth id に紐付く。未知の id への行はエラー。
+  8トラック超のフェンスはエラー。各行のセル数/拍は行ごとに独立に推定 (16セル×1小節=16分音符)。
 - 小節/BPM→サンプル変換は **TS側** (`sampleRate` は AudioContext から取得、ハードコード禁止)。
 - Worklet はサンプルカウンタでループ位置を管理し、`counter % lengthSamples` でイベントを
   サンプル精度でディスパッチ (レンダークォンタムをイベント境界で分割して process を呼ぶ)。

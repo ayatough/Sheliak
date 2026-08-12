@@ -156,6 +156,7 @@ export const TABLE_IDS: Record<string, number> = {
 };
 
 // Engine limits
+export const MAX_TRACKS = 8;
 export const MAX_VOICES = 16;
 export const MAX_UNISON = 7;
 export const MAX_BLOCK = 128;
