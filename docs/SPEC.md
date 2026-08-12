@@ -65,8 +65,30 @@ exports:
 | Env filter | 52 | 同上 |
 | LFO | 56 | WAVE(0=sine,1=tri,2=saw,3=square), RATE_HZ, PHASE(0-1) |
 | Mod slots | 64..95 | 8スロット × [SRC, DST, AMOUNT, 予備] |
+| Noise | 96 | ENABLED, LEVEL(linear), COLOR(0=white,1=pink) — ボイス内・フィルタ前でOSCとミックス |
+| FX order | 104..111 | エフェクトチェーンの処理順 (エフェクト型ID×8, 0=空)。各型は最大1回 |
+| FX params | 112.. | 型ごとに8スロット: base = 112 + (型ID-1)×8。詳細は params.rs / params.ts |
 
-PARAM_COUNT = 96。
+PARAM_COUNT = 192。
+
+**エフェクト型ID**: 1=dist, 2=eq, 3=chorus, 4=phaser, 5=flanger, 6=delay, 7=reverb, 8=mbcomp。
+マスターバス (ボイス合算後・ステレオ) に FX order の順で直列適用。
+主要パラメータ (詳細・単位は params.rs / params.ts のコメントが正):
+
+| 型 | パラメータ |
+|----|-----------|
+| dist | DRIVE(0-1), MIX, MODE(0=tanh,1=fold,2=clip), TONE_HZ(ポストLP, 20000=off) |
+| eq | LOW_DB, MID_DB, HIGH_DB, MID_FREQ_HZ (低シェルフ120Hz・高シェルフ6kHz固定) |
+| chorus | RATE_HZ, DEPTH, MIX |
+| phaser | RATE_HZ, DEPTH, FEEDBACK, MIX, STAGES(2-8偶数), CENTER_HZ |
+| flanger | RATE_HZ, DEPTH, FEEDBACK, MIX |
+| delay | TIME_S(≤2.0), FEEDBACK, MIX, PINGPONG(0/1), TONE_HZ(FB経路LP) |
+| reverb | SIZE, DAMP, MIX, PREDELAY_S(≤0.25), WIDTH |
+| mbcomp | THRESH_{LOW,MID,HIGH}_DB, RATIO(≥1), ATTACK_S, RELEASE_S, MAKEUP(linear)。クロスオーバー 120Hz/2.5kHz 固定 |
+
+- FXバッファ (ディレイライン・リバーブ等) は `init()` で最大長を確保。`process()` 内アロケーション禁止は不変。
+- ノイズは決定性のためシード付きRNG (ボイス/ノートから導出)。pink は白色ノイズのフィルタリングで生成。
+- FXのLFO (chorus/phaser/flanger) は `init()` 起点のフリーラン。決定性: init後の同一イベント列で同一出力。
 
 **Modソース enum**: 0=none, 1=env.filter, 2=env.amp, 3=lfo.1, 4=velocity
 **Modデスティネーション enum と AMOUNT の単位**:
@@ -119,6 +141,33 @@ env.filter: { a: 2ms, d: 400ms, s: 0%, r: 100ms }
 lfo.1:  { wave: tri, rate: 1Hz, phase: 0 }
 voice:  { polyphony: 8, glide: 0ms }
 seed: 0, master_gain: -6dB 相当 (ヘッドルーム確保のため 0.5)
+noise:  { level: -12dB, color: white }   # noise: セクションがある場合のみ有効
+fx:     # fx: リストの並び順 = 処理順。各型は最大1回、最大8個
+  dist:    { drive: 0.3, mix: 100%, mode: tanh, tone: 20kHz }
+  eq:      { low: 0dB, mid: 0dB, high: 0dB, mid_freq: 1kHz }
+  chorus:  { rate: 0.8Hz, depth: 30%, mix: 35% }
+  phaser:  { rate: 0.4Hz, depth: 70%, feedback: 30%, mix: 40%, stages: 6, center: 800Hz }
+  flanger: { rate: 0.25Hz, depth: 60%, feedback: 50%, mix: 35% }
+  delay:   { time: 3/16, feedback: 40%, mix: 25%, pingpong: on, tone: 4kHz }
+  reverb:  { size: 60%, damp: 50%, mix: 20%, predelay: 20ms, width: 100% }
+  comp:    { thresh_low: -24dB, thresh_mid: -24dB, thresh_high: -24dB, ratio: 3,
+             attack: 10ms, release: 120ms, makeup: 0dB }
+
+DSL記法 (v0.2 追加):
+
+```yaml
+noise: { level: -12dB, color: pink }
+
+fx:
+  - { type: dist,   drive: 0.4, mix: 60% }
+  - { type: delay,  time: 3/16, feedback: 45%, mix: 25% }
+  - { type: reverb, size: 70%, mix: 20% }
+```
+
+- `type:` は dist/distortion, eq, chorus, phaser, flanger, delay, reverb, comp/mbcomp を受理
+- delay の `time` は絶対時間 (`ms`/`s`) と音楽的時間 (`3/16` 等, BPMから換算) の両対応
+- `ratio`, `stages` は裸の数値可。EQゲイン・コンプスレッショルドは dB 必須
+- ループ記法の和音 `[C3 Eb3 G3]` は v0.1 から対応済み
 ```
 
 ## 6. Worklet プロトコル (postMessage)

@@ -14,7 +14,7 @@
  */
 
 // Mirror of web/src/shared/params.ts / dsp/src/params.rs.
-const PARAM_COUNT = 96;
+const PARAM_COUNT = 192;
 
 // Buffers exported by the DSP core are 128 frames (the render quantum).
 const MAX_BLOCK = 128;

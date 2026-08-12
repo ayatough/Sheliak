@@ -1,7 +1,7 @@
 //! Parameter block layout — integration contract with web/src/shared/params.ts.
 //! Do not change values without updating the TS mirror and docs/SPEC.md.
 
-pub const PARAM_COUNT: usize = 96;
+pub const PARAM_COUNT: usize = 192;
 
 // Global
 pub const P_POLYPHONY: usize = 0; // 1..=16
@@ -67,6 +67,86 @@ pub const TABLE_SQUARE: u32 = 3;
 pub const TABLE_PWM: u32 = 4;
 pub const TABLE_FOLD: u32 = 5;
 pub const TABLE_COUNT: usize = 6;
+
+// Noise layer (per voice, mixed with the oscillators pre-filter)
+pub const NOISE_BASE: usize = 96;
+pub const NOISE_ENABLED: usize = 0; // 0/1
+pub const NOISE_LEVEL: usize = 1; // linear
+pub const NOISE_COLOR: usize = 2; // 0=white 1=pink
+
+// Master FX chain: processing order as a list of effect type ids, 0 = empty.
+pub const FX_ORDER_BASE: usize = 104;
+pub const FX_SLOTS: usize = 8;
+
+// Effect type ids (each type appears at most once in the chain)
+pub const FX_NONE: u32 = 0;
+pub const FX_DIST: u32 = 1;
+pub const FX_EQ: u32 = 2;
+pub const FX_CHORUS: u32 = 3;
+pub const FX_PHASER: u32 = 4;
+pub const FX_FLANGER: u32 = 5;
+pub const FX_DELAY: u32 = 6;
+pub const FX_REVERB: u32 = 7;
+pub const FX_MBCOMP: u32 = 8;
+pub const FX_TYPE_COUNT: usize = 8;
+
+// Per-effect parameter blocks: base = FX_PARAMS_BASE + (type - 1) * FX_PARAMS_STRIDE
+pub const FX_PARAMS_BASE: usize = 112;
+pub const FX_PARAMS_STRIDE: usize = 8;
+
+// Distortion (FX_DIST)
+pub const DIST_DRIVE: usize = 0; // 0..1
+pub const DIST_MIX: usize = 1; // 0..1 dry/wet
+pub const DIST_MODE: usize = 2; // 0=tanh 1=fold 2=clip
+pub const DIST_TONE_HZ: usize = 3; // post lowpass, 20000 = off
+
+// 3-band EQ (FX_EQ): low shelf 120 Hz, peak at MID_FREQ, high shelf 6 kHz
+pub const EQ_LOW_DB: usize = 0;
+pub const EQ_MID_DB: usize = 1;
+pub const EQ_HIGH_DB: usize = 2;
+pub const EQ_MID_FREQ_HZ: usize = 3;
+
+// Chorus (FX_CHORUS)
+pub const CHORUS_RATE_HZ: usize = 0;
+pub const CHORUS_DEPTH: usize = 1; // 0..1
+pub const CHORUS_MIX: usize = 2; // 0..1
+
+// Phaser (FX_PHASER)
+pub const PHASER_RATE_HZ: usize = 0;
+pub const PHASER_DEPTH: usize = 1; // 0..1
+pub const PHASER_FEEDBACK: usize = 2; // 0..1
+pub const PHASER_MIX: usize = 3; // 0..1
+pub const PHASER_STAGES: usize = 4; // 2..8, even
+pub const PHASER_CENTER_HZ: usize = 5;
+
+// Flanger (FX_FLANGER)
+pub const FLANGER_RATE_HZ: usize = 0;
+pub const FLANGER_DEPTH: usize = 1; // 0..1
+pub const FLANGER_FEEDBACK: usize = 2; // 0..1
+pub const FLANGER_MIX: usize = 3; // 0..1
+
+// Delay (FX_DELAY)
+pub const DELAY_TIME_S: usize = 0; // seconds (TS converts musical time), max 2.0
+pub const DELAY_FEEDBACK: usize = 1; // 0..1
+pub const DELAY_MIX: usize = 2; // 0..1
+pub const DELAY_PINGPONG: usize = 3; // 0/1
+pub const DELAY_TONE_HZ: usize = 4; // feedback-path lowpass
+
+// Reverb (FX_REVERB)
+pub const REVERB_SIZE: usize = 0; // 0..1
+pub const REVERB_DAMP: usize = 1; // 0..1
+pub const REVERB_MIX: usize = 2; // 0..1
+pub const REVERB_PREDELAY_S: usize = 3; // seconds, max 0.25
+pub const REVERB_WIDTH: usize = 4; // 0..1
+
+// Multiband compressor (FX_MBCOMP): 3 bands, fixed crossovers (120 Hz / 2.5 kHz)
+pub const MBCOMP_THRESH_LOW_DB: usize = 0;
+pub const MBCOMP_THRESH_MID_DB: usize = 1;
+pub const MBCOMP_THRESH_HIGH_DB: usize = 2;
+pub const MBCOMP_RATIO: usize = 3; // >= 1
+pub const MBCOMP_ATTACK_S: usize = 4;
+pub const MBCOMP_RELEASE_S: usize = 5;
+pub const MBCOMP_MAKEUP: usize = 6; // linear
 
 // Engine limits
 pub const MAX_VOICES: usize = 16;
