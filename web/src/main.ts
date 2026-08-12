@@ -3,6 +3,7 @@
 import './style.css';
 import { AudioEngine, type EngineState } from './audio/engine.ts';
 import { compile, type CompileResult } from './dsl/compile.ts';
+import { GuiView } from './gui/view.ts';
 import { DEFAULT_DOC } from './defaultDoc.ts';
 
 const DEBOUNCE_MS = 150;
@@ -25,6 +26,7 @@ const loopViewEl = $<HTMLElement>('loopview');
 const metaEl = $<HTMLElement>('meta');
 const scope = $<HTMLCanvasElement>('scope');
 const posEl = $<HTMLElement>('pos');
+const viewTabs = $<HTMLElement>('view-tabs');
 
 let lastValidPatchAt = 0; // monotonic counter of successful patch applications
 /** Per-track expanded views, kept when a fence errors (last valid patch). */
@@ -45,8 +47,49 @@ const engine = new AudioEngine({
   },
   onPosition: (samples, loopLen) => {
     posEl.style.width = loopLen > 0 && engine.isPlaying ? `${((samples / loopLen) * 100).toFixed(1)}%` : '0%';
+    gui.setPlayhead(samples, loopLen, engine.isPlaying);
   },
 });
+
+// ---------------------------------------------------------------------- gui
+
+/**
+ * The GUI is a projection: it reads the document, and every gesture hands back
+ * a patched document. `setDoc` writes the textarea without stealing focus or
+ * scroll position, then recompiles immediately so the sound follows the knob.
+ */
+const gui = new GuiView(
+  {
+    seq: $<HTMLElement>('seq'),
+    trackTabs: $<HTMLElement>('track-tabs'),
+    params: $<HTMLElement>('params'),
+    bars: $<HTMLInputElement>('loop-bars'),
+    bpm: $<HTMLInputElement>('loop-bpm'),
+    tieMode: $<HTMLButtonElement>('tie-mode'),
+  },
+  {
+    getDoc: () => editor.value,
+    setDoc: (doc: string) => {
+      const { scrollTop, selectionStart, selectionEnd } = editor;
+      const focused = document.activeElement === editor;
+      editor.value = doc;
+      editor.scrollTop = scrollTop;
+      if (focused) editor.setSelectionRange(selectionStart, selectionEnd);
+      // A GUI-originated change: recompile now, skipping the typing debounce.
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      recompile();
+    },
+    hint: (message: string) => {
+      guiHint = message;
+      renderStatus();
+    },
+  },
+);
+
+let guiHint = '';
 
 // ------------------------------------------------------------------ compile
 
@@ -87,6 +130,7 @@ function recompile(force = false): void {
 
   renderErrors(result);
   renderMeta(result);
+  gui.render(result);
   renderStatus();
 }
 
@@ -188,7 +232,7 @@ function renderStatus(): void {
   if (!isError && lastResult && lastResult.tracks.length < lastResult.trackCount && lastValidPatchAt > 0) {
     text += ' — playing last valid patch';
   }
-  statusEl.textContent = text;
+  statusEl.textContent = guiHint ? `${text} — ${guiHint}` : text;
   statusEl.classList.toggle('error', isError);
 }
 
@@ -267,6 +311,24 @@ editor.addEventListener('input', () => {
   }, DEBOUNCE_MS);
 });
 
+// ------------------------------------------------------------- view tabs
+
+// Mobile: one pane at a time. Desktop CSS ignores these classes.
+function selectView(which: 'md' | 'gui'): void {
+  for (const btn of Array.from(viewTabs.querySelectorAll<HTMLButtonElement>('button'))) {
+    btn.classList.toggle('on', btn.dataset['view'] === which);
+  }
+  $<HTMLElement>('pane-md').classList.toggle('active', which === 'md');
+  $<HTMLElement>('pane-gui').classList.toggle('active', which === 'gui');
+  if (which === 'gui') sizeScope();
+}
+
+viewTabs.addEventListener('click', (ev) => {
+  const btn = (ev.target as HTMLElement).closest('button');
+  const which = btn?.dataset['view'];
+  if (which === 'md' || which === 'gui') selectView(which);
+});
+
 // ---------------------------------------------------------------- scope
 
 let scopeRunning = false;
@@ -331,6 +393,7 @@ function sizeScope(): void {
 window.addEventListener('resize', sizeScope);
 
 editor.value = DEFAULT_DOC;
+selectView('gui');
 sizeScope();
 recompile(true);
 renderStatus();

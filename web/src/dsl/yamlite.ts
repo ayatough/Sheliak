@@ -17,6 +17,8 @@ import type { DslError, Pos } from './errors.ts';
 export interface YScalar extends Pos {
   kind: 'scalar';
   value: string;
+  /** 1-based column just past the last character of the token (exclusive). */
+  endCol: number;
 }
 
 export interface YMapEntry {
@@ -28,11 +30,19 @@ export interface YMapEntry {
 export interface YMap extends Pos {
   kind: 'map';
   entries: YMapEntry[];
+  /** true for `{ ... }`, false for indented block maps. */
+  flow: boolean;
+  /** Position of the closing `}` (flow maps only) — the insertion anchor. */
+  close?: Pos;
 }
 
 export interface YSeq extends Pos {
   kind: 'seq';
   items: YNode[];
+  /** true for `[ ... ]`, false for `- ` block sequences. */
+  flow: boolean;
+  /** Position of the closing `]` (flow sequences only). */
+  close?: Pos;
 }
 
 export type YNode = YScalar | YMap | YSeq;
@@ -66,7 +76,7 @@ export function parseYamlite(src: string, startLine = 1): YamliteResult {
   const lines = prepare(src, startLine, errors);
 
   if (lines.length === 0) {
-    return { root: { kind: 'map', entries: [], line: startLine, col: 1 }, errors };
+    return { root: { kind: 'map', entries: [], flow: false, line: startLine, col: 1 }, errors };
   }
 
   const first = lines[0] as Line;
@@ -124,7 +134,7 @@ function parseNode(state: State, indent: number): YNode {
 
 function parseBlockMap(state: State, indent: number): YMap {
   const start = state.lines[state.i] as Line;
-  const map: YMap = { kind: 'map', entries: [], line: start.n, col: indent + 1 };
+  const map: YMap = { kind: 'map', entries: [], flow: false, line: start.n, col: indent + 1 };
 
   while (state.i < state.lines.length) {
     const line = state.lines[state.i] as Line;
@@ -160,7 +170,7 @@ function parseBlockMap(state: State, indent: number): YMap {
       if (next && next.indent > indent) {
         value = parseNode(state, next.indent);
       } else {
-        value = { kind: 'map', entries: [], line: line.n, col: restCol };
+        value = { kind: 'map', entries: [], flow: false, line: line.n, col: restCol };
       }
     }
     map.entries.push({ key, keyPos, value });
@@ -171,7 +181,7 @@ function parseBlockMap(state: State, indent: number): YMap {
 
 function parseBlockSeq(state: State, indent: number): YSeq {
   const start = state.lines[state.i] as Line;
-  const seq: YSeq = { kind: 'seq', items: [], line: start.n, col: indent + 1 };
+  const seq: YSeq = { kind: 'seq', items: [], flow: false, line: start.n, col: indent + 1 };
 
   while (state.i < state.lines.length) {
     const line = state.lines[state.i] as Line;
@@ -211,7 +221,7 @@ function parseInline(text: string, pos: Pos, errors: DslError[]): YNode {
     }
     return r.node;
   }
-  return { kind: 'scalar', value: text, line: pos.line, col: pos.col };
+  return { kind: 'scalar', value: text, line: pos.line, col: pos.col, endCol: pos.col + text.length };
 }
 
 interface FlowResult {
@@ -233,7 +243,7 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
   const ch = s[i];
 
   if (ch === '{') {
-    const map: YMap = { kind: 'map', entries: [], line: pos.line, col: colOf(pos, i) };
+    const map: YMap = { kind: 'map', entries: [], flow: true, line: pos.line, col: colOf(pos, i) };
     i++;
     for (;;) {
       i = skipWs(s, i);
@@ -242,6 +252,7 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
         break;
       }
       if (s[i] === '}') {
+        map.close = { line: pos.line, col: colOf(pos, i) };
         i++;
         break;
       }
@@ -266,6 +277,7 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
         continue;
       }
       if (s[i] === '}') {
+        map.close = { line: pos.line, col: colOf(pos, i) };
         i++;
         break;
       }
@@ -280,7 +292,7 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
   }
 
   if (ch === '[') {
-    const seq: YSeq = { kind: 'seq', items: [], line: pos.line, col: colOf(pos, i) };
+    const seq: YSeq = { kind: 'seq', items: [], flow: true, line: pos.line, col: colOf(pos, i) };
     i++;
     for (;;) {
       i = skipWs(s, i);
@@ -289,6 +301,7 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
         break;
       }
       if (s[i] === ']') {
+        seq.close = { line: pos.line, col: colOf(pos, i) };
         i++;
         break;
       }
@@ -301,6 +314,7 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
         continue;
       }
       if (s[i] === ']') {
+        seq.close = { line: pos.line, col: colOf(pos, i) };
         i++;
         break;
       }
@@ -318,8 +332,9 @@ function parseFlow(s: string, i0: number, pos: Pos, errors: DslError[]): FlowRes
   const start = i;
   while (i < s.length && s[i] !== ',' && s[i] !== '}' && s[i] !== ']') i++;
   const value = s.slice(start, i).replace(/\s+$/, '');
+  const col = colOf(pos, start);
   return {
-    node: { kind: 'scalar', value, line: pos.line, col: colOf(pos, start) },
+    node: { kind: 'scalar', value, line: pos.line, col, endCol: col + value.length },
     next: i,
   };
 }

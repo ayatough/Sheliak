@@ -65,11 +65,13 @@ export const DEFAULT_VELOCITY = 1.0;
 const DEFAULT_BARS = 1;
 const DEFAULT_BPM = 120;
 
-interface Cell {
+export interface Cell {
   /** MIDI notes; empty = rest, null = tie (extend previous). */
   notes: number[] | null;
   tie: boolean;
   pos: Pos;
+  /** The original source token, so regeneration can keep its spelling. */
+  raw: string;
 }
 
 export function parseLoop(
@@ -217,7 +219,7 @@ function emitLineEvents(
 
 // ------------------------------------------------------------------ tokenizer
 
-function tokenizeCells(src: string, line: number, colBase: number, sink: ErrorSink): Cell[] {
+export function tokenizeCells(src: string, line: number, colBase: number, sink: ErrorSink): Cell[] {
   const cells: Cell[] = [];
   let i = 0;
   while (i < src.length) {
@@ -245,7 +247,7 @@ function tokenizeCells(src: string, line: number, colBase: number, sink: ErrorSi
         }
       }
       if (notes.length === 0) sink.push(pos, 'empty chord "[]"');
-      cells.push({ notes, tie: false, pos });
+      cells.push({ notes, tie: false, pos, raw: src.slice(i, end + 1) });
       i = end + 1;
       continue;
     }
@@ -256,20 +258,20 @@ function tokenizeCells(src: string, line: number, colBase: number, sink: ErrorSi
     i = j;
 
     if (tok === '.') {
-      cells.push({ notes: [], tie: false, pos });
+      cells.push({ notes: [], tie: false, pos, raw: tok });
       continue;
     }
     if (tok === '~') {
-      cells.push({ notes: null, tie: true, pos });
+      cells.push({ notes: null, tie: true, pos, raw: tok });
       continue;
     }
     const n = noteToMidi(tok);
     if (n === null) {
       sink.push(pos, `invalid note "${tok}" (expected a note like C3, Eb3, F#4, or "." / "~")`);
-      cells.push({ notes: [], tie: false, pos });
+      cells.push({ notes: [], tie: false, pos, raw: tok });
       continue;
     }
-    cells.push({ notes: [n], tie: false, pos });
+    cells.push({ notes: [n], tie: false, pos, raw: tok });
   }
   return cells;
 }

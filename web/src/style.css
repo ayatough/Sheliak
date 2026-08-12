@@ -295,3 +295,359 @@ details.expanded pre {
     min-height: 46vh;
   }
 }
+
+/* ==================================================================== GUI */
+
+.view-tabs {
+  display: none;
+  gap: 4px;
+}
+
+.view-tabs button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.view-tabs button.on {
+  color: var(--fg);
+  border-color: var(--accent-dim);
+}
+
+/* --------------------------------------------------------- sequencer grid */
+
+.seq-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.seq-title {
+  letter-spacing: 0.08em;
+}
+
+label.num {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+label.num input {
+  width: 52px;
+  font: inherit;
+  font-family: var(--mono);
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.chip {
+  font: inherit;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--dim);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.chip.on {
+  color: #06110f;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.seq {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.seq-row {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr) 46px;
+  align-items: center;
+  gap: 6px;
+}
+
+.seq-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seq-label.muted {
+  color: var(--dim);
+}
+
+.seq-cells {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  grid-template-columns: repeat(var(--cells), minmax(0, 1fr));
+  touch-action: none;
+}
+
+.cell {
+  position: relative;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  padding: 0 1px;
+  line-height: 1.1;
+}
+
+.cell.beat {
+  border-left-color: var(--accent-dim);
+}
+
+.cell.note {
+  background: var(--accent-dim);
+  color: #eafffb;
+  border-color: var(--accent);
+}
+
+.cell.chord {
+  background: linear-gradient(var(--accent-dim), #2a5c78);
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cell.tie {
+  background: #23413f;
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.cell.dragging {
+  outline: 1px solid var(--accent);
+  z-index: 2;
+}
+
+.cell .stack {
+  font-size: 8px;
+  opacity: 0.95;
+}
+
+.playhead {
+  position: absolute;
+  top: -1px;
+  bottom: -1px;
+  left: 0;
+  width: calc(100% / var(--cells));
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(calc(var(--pcol, 0) * 100%));
+}
+
+.seq.playing .playhead {
+  opacity: 0.85;
+}
+
+.res-select {
+  font: inherit;
+  font-size: 10px;
+  font-family: var(--mono);
+  color: var(--dim);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.seq-add {
+  font: inherit;
+  font-size: 12px;
+  color: var(--dim);
+  background: var(--panel-2);
+  border: 1px dashed var(--line);
+  border-radius: 4px;
+  padding: 6px 0;
+  cursor: pointer;
+  grid-column: 2 / 4;
+}
+
+.seq-add:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+/* ------------------------------------------------------------ param panel */
+
+.track-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+}
+
+.track-tabs button {
+  font: inherit;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.track-tabs button.on {
+  color: var(--fg);
+  background: var(--panel-2);
+  border-color: var(--accent-dim);
+}
+
+.track-tabs button.broken {
+  color: var(--err);
+}
+
+.params {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.psection {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 8px 10px;
+}
+
+.psection > h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: var(--accent);
+  font-family: var(--mono);
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.field > label {
+  font-size: 11px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field .val {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--fg);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.field .val .badge {
+  color: var(--warn);
+  font-size: 9px;
+  margin-right: 3px;
+}
+
+.field.disabled {
+  opacity: 0.42;
+}
+
+.field input[type='range'] {
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent);
+  background: transparent;
+  touch-action: none;
+}
+
+.field select,
+.field .toggle {
+  font: inherit;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 6px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.field .toggle.on {
+  color: #06110f;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.gui-hint {
+  font-size: 11px;
+  color: var(--warn);
+  font-family: var(--mono);
+  min-height: 14px;
+}
+
+@media (max-width: 900px) {
+  .view-tabs {
+    display: flex;
+  }
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  body {
+    overflow: hidden;
+  }
+  .layout > .pane {
+    display: none;
+  }
+  .layout > .pane.active {
+    display: flex;
+  }
+  textarea#editor {
+    min-height: 0;
+  }
+  .field {
+    grid-template-columns: 68px minmax(0, 1fr) 58px;
+  }
+  .cell {
+    height: 40px;
+  }
+}
