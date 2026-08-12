@@ -2,8 +2,8 @@
 //!
 //! Two faces:
 //!
-//! * the safe [`Engine`] API (`rlib`), used by `tests/verify.rs` and by any
-//!   future native host;
+//! * the safe [`MultiEngine`] API (`rlib`), used by `tests/verify.rs` and by
+//!   any future native host;
 //! * the raw `extern "C"` exports below (`cdylib` → `wasm32-unknown-unknown`,
 //!   no wasm-bindgen), which are a thin shell around exactly that API.
 //!
@@ -11,15 +11,20 @@
 //!
 //! ```text
 //! init(sample_rate: f32)
-//! params_ptr() -> *mut f32      // f32 × PARAM_COUNT
-//! apply_patch()
-//! note_on(note: f32, velocity: f32)
-//! note_off(note: f32)
-//! all_notes_off()
-//! process(nframes: u32)         // nframes ≤ 128
-//! out_l_ptr() -> *const f32     // f32 × 128
+//! params_ptr(track: u32) -> *mut f32   // f32 × PARAM_COUNT, per track
+//! apply_patch(track: u32)
+//! note_on(track: u32, note: f32, velocity: f32)
+//! note_off(track: u32, note: f32)
+//! all_notes_off()                      // every track
+//! process(nframes: u32)                // nframes ≤ 128, summed master bus
+//! out_l_ptr() -> *const f32            // f32 × 128
 //! out_r_ptr() -> *const f32
 //! ```
+//!
+//! `track` is `0..MAX_TRACKS`. **Out-of-range indices are ignored silently and
+//! never panic**: the note/patch entry points become no-ops, and
+//! `params_ptr()` hands back a scratch block that is never read back, so a
+//! buggy host can write into it harmlessly.
 //!
 //! # Safety of the global state
 //!
@@ -44,6 +49,7 @@ pub mod envelope;
 pub mod filter;
 pub mod fx;
 pub mod lfo;
+pub mod multi;
 pub mod noise;
 pub mod oscillator;
 pub mod params;
@@ -52,14 +58,17 @@ pub mod smoother;
 pub mod tables;
 pub mod voice;
 
-pub use engine::Engine;
+pub use engine::Track;
+pub use multi::MultiEngine;
 
 use core::cell::UnsafeCell;
-use params::{MAX_BLOCK, PARAM_COUNT};
+use params::{MAX_BLOCK, MAX_TRACKS, PARAM_COUNT};
 
 struct Shell {
-    engine: Option<Engine>,
-    params: [f32; PARAM_COUNT],
+    engine: Option<MultiEngine>,
+    /// One parameter block per track, plus a trailing scratch block handed out
+    /// for out-of-range track indices.
+    params: [[f32; PARAM_COUNT]; MAX_TRACKS + 1],
     out_l: [f32; MAX_BLOCK],
     out_r: [f32; MAX_BLOCK],
 }
@@ -72,10 +81,23 @@ unsafe impl Sync for SingleThreaded {}
 
 static STATE: SingleThreaded = SingleThreaded(UnsafeCell::new(Shell {
     engine: None,
-    params: [0.0; PARAM_COUNT],
+    params: [[0.0; PARAM_COUNT]; MAX_TRACKS + 1],
     out_l: [0.0; MAX_BLOCK],
     out_r: [0.0; MAX_BLOCK],
 }));
+
+/// Index of the scratch parameter block used for out-of-range tracks.
+const DUMP: usize = MAX_TRACKS;
+
+#[inline]
+fn track_slot(track: u32) -> usize {
+    let t = track as usize;
+    if t < MAX_TRACKS {
+        t
+    } else {
+        DUMP
+    }
+}
 
 /// SAFETY: single-threaded host, no re-entrancy, borrow ends with the call.
 #[inline]
@@ -88,38 +110,43 @@ fn shell() -> &'static mut Shell {
 #[no_mangle]
 pub extern "C" fn init(sample_rate: f32) {
     let s = shell();
-    s.engine = Some(Engine::new(sample_rate));
+    s.engine = Some(MultiEngine::new(sample_rate));
     s.out_l = [0.0; MAX_BLOCK];
     s.out_r = [0.0; MAX_BLOCK];
 }
 
-/// Pointer to the `PARAM_COUNT`-long parameter block the host writes into.
+/// Pointer to a track's `PARAM_COUNT`-long parameter block. Out-of-range
+/// tracks get the scratch block (writes there are simply never applied).
 #[no_mangle]
-pub extern "C" fn params_ptr() -> *mut f32 {
-    shell().params.as_mut_ptr()
+pub extern "C" fn params_ptr(track: u32) -> *mut f32 {
+    shell().params[track_slot(track)].as_mut_ptr()
 }
 
-/// Reads the parameter block into the engine. Allocation-free.
+/// Reads a track's parameter block into the engine. Allocation-free.
 #[no_mangle]
-pub extern "C" fn apply_patch() {
+pub extern "C" fn apply_patch(track: u32) {
+    let t = track as usize;
+    if t >= MAX_TRACKS {
+        return;
+    }
     let s = shell();
-    let p = s.params;
+    let p = s.params[t];
     if let Some(e) = s.engine.as_mut() {
-        e.apply_patch(&p);
+        e.apply_patch(t, &p);
     }
 }
 
 #[no_mangle]
-pub extern "C" fn note_on(note: f32, velocity: f32) {
+pub extern "C" fn note_on(track: u32, note: f32, velocity: f32) {
     if let Some(e) = shell().engine.as_mut() {
-        e.note_on(note, velocity);
+        e.note_on(track as usize, note, velocity);
     }
 }
 
 #[no_mangle]
-pub extern "C" fn note_off(note: f32) {
+pub extern "C" fn note_off(track: u32, note: f32) {
     if let Some(e) = shell().engine.as_mut() {
-        e.note_off(note);
+        e.note_off(track as usize, note);
     }
 }
 

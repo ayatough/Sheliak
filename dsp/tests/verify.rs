@@ -17,7 +17,8 @@ use sheliak_dsp::noise::Noise;
 use sheliak_dsp::oscillator::{detune_offsets, mip_level_for};
 use sheliak_dsp::params::*;
 use sheliak_dsp::tables::{mip_harmonics, mip_len, NUM_MIPS};
-use sheliak_dsp::Engine;
+use sheliak_dsp::multi::soft_clip_master;
+use sheliak_dsp::{MultiEngine, Track};
 
 const SR: f32 = 48_000.0;
 
@@ -25,15 +26,16 @@ const SR: f32 = 48_000.0;
 
 #[derive(Clone)]
 enum Ev {
-    On(f32, f32),
-    Off(f32),
-    Patch(Box<[f32; PARAM_COUNT]>),
+    On(usize, f32, f32),
+    Off(usize, f32),
+    Patch(usize, Box<[f32; PARAM_COUNT]>),
 }
 
 /// Renders `total` samples, dispatching events at sample-accurate offsets the
 /// same way `web/public/worklet.js` is specified to (SPEC §2/§6): split the
 /// render quantum at the event boundary, never larger than MAX_BLOCK.
-fn render(engine: &mut Engine, events: &[(usize, Ev)], total: usize) -> (Vec<f32>, Vec<f32>) {
+/// Every event carries its track index (v0.3).
+fn render(engine: &mut MultiEngine, events: &[(usize, Ev)], total: usize) -> (Vec<f32>, Vec<f32>) {
     let mut l = vec![0.0f32; total];
     let mut r = vec![0.0f32; total];
     let mut pos = 0usize;
@@ -41,9 +43,9 @@ fn render(engine: &mut Engine, events: &[(usize, Ev)], total: usize) -> (Vec<f32
     while pos < total {
         while next < events.len() && events[next].0 <= pos {
             match &events[next].1 {
-                Ev::On(n, v) => engine.note_on(*n, *v),
-                Ev::Off(n) => engine.note_off(*n),
-                Ev::Patch(p) => engine.apply_patch(p),
+                Ev::On(t, n, v) => engine.note_on(*t, *n, *v),
+                Ev::Off(t, n) => engine.note_off(*t, *n),
+                Ev::Patch(t, p) => engine.apply_patch(*t, p),
             }
             next += 1;
         }
@@ -234,17 +236,17 @@ fn determinism_is_bit_exact() {
 
     let half = SR as usize / 2;
     let events = vec![
-        (0usize, Ev::Patch(Box::new(p))),
-        (0, Ev::On(48.0, 0.8)),
-        (137, Ev::On(55.0, 0.6)),
-        (half, Ev::Off(48.0)),
-        (half + 1000, Ev::Off(55.0)),
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, 48.0, 0.8)),
+        (137, Ev::On(0, 55.0, 0.6)),
+        (half, Ev::Off(0, 48.0)),
+        (half + 1000, Ev::Off(0, 55.0)),
     ];
     let total = SR as usize;
 
-    let mut a = Engine::new(SR);
+    let mut a = MultiEngine::new(SR);
     let (al, ar) = render(&mut a, &events, total);
-    let mut b = Engine::new(SR);
+    let mut b = MultiEngine::new(SR);
     let (bl, br) = render(&mut b, &events, total);
 
     assert!(peak(&al) > 0.01, "render produced no signal");
@@ -280,8 +282,8 @@ fn aliasing_floor_below_minus_60db() {
     p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SAW as f32;
 
     let total = SR as usize;
-    let mut e = Engine::new(SR);
-    let events = vec![(0usize, Ev::Patch(Box::new(p))), (0, Ev::On(note, 1.0))];
+    let mut e = MultiEngine::new(SR);
+    let events = vec![(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, note, 1.0))];
     let (l, _r) = render(&mut e, &events, total);
 
     // Analyse a window well inside the sustain.
@@ -331,8 +333,8 @@ fn supersaw_has_no_dc_and_does_not_clip() {
     p[P_FILTER_CUTOFF_HZ] = 12_000.0;
 
     let total = SR as usize;
-    let mut e = Engine::new(SR);
-    let events = vec![(0usize, Ev::Patch(Box::new(p))), (0, Ev::On(48.0, 1.0))];
+    let mut e = MultiEngine::new(SR);
+    let events = vec![(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 1.0))];
     let (l, r) = render(&mut e, &events, total);
 
     // Skip the attack so the measurement is of the sustained tone.
@@ -359,11 +361,11 @@ fn full_polyphony_is_finite_and_bounded() {
     p[P_POLYPHONY] = 16.0;
     p[P_MASTER_GAIN] = 0.1;
 
-    let mut e = Engine::new(SR);
-    let mut events: Vec<(usize, Ev)> = vec![(0, Ev::Patch(Box::new(p)))];
+    let mut e = MultiEngine::new(SR);
+    let mut events: Vec<(usize, Ev)> = vec![(0, Ev::Patch(0, Box::new(p)))];
     // 20 note-ons over 16 voices: forces stealing.
     for i in 0..20 {
-        events.push((i * 500, Ev::On(36.0 + i as f32 * 2.0, 0.9)));
+        events.push((i * 500, Ev::On(0, 36.0 + i as f32 * 2.0, 0.9)));
     }
     let (l, r) = render(&mut e, &events, SR as usize);
     assert!(l.iter().all(|v| v.is_finite()));
@@ -390,14 +392,14 @@ fn note_events_and_patch_jumps_are_click_free() {
     jump[OSC_A_BASE + OSC_LEVEL] = 0.4;
 
     let sr = SR as usize;
-    let mut e = Engine::new(SR);
+    let mut e = MultiEngine::new(SR);
     let events = vec![
-        (0usize, Ev::Patch(Box::new(p))),
-        (0, Ev::On(48.0, 1.0)),
-        (sr / 4, Ev::Patch(Box::new(jump))),
-        (sr / 2, Ev::On(52.0, 1.0)),
-        (3 * sr / 4, Ev::Off(48.0)),
-        (3 * sr / 4 + 100, Ev::Off(52.0)),
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, 48.0, 1.0)),
+        (sr / 4, Ev::Patch(0, Box::new(jump))),
+        (sr / 2, Ev::On(0, 52.0, 1.0)),
+        (3 * sr / 4, Ev::Off(0, 48.0)),
+        (3 * sr / 4 + 100, Ev::Off(0, 52.0)),
     ];
     let (l, r) = render(&mut e, &events, sr);
 
@@ -419,14 +421,14 @@ fn voice_steal_is_click_free() {
     p[P_MASTER_GAIN] = 1.0;
 
     let sr = SR as usize;
-    let mut e = Engine::new(SR);
+    let mut e = MultiEngine::new(SR);
     let events = vec![
-        (0usize, Ev::Patch(Box::new(p))),
-        (0, Ev::On(48.0, 1.0)),
-        (2000, Ev::On(52.0, 1.0)),
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, 48.0, 1.0)),
+        (2000, Ev::On(0, 52.0, 1.0)),
         // third note steals the oldest voice while it is at full level
-        (8000, Ev::On(55.0, 1.0)),
-        (16000, Ev::On(59.0, 1.0)),
+        (8000, Ev::On(0, 55.0, 1.0)),
+        (16000, Ev::On(0, 59.0, 1.0)),
     ];
     let (l, _r) = render(&mut e, &events, sr / 2);
     let (d, at) = max_delta(&l);
@@ -439,9 +441,9 @@ fn all_notes_off_fades_quickly_and_silently() {
     p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SINE as f32;
     p[ENV_AMP_BASE + ENV_S] = 1.0;
 
-    let mut e = Engine::new(SR);
-    e.apply_patch(&p);
-    e.note_on(48.0, 1.0);
+    let mut e = MultiEngine::new(SR);
+    e.apply_patch(0, &p);
+    e.note_on(0, 48.0, 1.0);
     let mut l = vec![0.0f32; 4096];
     let mut r = vec![0.0f32; 4096];
     e.render(&mut l, &mut r);
@@ -520,7 +522,7 @@ fn mip_selection_keeps_every_partial_below_nyquist() {
 
 #[test]
 fn tables_are_normalised_and_dc_free() {
-    let e = Engine::new(SR);
+    let e = MultiEngine::new(SR);
     for (id, t) in e.tables().iter().enumerate() {
         let p = t.data.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!((p - 1.0).abs() < 1e-5, "table {id} peak {p}");
@@ -548,16 +550,16 @@ fn noise_is_deterministic() {
     p[P_FILTER_CUTOFF_HZ] = 6_000.0;
 
     let events = vec![
-        (0usize, Ev::Patch(Box::new(p))),
-        (0, Ev::On(45.0, 0.9)),
-        (5_000, Ev::On(52.0, 0.7)),
-        (20_000, Ev::Off(45.0)),
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, 45.0, 0.9)),
+        (5_000, Ev::On(0, 52.0, 0.7)),
+        (20_000, Ev::Off(0, 45.0)),
     ];
     let total = SR as usize / 2;
 
-    let mut a = Engine::new(SR);
+    let mut a = MultiEngine::new(SR);
     let (al, ar) = render(&mut a, &events, total);
-    let mut b = Engine::new(SR);
+    let mut b = MultiEngine::new(SR);
     let (bl, br) = render(&mut b, &events, total);
 
     assert!(peak(&al) > 0.01, "noise patch produced no signal");
@@ -607,15 +609,15 @@ fn disabled_noise_is_a_true_no_op() {
     loud_but_off[NOISE_BASE + NOISE_LEVEL] = 4.0;
     loud_but_off[NOISE_BASE + NOISE_COLOR] = 1.0;
 
-    let events_a = vec![(0usize, Ev::Patch(Box::new(off))), (0, Ev::On(48.0, 1.0))];
+    let events_a = vec![(0usize, Ev::Patch(0, Box::new(off))), (0, Ev::On(0, 48.0, 1.0))];
     let events_b = vec![
-        (0usize, Ev::Patch(Box::new(loud_but_off))),
-        (0, Ev::On(48.0, 1.0)),
+        (0usize, Ev::Patch(0, Box::new(loud_but_off))),
+        (0, Ev::On(0, 48.0, 1.0)),
     ];
     let n = SR as usize / 4;
-    let mut a = Engine::new(SR);
+    let mut a = MultiEngine::new(SR);
     let (al, ar) = render(&mut a, &events_a, n);
-    let mut b = Engine::new(SR);
+    let mut b = MultiEngine::new(SR);
     let (bl, br) = render(&mut b, &events_b, n);
     assert_bit_identical(&al, &bl, "disabled noise L");
     assert_bit_identical(&ar, &br, "disabled noise R");
@@ -652,17 +654,17 @@ fn determinism_with_full_fx_chain() {
 
     let sr = SR as usize;
     let events = vec![
-        (0usize, Ev::Patch(Box::new(p))),
-        (0, Ev::On(43.0, 0.9)),
-        (211, Ev::On(50.0, 0.6)),
-        (sr / 3, Ev::Patch(Box::new(p2))),
-        (sr / 2, Ev::Off(43.0)),
-        (sr / 2 + 777, Ev::Off(50.0)),
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, 43.0, 0.9)),
+        (211, Ev::On(0, 50.0, 0.6)),
+        (sr / 3, Ev::Patch(0, Box::new(p2))),
+        (sr / 2, Ev::Off(0, 43.0)),
+        (sr / 2 + 777, Ev::Off(0, 50.0)),
     ];
 
-    let mut a = Engine::new(SR);
+    let mut a = MultiEngine::new(SR);
     let (al, ar) = render(&mut a, &events, sr);
-    let mut b = Engine::new(SR);
+    let mut b = MultiEngine::new(SR);
     let (bl, br) = render(&mut b, &events, sr);
 
     assert!(peak(&al) > 0.01, "full-chain render produced no signal");
@@ -685,15 +687,15 @@ fn empty_fx_chain_is_a_bit_exact_bypass() {
     fill_all_fx_params(&mut with_params);
     // FX_ORDER left at all-zero.
 
-    let events_a = vec![(0usize, Ev::Patch(Box::new(plain))), (0, Ev::On(48.0, 1.0))];
+    let events_a = vec![(0usize, Ev::Patch(0, Box::new(plain))), (0, Ev::On(0, 48.0, 1.0))];
     let events_b = vec![
-        (0usize, Ev::Patch(Box::new(with_params))),
-        (0, Ev::On(48.0, 1.0)),
+        (0usize, Ev::Patch(0, Box::new(with_params))),
+        (0, Ev::On(0, 48.0, 1.0)),
     ];
     let n = SR as usize / 2;
-    let mut a = Engine::new(SR);
+    let mut a = MultiEngine::new(SR);
     let (al, ar) = render(&mut a, &events_a, n);
-    let mut b = Engine::new(SR);
+    let mut b = MultiEngine::new(SR);
     let (bl, br) = render(&mut b, &events_b, n);
 
     assert!(peak(&al) > 0.01);
@@ -723,16 +725,16 @@ fn mbcomp_below_threshold_is_transparent() {
     fxp(&mut comp, FX_MBCOMP, MBCOMP_MAKEUP, 1.0);
 
     let n = SR as usize / 2;
-    let mut a = Engine::new(SR);
+    let mut a = MultiEngine::new(SR);
     let (al, _ar) = render(
         &mut a,
-        &[(0usize, Ev::Patch(Box::new(plain))), (0, Ev::On(48.0, 1.0))],
+        &[(0usize, Ev::Patch(0, Box::new(plain))), (0, Ev::On(0, 48.0, 1.0))],
         n,
     );
-    let mut b = Engine::new(SR);
+    let mut b = MultiEngine::new(SR);
     let (bl, _br) = render(
         &mut b,
-        &[(0usize, Ev::Patch(Box::new(comp))), (0, Ev::On(48.0, 1.0))],
+        &[(0usize, Ev::Patch(0, Box::new(comp))), (0, Ev::On(0, 48.0, 1.0))],
         n,
     );
 
@@ -765,15 +767,15 @@ fn delay_and_reverb_tails_decay_without_runaway() {
     fxp(&mut p, FX_REVERB, REVERB_MIX, 0.4);
     fxp(&mut p, FX_REVERB, REVERB_WIDTH, 1.0);
 
-    let mut e = Engine::new(SR);
-    e.apply_patch(&p);
-    e.note_on(48.0, 1.0);
+    let mut e = MultiEngine::new(SR);
+    e.apply_patch(0, &p);
+    e.note_on(0, 48.0, 1.0);
     let half = SR as usize / 2;
     let (mut l, mut r) = (vec![0.0f32; half], vec![0.0f32; half]);
     e.render(&mut l, &mut r);
     let note_peak = peak(&l);
     assert!(note_peak > 0.05);
-    e.note_off(48.0);
+    e.note_off(0, 48.0);
 
     // 0.5 s after note-off the amp envelope (120 ms release) is long gone,
     // so anything left is the FX tail.
@@ -830,10 +832,10 @@ fn dist_and_reverb_stay_dc_free_and_unclipped() {
     fxp(&mut p, FX_REVERB, REVERB_WIDTH, 1.0);
 
     let total = SR as usize;
-    let mut e = Engine::new(SR);
+    let mut e = MultiEngine::new(SR);
     let (l, r) = render(
         &mut e,
-        &[(0usize, Ev::Patch(Box::new(p))), (0, Ev::On(48.0, 1.0))],
+        &[(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 1.0))],
         total,
     );
 
@@ -862,13 +864,13 @@ fn every_effect_alone_is_stable_and_finite() {
         fxp(&mut p, FX_DIST, DIST_DRIVE, 1.0);
         p[FX_ORDER_BASE] = ty as f32;
 
-        let mut e = Engine::new(SR);
+        let mut e = MultiEngine::new(SR);
         let (l, r) = render(
             &mut e,
             &[
-                (0usize, Ev::Patch(Box::new(p))),
-                (0, Ev::On(48.0, 1.0)),
-                (SR as usize / 4, Ev::Off(48.0)),
+                (0usize, Ev::Patch(0, Box::new(p))),
+                (0, Ev::On(0, 48.0, 1.0)),
+                (SR as usize / 4, Ev::Off(0, 48.0)),
             ],
             SR as usize,
         );
@@ -900,10 +902,10 @@ fn fx_order_is_respected_and_deduplicated() {
 
     let n = SR as usize / 2;
     let run = |p: [f32; PARAM_COUNT]| {
-        let mut e = Engine::new(SR);
+        let mut e = MultiEngine::new(SR);
         render(
             &mut e,
-            &[(0usize, Ev::Patch(Box::new(p))), (0, Ev::On(48.0, 1.0))],
+            &[(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 1.0))],
             n,
         )
         .0
@@ -943,14 +945,14 @@ fn fx_hot_reload_is_click_free() {
     fxp(&mut jump, FX_MBCOMP, MBCOMP_MAKEUP, 2.0);
 
     let sr = SR as usize;
-    let mut e = Engine::new(SR);
+    let mut e = MultiEngine::new(SR);
     let (l, r) = render(
         &mut e,
         &[
-            (0usize, Ev::Patch(Box::new(p))),
-            (0, Ev::On(48.0, 1.0)),
-            (sr / 3, Ev::Patch(Box::new(jump))),
-            (2 * sr / 3, Ev::Patch(Box::new(p))),
+            (0usize, Ev::Patch(0, Box::new(p))),
+            (0, Ev::On(0, 48.0, 1.0)),
+            (sr / 3, Ev::Patch(0, Box::new(jump))),
+            (2 * sr / 3, Ev::Patch(0, Box::new(p))),
         ],
         sr,
     );
@@ -978,13 +980,13 @@ fn delay_reaches_its_two_second_maximum() {
     fxp(&mut p, FX_DELAY, DELAY_TONE_HZ, 18_000.0);
 
     let sr = SR as usize;
-    let mut e = Engine::new(SR);
+    let mut e = MultiEngine::new(SR);
     let (l, _r) = render(
         &mut e,
         &[
-            (0usize, Ev::Patch(Box::new(p))),
-            (0, Ev::On(60.0, 1.0)),
-            (sr / 10, Ev::Off(60.0)),
+            (0usize, Ev::Patch(0, Box::new(p))),
+            (0, Ev::On(0, 60.0, 1.0)),
+            (sr / 10, Ev::Off(0, 60.0)),
         ],
         3 * sr,
     );
@@ -997,4 +999,321 @@ fn delay_reaches_its_two_second_maximum() {
         peak(&l[2 * sr + sr / 2..]) < echo * 0.05,
         "echo repeated with feedback at 0"
     );
+}
+
+// ====================================================== v0.3: multi-track
+
+/// Supersaw lead, for track 0.
+fn lead_patch() -> [f32; PARAM_COUNT] {
+    let mut p = base_params();
+    p[P_SEED] = 11.0;
+    p[OSC_A_BASE + OSC_UNISON] = 7.0;
+    p[OSC_A_BASE + OSC_DETUNE_CENTS] = 20.0;
+    p[OSC_A_BASE + OSC_SPREAD] = 0.85;
+    p[P_FILTER_CUTOFF_HZ] = 2_400.0;
+    p[P_FILTER_RES] = 0.35;
+    p[MOD_BASE + MOD_SRC] = 1.0;
+    p[MOD_BASE + MOD_DST] = DST_FILTER_CUTOFF as f32;
+    p[MOD_BASE + MOD_AMOUNT] = 3_600.0;
+    p
+}
+
+/// Sine "kick": the filter envelope sweeps *pitch* down fast.
+fn kick_patch() -> [f32; PARAM_COUNT] {
+    let mut p = base_params();
+    p[P_SEED] = 22.0;
+    p[P_POLYPHONY] = 2.0;
+    p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SINE as f32;
+    p[OSC_A_BASE + OSC_PHASE_RANDOM] = 0.0;
+    p[ENV_AMP_BASE + ENV_A] = 0.001;
+    p[ENV_AMP_BASE + ENV_D] = 0.18;
+    p[ENV_AMP_BASE + ENV_S] = 0.0;
+    p[ENV_AMP_BASE + ENV_R] = 0.05;
+    p[ENV_FILTER_BASE + ENV_A] = 0.0005;
+    p[ENV_FILTER_BASE + ENV_D] = 0.045;
+    p[ENV_FILTER_BASE + ENV_S] = 0.0;
+    p[MOD_BASE + MOD_SRC] = 1.0; // env.filter
+    p[MOD_BASE + MOD_DST] = DST_PITCH as f32;
+    p[MOD_BASE + MOD_AMOUNT] = 3_600.0; // +3 octaves at the transient
+    p
+}
+
+/// Noise-only "hat": both oscillators off, pink noise through a 12 dB highpass.
+fn hat_patch() -> [f32; PARAM_COUNT] {
+    let mut p = base_params();
+    p[P_SEED] = 33.0;
+    p[OSC_A_BASE + OSC_ENABLED] = 0.0;
+    p[OSC_B_BASE + OSC_ENABLED] = 0.0;
+    p[NOISE_BASE + NOISE_ENABLED] = 1.0;
+    p[NOISE_BASE + NOISE_LEVEL] = 0.7;
+    p[NOISE_BASE + NOISE_COLOR] = 1.0;
+    p[P_FILTER_MODE] = 2.0; // hp12
+    p[P_FILTER_CUTOFF_HZ] = 7_000.0;
+    p[P_FILTER_RES] = 0.3;
+    p[ENV_AMP_BASE + ENV_A] = 0.0005;
+    p[ENV_AMP_BASE + ENV_D] = 0.04;
+    p[ENV_AMP_BASE + ENV_S] = 0.0;
+    p[ENV_AMP_BASE + ENV_R] = 0.03;
+    p
+}
+
+/// Interleaved events across three tracks, as a loop player would emit them.
+fn three_track_events() -> Vec<(usize, Ev)> {
+    let sr = SR as usize;
+    let mut ev: Vec<(usize, Ev)> = vec![
+        (0, Ev::Patch(0, Box::new(lead_patch()))),
+        (0, Ev::Patch(1, Box::new(kick_patch()))),
+        (0, Ev::Patch(2, Box::new(hat_patch()))),
+    ];
+    // 8th-note grid over one second.
+    for step in 0..8 {
+        let t = step * sr / 8;
+        if step % 2 == 0 {
+            ev.push((t, Ev::On(1, 36.0, 1.0)));
+            ev.push((t + 900, Ev::Off(1, 36.0)));
+        }
+        ev.push((t + 37, Ev::On(2, 90.0, 0.7)));
+        ev.push((t + 37 + 400, Ev::Off(2, 90.0)));
+        if step % 4 == 0 {
+            let note = 48.0 + (step / 4) as f32 * 3.0;
+            ev.push((t + 11, Ev::On(0, note, 0.9)));
+            ev.push((t + sr / 5, Ev::Off(0, note)));
+        }
+    }
+    ev.sort_by_key(|(t, _)| *t);
+    ev
+}
+
+#[test]
+fn multi_track_determinism_is_bit_exact() {
+    let events = three_track_events();
+    let total = SR as usize;
+
+    let mut a = MultiEngine::new(SR);
+    let (al, ar) = render(&mut a, &events, total);
+    let mut b = MultiEngine::new(SR);
+    let (bl, br) = render(&mut b, &events, total);
+
+    assert!(peak(&al) > 0.05, "three-track render produced no signal");
+    assert!(al.iter().all(|v| v.is_finite()));
+    assert_bit_identical(&al, &bl, "multi-track L");
+    assert_bit_identical(&ar, &br, "multi-track R");
+}
+
+#[test]
+fn idle_tracks_are_bit_exactly_inert() {
+    // Track 0 alone, versus track 0 with a fully patched but never-played
+    // track 1 sitting next to it (FX chain and all).
+    let mut other = lead_patch();
+    fill_all_fx_params(&mut other);
+    chain_all(&mut other);
+
+    let events_solo = vec![
+        (0usize, Ev::Patch(0, Box::new(lead_patch()))),
+        (0, Ev::On(0, 50.0, 0.9)),
+        (SR as usize / 3, Ev::Off(0, 50.0)),
+    ];
+    let mut events_pair = events_solo.clone();
+    events_pair.insert(1, (0, Ev::Patch(1, Box::new(other))));
+
+    let n = SR as usize;
+    let mut a = MultiEngine::new(SR);
+    let (al, ar) = render(&mut a, &events_solo, n);
+    let mut b = MultiEngine::new(SR);
+    let (bl, br) = render(&mut b, &events_pair, n);
+
+    assert!(peak(&al) > 0.05);
+    assert_bit_identical(&al, &bl, "silent neighbour track L");
+    assert_bit_identical(&ar, &br, "silent neighbour track R");
+    assert_eq!(b.track_active_voices(1), 0);
+    // The neighbour parks itself once its (silent) tail window elapses.
+    let mut l = vec![0.0f32; 4 * SR as usize];
+    let mut r = vec![0.0f32; 4 * SR as usize];
+    b.render(&mut l, &mut r);
+    assert_eq!(b.live_tracks(), 0, "silent tracks should go dormant");
+}
+
+#[test]
+fn unpatched_tracks_cost_nothing() {
+    let mut e = MultiEngine::new(SR);
+    assert_eq!(e.live_tracks(), 0);
+    e.apply_patch(0, &lead_patch());
+    e.note_on(0, 48.0, 1.0);
+    let mut l = vec![0.0f32; 1024];
+    let mut r = vec![0.0f32; 1024];
+    e.render(&mut l, &mut r);
+    assert_eq!(e.live_tracks(), 1, "only the patched track should render");
+    assert!(peak(&l) > 0.01);
+}
+
+#[test]
+fn master_guard_is_transparent_below_the_knee() {
+    // Unit level: identity, bit for bit, below the knee.
+    for i in 0..2001 {
+        let x = -1.0 + i as f32 * 0.001;
+        if x.abs() <= 0.95 {
+            assert_eq!(
+                soft_clip_master(x).to_bits(),
+                x.to_bits(),
+                "guard is not transparent at {x}"
+            );
+        } else {
+            let y = soft_clip_master(x);
+            assert!(y.abs() < 1.0, "guard failed to bound {x} -> {y}");
+            assert!(y.abs() > 0.94 && y.signum() == x.signum());
+        }
+    }
+    // C1 at the knee: the slope either side matches.
+    let d = 1.0e-4;
+    let below = (soft_clip_master(0.95) - soft_clip_master(0.95 - d)) / d;
+    let above = (soft_clip_master(0.95 + d) - soft_clip_master(0.95)) / d;
+    assert!((below - above).abs() < 1.0e-2, "kink at the knee: {below} vs {above}");
+
+    // Engine level: a moderate single track goes through the master bus
+    // unchanged relative to rendering that same Track standalone.
+    let tables = sheliak_dsp::tables::build_all();
+    let p = lead_patch();
+    let n = SR as usize / 2;
+
+    let mut multi = MultiEngine::new(SR);
+    let (ml, mr) = render(
+        &mut multi,
+        &[(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 0.9))],
+        n,
+    );
+
+    let mut solo = Track::new(SR);
+    solo.apply_patch(&p);
+    solo.note_on(48.0, 0.9);
+    let mut sl = vec![0.0f32; n];
+    let mut sr_buf = vec![0.0f32; n];
+    solo.render(&tables, &mut sl, &mut sr_buf);
+
+    assert!(peak(&ml) > 0.05 && peak(&ml) < 0.95, "level {}", peak(&ml));
+    assert_bit_identical(&ml, &sl, "master bus L");
+    assert_bit_identical(&mr, &sr_buf, "master bus R");
+}
+
+#[test]
+fn hot_multi_track_stack_cannot_clip() {
+    // Six tracks, each deliberately over-driven, all playing at once.
+    let mut e = MultiEngine::new(SR);
+    for t in 0..6 {
+        let mut p = lead_patch();
+        p[P_SEED] = 100.0 + t as f32;
+        p[P_MASTER_GAIN] = 2.0; // way past sensible
+        p[P_FILTER_CUTOFF_HZ] = 18_000.0;
+        p[ENV_AMP_BASE + ENV_S] = 1.0;
+        p[NOISE_BASE + NOISE_ENABLED] = 1.0;
+        p[NOISE_BASE + NOISE_LEVEL] = 0.5;
+        e.apply_patch(t, &p);
+        for k in 0..4 {
+            e.note_on(t, 40.0 + t as f32 * 2.0 + k as f32 * 5.0, 1.0);
+        }
+    }
+    let n = SR as usize / 2;
+    let mut l = vec![0.0f32; n];
+    let mut r = vec![0.0f32; n];
+    e.render(&mut l, &mut r);
+
+    assert!(l.iter().all(|v| v.is_finite()) && r.iter().all(|v| v.is_finite()));
+    assert!(peak(&l) > 0.9, "stack should actually be hitting the guard");
+    assert!(peak(&l) <= 1.0 && peak(&r) <= 1.0, "clipped: {} {}", peak(&l), peak(&r));
+    assert_eq!(e.live_tracks(), 6);
+}
+
+#[test]
+fn noise_only_patch_sounds_and_full_silence_is_exact() {
+    // Both oscillators off + noise on ⇒ audible.
+    let mut e = MultiEngine::new(SR);
+    let (l, r) = render(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(0, Box::new(hat_patch()))),
+            (0, Ev::On(0, 90.0, 1.0)),
+        ],
+        SR as usize / 4,
+    );
+    assert!(peak(&l) > 0.01, "noise-only patch is silent: {}", peak(&l));
+    assert!(peak(&r) > 0.01);
+
+    // Both oscillators off + noise off ⇒ *exact* digital silence.
+    let mut mute = hat_patch();
+    mute[NOISE_BASE + NOISE_ENABLED] = 0.0;
+    let mut e = MultiEngine::new(SR);
+    let (l, r) = render(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(0, Box::new(mute))),
+            (0, Ev::On(0, 90.0, 1.0)),
+        ],
+        SR as usize / 4,
+    );
+    assert!(
+        l.iter().chain(r.iter()).all(|v| *v == 0.0),
+        "muted patch leaked signal: {}",
+        peak(&l)
+    );
+}
+
+#[test]
+fn out_of_range_track_calls_are_no_ops() {
+    let reference = {
+        let mut e = MultiEngine::new(SR);
+        render(
+            &mut e,
+            &[
+                (0usize, Ev::Patch(0, Box::new(lead_patch()))),
+                (0, Ev::On(0, 48.0, 0.9)),
+            ],
+            SR as usize / 4,
+        )
+    };
+
+    let mut e = MultiEngine::new(SR);
+    // Everything below must be silently ignored — and must not panic.
+    e.apply_patch(MAX_TRACKS, &hat_patch());
+    e.apply_patch(usize::MAX, &hat_patch());
+    e.note_on(MAX_TRACKS, 60.0, 1.0);
+    e.note_on(9_999, 60.0, 1.0);
+    e.note_off(MAX_TRACKS, 60.0);
+    assert!(e.track(MAX_TRACKS).is_none());
+    assert_eq!(e.track_active_voices(MAX_TRACKS), 0);
+
+    let (l, r) = render(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(0, Box::new(lead_patch()))),
+            (0, Ev::On(0, 48.0, 0.9)),
+        ],
+        SR as usize / 4,
+    );
+    assert_eq!(e.active_voices(), 1);
+    assert_bit_identical(&reference.0, &l, "out-of-range calls perturbed L");
+    assert_bit_identical(&reference.1, &r, "out-of-range calls perturbed R");
+}
+
+#[test]
+fn tracks_are_independently_seeded_and_isolated() {
+    // Same patch on two tracks with different seeds must differ; identical
+    // seeds on different tracks must produce identical audio.
+    let render_track = |seed: f32, track: usize| {
+        let mut p = lead_patch();
+        p[P_SEED] = seed;
+        let mut e = MultiEngine::new(SR);
+        render(
+            &mut e,
+            &[
+                (0usize, Ev::Patch(track, Box::new(p))),
+                (0, Ev::On(track, 48.0, 0.9)),
+            ],
+            SR as usize / 4,
+        )
+        .0
+    };
+    let a = render_track(1.0, 0);
+    let b = render_track(2.0, 0);
+    let c = render_track(1.0, 3);
+    assert!(a.iter().zip(b.iter()).any(|(x, y)| x != y), "seed ignored");
+    assert_bit_identical(&a, &c, "track index must not change the sound");
 }

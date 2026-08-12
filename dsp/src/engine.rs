@@ -1,5 +1,11 @@
-//! Engine: patch decoding, parameter smoothing, voice allocation/stealing and
-//! the block render loop.
+//! Track: one independent instrument — patch decoding, parameter smoothing,
+//! voice allocation/stealing, the block render loop and a private FX chain.
+//!
+//! Since v0.3 the engine is multi-track ([`crate::multi::MultiEngine`] owns
+//! `MAX_TRACKS` of these). A `Track` deliberately does **not** own the
+//! wavetables: they are immutable after `init()` and shared by every track, so
+//! they are borrowed for the duration of [`Track::process`] instead of being
+//! duplicated eight times (see `multi.rs` for the ownership rationale).
 //!
 //! This is the safe, target-independent API. `lib.rs` is nothing but a thin
 //! `extern "C"` shell around it, so the whole DSP core can be driven from
@@ -32,7 +38,7 @@ use crate::envelope::EnvConfig;
 use crate::fx::Fx;
 use crate::params::*;
 use crate::smoother::{Ramp, Smoother, DEFAULT_TAU};
-use crate::tables::{self, Table};
+use crate::tables::Table;
 use crate::voice::{NoteStart, OscNoteCfg, State, Voice};
 
 /// Per-oscillator block snapshot handed to every voice.
@@ -125,9 +131,8 @@ impl OscSmooth {
     }
 }
 
-pub struct Engine {
+pub struct Track {
     sample_rate: f32,
-    tables: Vec<Table>,
     voices: Vec<Voice>,
 
     // ---- smoothed (continuous) parameters ----
@@ -160,10 +165,25 @@ pub struct Engine {
     age: u64,
     last_note: Option<f32>,
     primed: bool,
+
+    /// Consecutive silent samples with no voice activity; drives dormancy.
+    quiet_samples: usize,
+    /// Dormant tracks are skipped entirely by the mixer.
+    dormant: bool,
 }
 
-impl Engine {
-    /// Builds tables, mipmaps and voices. **The only allocating entry point.**
+/// A track output below this counts as silence for dormancy purposes
+/// (-140 dBFS).
+const SILENCE_EPS: f32 = 1.0e-7;
+/// How long a track must stay silent before it is parked. Longer than the
+/// maximum delay time (2 s) so a slow echo waiting between repeats can never
+/// be frozen mid-tail.
+const TAIL_HOLD_S: f32 = 2.5;
+/// Without any FX there is no tail at all, so park almost immediately.
+const DRY_HOLD_S: f32 = 0.05;
+
+impl Track {
+    /// Allocates voices and FX buffers. Called only from `init()`.
     pub fn new(sample_rate: f32) -> Self {
         let sr = if sample_rate.is_finite() && sample_rate > 1000.0 {
             sample_rate
@@ -174,9 +194,8 @@ impl Engine {
         for _ in 0..MAX_VOICES {
             voices.push(Voice::default());
         }
-        Engine {
+        Track {
             sample_rate: sr,
-            tables: tables::build_all(),
             voices,
             osc_s: [OscSmooth::new(sr), OscSmooth::new(sr)],
             cutoff_log2: Smoother::new(sr, DEFAULT_TAU, 20_000.0f32.log2()),
@@ -208,6 +227,8 @@ impl Engine {
             age: 0,
             last_note: None,
             primed: false,
+            quiet_samples: 0,
+            dormant: false,
         }
     }
 
@@ -220,6 +241,23 @@ impl Engine {
         self.voices.iter().filter(|v| !v.is_idle()).count()
     }
 
+    /// Has a patch ever been applied? An unprimed track is completely inert.
+    pub fn is_primed(&self) -> bool {
+        self.primed
+    }
+
+    /// Parked: silent, no voices, and its FX tails have run out.
+    pub fn is_dormant(&self) -> bool {
+        self.dormant
+    }
+
+    /// Anything that can start sound again must wake the track first.
+    #[inline]
+    fn wake(&mut self) {
+        self.dormant = false;
+        self.quiet_samples = 0;
+    }
+
     // ---------------------------------------------------------------- patch
 
     /// Decodes the parameter block. No allocation, callable while playing.
@@ -227,6 +265,7 @@ impl Engine {
         let sr = self.sample_rate;
         let first = !self.primed;
         self.primed = true;
+        self.wake();
 
         self.polyphony = (fclamp(p[P_POLYPHONY], 1.0, MAX_VOICES as f32).round()) as usize;
         self.glide_s = p[P_GLIDE_S].max(0.0);
@@ -308,6 +347,7 @@ impl Engine {
             return;
         }
         let note = note.clamp(-24.0, 144.0);
+        self.wake();
         self.age = self.age.wrapping_add(1);
         let ns = self.make_note_start(note, velocity);
         self.last_note = Some(note);
@@ -400,6 +440,7 @@ impl Engine {
 
     /// Fast-fade every sounding voice (SPEC §2: 高速フェード付き全消音).
     pub fn all_notes_off(&mut self) {
+        self.wake();
         let sr = self.sample_rate;
         for v in self.voices.iter_mut() {
             v.begin_fade(sr, None);
@@ -409,12 +450,18 @@ impl Engine {
 
     // -------------------------------------------------------------- process
 
-    /// Renders into `out_l` / `out_r` (equal length, ≤ [`MAX_BLOCK`]).
-    /// Allocation-free.
-    pub fn process(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+    /// Renders this track into `out_l` / `out_r` (equal length, ≤
+    /// [`MAX_BLOCK`]), **overwriting** them. Allocation-free.
+    ///
+    /// Returns `false` if the track wrote nothing at all — it has never been
+    /// patched, or it is dormant (silent, no voices, FX tails run out). The
+    /// mixer then skips it entirely, so idle tracks cost a branch per block.
+    /// `tables` is the shared, immutable wavetable set owned by the
+    /// [`crate::multi::MultiEngine`].
+    pub fn process(&mut self, tables: &[Table], out_l: &mut [f32], out_r: &mut [f32]) -> bool {
         let n = out_l.len().min(out_r.len()).min(MAX_BLOCK);
-        if n == 0 {
-            return;
+        if n == 0 || !self.primed || self.dormant {
+            return false;
         }
         out_l[..n].fill(0.0);
         out_r[..n].fill(0.0);
@@ -435,7 +482,7 @@ impl Engine {
         {
             let ctx = BlockCtx {
                 sample_rate: self.sample_rate,
-                tables: &self.tables,
+                tables,
                 osc: bp.osc,
                 filter: bp.filter,
                 env_amp: self.env_amp,
@@ -457,9 +504,33 @@ impl Engine {
             out_r[i] *= g;
         }
 
-        // Master FX chain runs on the summed bus, after the master gain, so
+        // Per-track FX chain runs after that track's master gain, so
         // delay/reverb tails keep ringing even when no voice is active.
         self.fx.process(&mut out_l[..n], &mut out_r[..n]);
+
+        // ---- dormancy bookkeeping ----------------------------------------
+        let busy = self
+            .voices
+            .iter()
+            .any(|v| !v.is_idle() || v.pending().is_some());
+        let loud = out_l[..n]
+            .iter()
+            .chain(out_r[..n].iter())
+            .any(|v| v.abs() > SILENCE_EPS);
+        if busy || loud {
+            self.quiet_samples = 0;
+        } else {
+            self.quiet_samples += n;
+            let hold = if self.fx.is_active() {
+                TAIL_HOLD_S
+            } else {
+                DRY_HOLD_S
+            };
+            if self.quiet_samples as f32 >= hold * self.sample_rate {
+                self.dormant = true;
+            }
+        }
+        true
     }
 
     fn block_params(&mut self, n: usize) -> BlockParams {
@@ -491,22 +562,20 @@ impl Engine {
         }
     }
 
-    /// Convenience for offline rendering (tests): renders `out` in ≤128-sample
-    /// blocks exactly the way the worklet would.
-    pub fn render(&mut self, out_l: &mut [f32], out_r: &mut [f32]) {
+    /// Convenience for offline rendering of a bare track (tests): renders
+    /// `out` in ≤128-sample blocks exactly the way the worklet would.
+    pub fn render(&mut self, tables: &[Table], out_l: &mut [f32], out_r: &mut [f32]) {
         let n = out_l.len().min(out_r.len());
         let mut i = 0;
         while i < n {
             let len = MAX_BLOCK.min(n - i);
             let (l, r) = (&mut out_l[i..i + len], &mut out_r[i..i + len]);
-            self.process(l, r);
+            if !self.process(tables, l, r) {
+                l.fill(0.0);
+                r.fill(0.0);
+            }
             i += len;
         }
-    }
-
-    /// Table registry (test helper).
-    pub fn tables(&self) -> &[Table] {
-        &self.tables
     }
 }
 

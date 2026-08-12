@@ -181,6 +181,12 @@ impl Fx {
         }
     }
 
+    /// Is any effect in the chain? Used by the track's dormancy logic: a
+    /// track with an empty chain has no tail to wait for.
+    pub fn is_active(&self) -> bool {
+        self.any
+    }
+
     /// Clears every effect (used by `init()`-time construction and tests).
     pub fn reset_all(&mut self) {
         for ty in 1..=FX_TYPE_COUNT as u32 {

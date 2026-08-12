@@ -313,14 +313,12 @@ pub fn phase_sin(phase: u32, offset: f32) -> f32 {
     (p * std::f32::consts::TAU).sin()
 }
 
-/// Safety limiter for feedback paths.
-///
-/// Exactly linear below `0.6·limit` — so ordinary signal levels pass through
-/// untouched and the delay/flanger repeats stay clean — then bends smoothly
-/// (C1-continuous at the knee) and asymptotes at `limit`.
+/// Soft clipper that is **exactly** the identity below `knee` (the input is
+/// returned untouched, bit for bit), then bends smoothly — C1-continuous at
+/// the knee, since `d/du tanh(u) = 1` at `u = 0` — and asymptotes at `limit`
+/// without ever reaching it.
 #[inline(always)]
-pub fn soft_limit(x: f32, limit: f32) -> f32 {
-    let knee = limit * 0.6;
+pub fn soft_clip(x: f32, knee: f32, limit: f32) -> f32 {
     let a = x.abs();
     if a <= knee {
         return x;
@@ -332,4 +330,11 @@ pub fn soft_limit(x: f32, limit: f32) -> f32 {
     } else {
         y
     }
+}
+
+/// Safety limiter for feedback paths: linear below `0.6·limit`, so ordinary
+/// signal levels pass through untouched and delay/flanger repeats stay clean.
+#[inline(always)]
+pub fn soft_limit(x: f32, limit: f32) -> f32 {
+    soft_clip(x, limit * 0.6, limit)
 }
