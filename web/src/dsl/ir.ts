@@ -54,6 +54,17 @@ import {
   TABLE_IDS,
 } from '../shared/params.ts';
 import { dbToLinear, linearToDb } from './units.ts';
+import {
+  defaultNoise,
+  mergeFx,
+  writeNoise,
+  writeFxChain,
+  noiseView,
+  fxView,
+  type NoiseIR,
+  type FxIR,
+  type FxInput,
+} from './fx.ts';
 
 // ------------------------------------------------------------------ registries
 
@@ -148,11 +159,15 @@ export interface PatchIR {
   bpm: number;
   masterGain: number;
   osc: OscIR[];
+  /** v0.2: per-voice noise layer, disabled unless the patch has `noise:`. */
+  noise: NoiseIR;
   filter: FilterIR;
   env: { amp: AdsrIR; filter: AdsrIR };
   lfo1: LfoIR;
   mod: ModIR[];
   voice: VoiceIR;
+  /** v0.2: master FX chain, in processing order. */
+  fx: FxIR[];
 }
 
 /** What the parser produces before defaults are filled in. */
@@ -161,11 +176,14 @@ export interface PatchInput {
   seed?: number;
   bpm?: number;
   osc?: Partial<OscIR>[];
+  /** Present only when the patch declared a `noise:` section. */
+  noise?: Partial<NoiseIR>;
   filter?: Partial<FilterIR>;
   env?: { amp?: Partial<AdsrIR>; filter?: Partial<AdsrIR> };
   lfo1?: Partial<LfoIR>;
   mod?: ModIR[];
   voice?: Partial<VoiceIR>;
+  fx?: FxInput[];
 }
 
 // ------------------------------------------------------------------- defaults
@@ -231,18 +249,24 @@ export function expandPatch(input: PatchInput = {}): PatchIR {
   };
   const lfo1 = { ...defaultLfo(), ...(input.lfo1 ?? {}) };
   const voice = { ...defaultVoice(), ...(input.voice ?? {}) };
+  const bpm = input.bpm ?? DEFAULT_BPM;
+
+  // A `noise:` section switches the layer on; its fields fall back to defaults.
+  const noise: NoiseIR = input.noise ? { ...defaultNoise(true), ...input.noise, enabled: true } : defaultNoise(false);
 
   return {
     id: input.id ?? '',
     seed: input.seed ?? 0,
-    bpm: input.bpm ?? DEFAULT_BPM,
+    bpm,
     masterGain: DEFAULT_MASTER_GAIN,
     osc,
+    noise,
     filter,
     env,
     lfo1,
     mod: input.mod ?? [],
     voice,
+    fx: (input.fx ?? []).map((entry) => mergeFx(entry, bpm)),
   };
 }
 
@@ -259,6 +283,7 @@ export function irToParams(ir: PatchIR): Float32Array {
 
   writeOsc(p, OSC_A_BASE, ir.osc[0]);
   writeOsc(p, OSC_B_BASE, ir.osc[1]);
+  writeNoise(p, ir.noise);
 
   p[P_FILTER_MODE] = FILTER_MODES[ir.filter.type] ?? 0;
   p[P_FILTER_CUTOFF_HZ] = ir.filter.cutoffHz;
@@ -286,6 +311,8 @@ export function irToParams(ir: PatchIR): Float32Array {
     p[base + MOD_DST] = MOD_DESTS[slot.to] ?? DST_NONE;
     p[base + MOD_AMOUNT] = slot.amount;
   }
+
+  writeFxChain(p, ir.fx);
 
   return p;
 }
@@ -341,6 +368,7 @@ export function expandedView(ir: PatchIR): unknown {
       tune: `${o.tuneSemi}st ${o.tuneCents >= 0 ? '+' : ''}${round(o.tuneCents, 3)}c`,
       phase_random: o.phaseRandom,
     })),
+    noise: noiseView(ir.noise),
     filter: {
       type: `${ir.filter.type} (mode ${FILTER_MODES[ir.filter.type] ?? 0})`,
       cutoff: `${round(ir.filter.cutoffHz, 3)}Hz`,
@@ -371,6 +399,7 @@ export function expandedView(ir: PatchIR): unknown {
       amount: CENTS_DESTS.has(MOD_DESTS[m.to] ?? 0) ? `${round(m.amount, 3)}c` : pct(m.amount),
     })),
     voice: { polyphony: ir.voice.polyphony, glide: sec(ir.voice.glide) },
+    fx: fxView(ir.fx),
   };
 }
 
@@ -380,3 +409,5 @@ function round(v: number, digits: number): number {
 }
 
 export { dbToLinear };
+export type { NoiseIR, FxIR, FxInput, FxType } from './fx.ts';
+export { FX_TYPE_IDS, FX_ALIASES, FX_KEYS, DIST_MODES, NOISE_COLORS, defaultFxEntry, defaultNoise } from './fx.ts';

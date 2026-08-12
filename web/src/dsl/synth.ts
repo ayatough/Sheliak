@@ -24,7 +24,17 @@ import {
   type ModIR,
   type VoiceIR,
 } from './ir.ts';
-import { TABLE_IDS, MAX_UNISON, MAX_VOICES, MOD_SLOTS } from '../shared/params.ts';
+import {
+  FX_ALIASES,
+  FX_KEYS,
+  DIST_MODES,
+  NOISE_COLORS,
+  type FxInput,
+  type FxType,
+  type NoiseIR,
+  type FxParamMap,
+} from './fx.ts';
+import { TABLE_IDS, MAX_UNISON, MAX_VOICES, MOD_SLOTS, FX_SLOTS } from '../shared/params.ts';
 
 export interface SynthParseOptions {
   /** 1-based document line of the first body line. */
@@ -40,7 +50,8 @@ export interface SynthParseResult {
   errors: DslError[];
 }
 
-const TOP_KEYS = ['osc', 'filter', 'env', 'lfo', 'mod', 'voice'];
+const TOP_KEYS = ['osc', 'noise', 'filter', 'env', 'lfo', 'mod', 'voice', 'fx'];
+const NOISE_KEYS = ['level', 'color'];
 const OSC_KEYS = ['table', 'level', 'morph', 'unison', 'detune', 'spread', 'tune', 'phase_random'];
 const FILTER_KEYS = ['type', 'cutoff', 'res', 'drive', 'key_track'];
 const ADSR_KEYS = ['a', 'd', 's', 'r'];
@@ -89,6 +100,10 @@ function readTop(root: YMap, input: PatchInput, bpm: number, sink: ErrorSink): v
   const oscNode = fields['osc'];
   if (oscNode) input.osc = readOscList(oscNode, sink);
 
+  // The presence of `noise:` is what enables the layer (SPEC §5).
+  const noiseNode = fields['noise'];
+  if (noiseNode) input.noise = readNoise(noiseNode, sink);
+
   const filterNode = fields['filter'];
   if (filterNode) input.filter = readFilter(filterNode, sink);
 
@@ -103,6 +118,279 @@ function readTop(root: YMap, input: PatchInput, bpm: number, sink: ErrorSink): v
 
   const voiceNode = fields['voice'];
   if (voiceNode) input.voice = readVoice(voiceNode, bpm, sink);
+
+  const fxNode = fields['fx'];
+  if (fxNode) input.fx = readFxList(fxNode, bpm, sink);
+}
+
+// ---------------------------------------------------------------------- noise
+
+function readNoise(node: YNode, sink: ErrorSink): Partial<NoiseIR> {
+  // `enabled` is implied by the section existing; expandPatch forces it true.
+  const out: Partial<NoiseIR> = { enabled: true };
+  const m = asMap(node, 'noise', sink);
+  if (!m) return out;
+  const f = mapFields(m, NOISE_KEYS, 'noise', sink);
+
+  const level = f['level'];
+  if (level) {
+    const db = readGain(level, 'level', sink);
+    if (db !== undefined) out.level = dbToLinear(clamp(db, -96, 12));
+  }
+
+  const color = f['color'];
+  if (color) {
+    const name = readName(color, 'color', sink);
+    if (name !== undefined) {
+      if (NOISE_COLORS[name] === undefined) {
+        sink.push(nodePos(color), `unknown noise color "${name}" (expected one of: ${Object.keys(NOISE_COLORS).join(', ')})`);
+      } else {
+        out.color = name as NoiseIR['color'];
+      }
+    }
+  }
+
+  return out;
+}
+
+// ------------------------------------------------------------------ fx chain
+
+function readFxList(node: YNode, bpm: number, sink: ErrorSink): FxInput[] {
+  const items: YNode[] = isSeq(node) ? node.items : isMap(node) ? [node] : [];
+  if (!isSeq(node) && !isMap(node)) {
+    sink.push(nodePos(node), 'fx must be a list of effects');
+    return [];
+  }
+  if (items.length > FX_SLOTS) {
+    sink.push(nodePos(items[FX_SLOTS] as YNode), `at most ${FX_SLOTS} effects are supported, got ${items.length}`);
+  }
+
+  const out: FxInput[] = [];
+  const seen = new Map<FxType, YNode>();
+
+  for (const item of items.slice(0, FX_SLOTS)) {
+    const m = asMap(item, 'fx entry', sink);
+    if (!m) continue;
+
+    const typeEntry = m.entries.find((e) => e.key === 'type');
+    if (!typeEntry) {
+      sink.push(nodePos(item), 'fx entry needs a type, e.g. { type: reverb }');
+      continue;
+    }
+    const rawType = readName(typeEntry.value, 'type', sink);
+    if (rawType === undefined) continue;
+    const type = FX_ALIASES[rawType];
+    if (type === undefined) {
+      sink.push(
+        nodePos(typeEntry.value),
+        `unknown effect type "${rawType}" (expected one of: ${Object.keys(FX_ALIASES).join(', ')})`,
+      );
+      continue;
+    }
+    if (seen.has(type)) {
+      sink.push(nodePos(typeEntry.value), `effect "${type}" appears more than once — each type may be used at most once`);
+      continue;
+    }
+    seen.set(type, typeEntry.value);
+
+    const f = mapFields(m, ['type', ...FX_KEYS[type]], `fx.${type}`, sink);
+    out.push(readFxEntry(type, f, bpm, sink));
+  }
+
+  return out;
+}
+
+function readFxEntry(type: FxType, f: Record<string, YNode>, bpm: number, sink: ErrorSink): FxInput {
+  // Each branch reads only its own keys; unknown ones were already reported.
+  switch (type) {
+    case 'dist': {
+      const v: Partial<FxParamMap['dist']> = {};
+      assignRatio(v, 'drive', f['drive'], sink, 0, 1);
+      assignRatio(v, 'mix', f['mix'], sink, 0, 1);
+      const mode = f['mode'];
+      if (mode) {
+        const name = readName(mode, 'mode', sink);
+        if (name !== undefined) {
+          if (DIST_MODES[name] === undefined) {
+            sink.push(nodePos(mode), `unknown dist mode "${name}" (expected one of: ${Object.keys(DIST_MODES).join(', ')})`);
+          } else {
+            v.mode = name as FxParamMap['dist']['mode'];
+          }
+        }
+      }
+      assignFreq(v, 'toneHz', f['tone'], 'tone', sink);
+      return { type, params: v };
+    }
+    case 'eq': {
+      const v: Partial<FxParamMap['eq']> = {};
+      assignGainDb(v, 'lowDb', f['low'], 'low', sink);
+      assignGainDb(v, 'midDb', f['mid'], 'mid', sink);
+      assignGainDb(v, 'highDb', f['high'], 'high', sink);
+      assignFreq(v, 'midFreqHz', f['mid_freq'], 'mid_freq', sink);
+      return { type, params: v };
+    }
+    case 'chorus': {
+      const v: Partial<FxParamMap['chorus']> = {};
+      assignRate(v, 'rateHz', f['rate'], 'rate', bpm, sink);
+      assignRatio(v, 'depth', f['depth'], sink, 0, 1);
+      assignRatio(v, 'mix', f['mix'], sink, 0, 1);
+      return { type, params: v };
+    }
+    case 'phaser': {
+      const v: Partial<FxParamMap['phaser']> = {};
+      assignRate(v, 'rateHz', f['rate'], 'rate', bpm, sink);
+      assignRatio(v, 'depth', f['depth'], sink, 0, 1);
+      assignRatio(v, 'feedback', f['feedback'], sink, 0, 1);
+      assignRatio(v, 'mix', f['mix'], sink, 0, 1);
+      const stages = f['stages'];
+      if (stages) {
+        const n = readCount(stages, 'stages', sink);
+        if (n !== undefined) {
+          const i = Math.round(n);
+          if (i < 2 || i > 8 || i % 2 !== 0) {
+            sink.push(nodePos(stages), `stages must be an even number between 2 and 8, got ${n}`);
+          } else {
+            v.stages = i;
+          }
+        }
+      }
+      assignFreq(v, 'centerHz', f['center'], 'center', sink);
+      return { type, params: v };
+    }
+    case 'flanger': {
+      const v: Partial<FxParamMap['flanger']> = {};
+      assignRate(v, 'rateHz', f['rate'], 'rate', bpm, sink);
+      assignRatio(v, 'depth', f['depth'], sink, 0, 1);
+      assignRatio(v, 'feedback', f['feedback'], sink, 0, 1);
+      assignRatio(v, 'mix', f['mix'], sink, 0, 1);
+      return { type, params: v };
+    }
+    case 'delay': {
+      const v: Partial<FxParamMap['delay']> = {};
+      const time = f['time'];
+      if (time) {
+        // Absolute (ms/s) and musical (3/16) both allowed.
+        const s = readTime(time, 'time', bpm, sink);
+        if (s !== undefined) v.timeS = clamp(s, 0.001, 2);
+      }
+      assignRatio(v, 'feedback', f['feedback'], sink, 0, 1);
+      assignRatio(v, 'mix', f['mix'], sink, 0, 1);
+      const pingpong = f['pingpong'];
+      if (pingpong) {
+        const b = readBool(pingpong, 'pingpong', sink);
+        if (b !== undefined) v.pingpong = b;
+      }
+      assignFreq(v, 'toneHz', f['tone'], 'tone', sink);
+      return { type, params: v };
+    }
+    case 'reverb': {
+      const v: Partial<FxParamMap['reverb']> = {};
+      assignRatio(v, 'size', f['size'], sink, 0, 1);
+      assignRatio(v, 'damp', f['damp'], sink, 0, 1);
+      assignRatio(v, 'mix', f['mix'], sink, 0, 1);
+      const predelay = f['predelay'];
+      if (predelay) {
+        const s = readTime(predelay, 'predelay', bpm, sink);
+        if (s !== undefined) v.predelayS = clamp(s, 0, 0.25);
+      }
+      assignRatio(v, 'width', f['width'], sink, 0, 1);
+      return { type, params: v };
+    }
+    case 'comp': {
+      const v: Partial<FxParamMap['comp']> = {};
+      assignThresh(v, 'threshLowDb', f['thresh_low'], 'thresh_low', sink);
+      assignThresh(v, 'threshMidDb', f['thresh_mid'], 'thresh_mid', sink);
+      assignThresh(v, 'threshHighDb', f['thresh_high'], 'thresh_high', sink);
+      const ratio = f['ratio'];
+      if (ratio) {
+        const n = readCount(ratio, 'ratio', sink);
+        if (n !== undefined) {
+          if (n < 1) sink.push(nodePos(ratio), `ratio must be >= 1, got ${n}`);
+          else v.ratio = clamp(n, 1, 100);
+        }
+      }
+      const attack = f['attack'];
+      if (attack) {
+        const s = readTime(attack, 'attack', bpm, sink);
+        if (s !== undefined) v.attackS = clamp(s, 0, 1);
+      }
+      const release = f['release'];
+      if (release) {
+        const s = readTime(release, 'release', bpm, sink);
+        if (s !== undefined) v.releaseS = clamp(s, 0, 5);
+      }
+      const makeup = f['makeup'];
+      if (makeup) {
+        const db = readGain(makeup, 'makeup', sink);
+        if (db !== undefined) v.makeup = dbToLinear(clamp(db, -24, 24));
+      }
+      return { type, params: v };
+    }
+  }
+}
+
+// Small typed assignment helpers — they keep the per-effect branches readable.
+
+function assignRatio<T, K extends keyof T>(
+  target: T,
+  key: K,
+  node: YNode | undefined,
+  sink: ErrorSink,
+  lo: number,
+  hi: number,
+): void {
+  if (!node) return;
+  const v = readRatio(node, String(key), sink);
+  if (v !== undefined) target[key] = clamp(v, lo, hi) as T[K];
+}
+
+function assignFreq<T, K extends keyof T>(
+  target: T,
+  key: K,
+  node: YNode | undefined,
+  field: string,
+  sink: ErrorSink,
+): void {
+  if (!node) return;
+  const v = readFreq(node, field, sink);
+  if (v !== undefined) target[key] = clamp(v, 20, 20000) as T[K];
+}
+
+function assignGainDb<T, K extends keyof T>(
+  target: T,
+  key: K,
+  node: YNode | undefined,
+  field: string,
+  sink: ErrorSink,
+): void {
+  if (!node) return;
+  const v = readGain(node, field, sink);
+  if (v !== undefined) target[key] = clamp(v, -24, 24) as T[K];
+}
+
+function assignThresh<T, K extends keyof T>(
+  target: T,
+  key: K,
+  node: YNode | undefined,
+  field: string,
+  sink: ErrorSink,
+): void {
+  if (!node) return;
+  const v = readGain(node, field, sink);
+  if (v !== undefined) target[key] = clamp(v, -80, 0) as T[K];
+}
+
+function assignRate<T, K extends keyof T>(
+  target: T,
+  key: K,
+  node: YNode | undefined,
+  field: string,
+  bpm: number,
+  sink: ErrorSink,
+): void {
+  if (!node) return;
+  const v = readRate(node, field, bpm, sink);
+  if (v !== undefined) target[key] = v as T[K];
 }
 
 function readOscList(node: YNode, sink: ErrorSink): Partial<OscIR>[] {
@@ -295,12 +583,8 @@ function readLfo(node: YNode, bpm: number, sink: ErrorSink): Partial<LfoIR> {
 
   const rate = lf['rate'];
   if (rate) {
-    const uv = scalarValue(rate, 'rate', sink);
-    if (uv) {
-      if (uv.unit === 'hz') out.rateHz = clamp(uv.value, 0.001, 200);
-      else if (uv.unit === 'musical') out.rateHz = clamp(beatsToHz(uv.value, bpm), 0.001, 200);
-      else unitError(uv, 'rate', 'frequency (e.g. 5Hz) or musical time (e.g. 1/4)', sink);
-    }
+    const v = readRate(rate, 'rate', bpm, sink);
+    if (v !== undefined) out.rateHz = v;
   }
 
   const phase = lf['phase'];
@@ -457,6 +741,19 @@ function readTime(node: YNode, field: string, bpm: number, sink: ErrorSink): num
   if (uv.unit === 'sec') return uv.value;
   if (uv.unit === 'musical') return beatsToSeconds(uv.value, bpm);
   unitError(uv, field, 'a time (e.g. 180ms, 2s, 1/8, 1bar)', sink);
+  return undefined;
+}
+
+/**
+ * Modulation rates: absolute (`5Hz`) or tempo-synced (`1/4`, converted with the
+ * loop's bpm). Used by lfo.1 and the chorus/phaser/flanger rates.
+ */
+function readRate(node: YNode, field: string, bpm: number, sink: ErrorSink): number | undefined {
+  const uv = scalarValue(node, field, sink);
+  if (!uv) return undefined;
+  if (uv.unit === 'hz') return clamp(uv.value, 0.001, 200);
+  if (uv.unit === 'musical') return clamp(beatsToHz(uv.value, bpm), 0.001, 200);
+  unitError(uv, field, 'frequency (e.g. 5Hz) or musical time (e.g. 1/4)', sink);
   return undefined;
 }
 
