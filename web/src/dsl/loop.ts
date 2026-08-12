@@ -14,6 +14,8 @@ import { samplesPerBeat } from './units.ts';
 
 export interface LoopEvent {
   offsetSamples: number;
+  /** Track index, 0..MAX_TRACKS-1 (the synth fence's order of appearance). */
+  track: number;
   /** 0 = noteOn, 1 = noteOff */
   kind: 0 | 1;
   note: number;
@@ -25,18 +27,30 @@ export interface LoopIR {
   events: LoopEvent[];
 }
 
-export interface LoopMeta {
-  id: string;
+/** One `id: <cells>` line. Subdivision is inferred per line. */
+export interface LoopLineMeta {
   trackId: string;
-  bars: number;
-  bpm: number;
+  track: number;
   cells: number;
   cellsPerBeat: number;
+}
+
+export interface LoopMeta {
+  id: string;
+  bars: number;
+  bpm: number;
+  lines: LoopLineMeta[];
 }
 
 export interface LoopParseOptions {
   bodyStartLine?: number;
   sampleRate: number;
+  /**
+   * Maps a loop line's `id:` to its track index (the synth fence order).
+   * When omitted the lines are simply numbered in order of appearance, which
+   * keeps `parseLoop` usable standalone.
+   */
+  trackIds?: Record<string, number>;
 }
 
 export interface LoopParseResult {
@@ -71,54 +85,104 @@ export function parseLoop(
   const bpm = readPositive(attrs['bpm'], DEFAULT_BPM, 'bpm', fencePos, sink);
   const id = attrs['id'] ?? '';
 
-  const lines = body.split(/\r\n|\r|\n/);
-  let trackLine: { text: string; n: number } | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const raw = (lines[i] ?? '').replace(/\s+#.*$/, '');
-    if (raw.trim() === '' || raw.trim().startsWith('#')) continue;
-    trackLine = { text: raw, n: startLine + i };
-    break; // MVP: first track line only
+  const raw = body.split(/\r\n|\r|\n/);
+  const trackLines: { text: string; n: number }[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const text = (raw[i] ?? '').replace(/\s+#.*$/, '');
+    if (text.trim() === '' || text.trim().startsWith('#')) continue;
+    trackLines.push({ text, n: startLine + i });
   }
 
-  if (!trackLine) {
+  if (trackLines.length === 0) {
     sink.push(fencePos, 'loop needs at least one track line, e.g. "lead: C3 . Eb3 ."');
     return { loop: null, meta: null, errors: sink.errors };
   }
 
-  const colon = trackLine.text.indexOf(':');
-  if (colon < 0) {
-    sink.push({ line: trackLine.n, col: 1 }, 'expected "trackId: <cells>"');
-    return { loop: null, meta: null, errors: sink.errors };
-  }
-  const trackId = trackLine.text.slice(0, colon).trim();
-  const cellsSrc = trackLine.text.slice(colon + 1);
-  const cellsCol = colon + 2;
-
-  const cells = tokenizeCells(cellsSrc, trackLine.n, cellsCol, sink);
-  if (cells.length === 0) {
-    sink.push({ line: trackLine.n, col: cellsCol }, 'track has no cells');
-    return { loop: null, meta: null, errors: sink.errors };
-  }
-
-  const beats = bars * 4;
-  const cellsPerBeat = cells.length / beats;
-  if (!Number.isInteger(cellsPerBeat) || cellsPerBeat < 1) {
-    sink.push(
-      { line: trackLine.n, col: cellsCol },
-      `cell count ${cells.length} is not divisible by bars*4 (${beats}) — cells per beat would be ${round(cellsPerBeat)}`,
-    );
-    return { loop: null, meta: null, errors: sink.errors };
-  }
-
-  const meta: LoopMeta = { id, trackId, bars, bpm, cells: cells.length, cellsPerBeat };
-
-  if (!sink.ok) return { loop: null, meta, errors: sink.errors };
-
+  // Every line spans the same musical length, so the loop length comes from the
+  // bar count — lines only differ in how finely they subdivide it.
   const spb = samplesPerBeat(bpm, opts.sampleRate);
-  const cellSamples = spb / cellsPerBeat;
-  const lengthSamples = Math.round(cells.length * cellSamples);
+  const beats = bars * 4;
+  const lengthSamples = Math.round(beats * spb);
 
   const events: LoopEvent[] = [];
+  const lineMetas: LoopLineMeta[] = [];
+  const seenIds = new Set<string>();
+
+  for (const line of trackLines) {
+    const colon = line.text.indexOf(':');
+    if (colon < 0) {
+      sink.push({ line: line.n, col: 1 }, 'expected "trackId: <cells>"');
+      continue;
+    }
+    const trackIdCol = line.text.length - line.text.trimStart().length + 1;
+    const trackId = line.text.slice(0, colon).trim();
+    const cellsSrc = line.text.slice(colon + 1);
+    const cellsCol = colon + 2;
+
+    // v0.3: a line binds to the synth fence with the same id.
+    let track: number;
+    if (opts.trackIds) {
+      const resolved = opts.trackIds[trackId];
+      if (resolved === undefined) {
+        const known = Object.keys(opts.trackIds);
+        sink.push(
+          { line: line.n, col: trackIdCol },
+          `unknown track "${trackId}" — no \`\`\`synth fence with that id` +
+            (known.length ? ` (known: ${known.join(', ')})` : ''),
+        );
+        continue;
+      }
+      track = resolved;
+    } else {
+      // Standalone parse (tests/tools): number the lines in order.
+      track = lineMetas.length;
+    }
+
+    if (seenIds.has(trackId)) {
+      sink.push({ line: line.n, col: trackIdCol }, `duplicate loop line for track "${trackId}"`);
+      continue;
+    }
+    seenIds.add(trackId);
+
+    const cells = tokenizeCells(cellsSrc, line.n, cellsCol, sink);
+    if (cells.length === 0) {
+      sink.push({ line: line.n, col: cellsCol }, 'track has no cells');
+      continue;
+    }
+
+    // Cells per beat is inferred per line: 16 cells over 1 bar = 16th notes.
+    const cellsPerBeat = cells.length / beats;
+    if (!Number.isInteger(cellsPerBeat) || cellsPerBeat < 1) {
+      sink.push(
+        { line: line.n, col: cellsCol },
+        `cell count ${cells.length} is not divisible by bars*4 (${beats}) — cells per beat would be ${round(cellsPerBeat)}`,
+      );
+      continue;
+    }
+
+    lineMetas.push({ trackId, track, cells: cells.length, cellsPerBeat });
+    emitLineEvents(cells, track, spb / cellsPerBeat, events, sink);
+  }
+
+  const meta: LoopMeta = { id, bars, bpm, lines: lineMetas };
+  if (!sink.ok) return { loop: null, meta, errors: sink.errors };
+
+  // noteOff before noteOn when they land on the same sample.
+  events.sort(
+    (a, b) => a.offsetSamples - b.offsetSamples || b.kind - a.kind || a.track - b.track || a.note - b.note,
+  );
+
+  return { loop: { lengthSamples, events }, meta, errors: [] };
+}
+
+/** Turn one line's cells into note events (ties extend, rests close a run). */
+function emitLineEvents(
+  cells: Cell[],
+  track: number,
+  cellSamples: number,
+  out: LoopEvent[],
+  sink: ErrorSink,
+): void {
   let runNotes: number[] | null = null;
   let runStart = 0;
 
@@ -126,7 +190,7 @@ export function parseLoop(
     if (!runNotes) return;
     const off = Math.max(Math.round(endCell * cellSamples) - 1, Math.round(runStart * cellSamples));
     for (const note of runNotes) {
-      events.push({ offsetSamples: off, kind: 1, note, velocity: 0 });
+      out.push({ offsetSamples: off, track, kind: 1, note, velocity: 0 });
     }
     runNotes = null;
   };
@@ -134,9 +198,7 @@ export function parseLoop(
   for (let i = 0; i < cells.length; i++) {
     const cell = cells[i] as Cell;
     if (cell.tie) {
-      if (!runNotes) {
-        sink.push(cell.pos, 'tie "~" has no preceding note');
-      }
+      if (!runNotes) sink.push(cell.pos, 'tie "~" has no preceding note');
       continue;
     }
     // rest or new note: the previous run ends here
@@ -146,18 +208,11 @@ export function parseLoop(
       runNotes = cell.notes;
       const on = Math.round(i * cellSamples);
       for (const note of cell.notes) {
-        events.push({ offsetSamples: on, kind: 0, note, velocity: DEFAULT_VELOCITY });
+        out.push({ offsetSamples: on, track, kind: 0, note, velocity: DEFAULT_VELOCITY });
       }
     }
   }
   closeRun(cells.length);
-
-  if (!sink.ok) return { loop: null, meta, errors: sink.errors };
-
-  // noteOff before noteOn when they land on the same sample.
-  events.sort((a, b) => a.offsetSamples - b.offsetSamples || b.kind - a.kind || a.note - b.note);
-
-  return { loop: { lengthSamples, events }, meta, errors: [] };
 }
 
 // ------------------------------------------------------------------ tokenizer

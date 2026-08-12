@@ -20,13 +20,15 @@ const playBtn = $<HTMLButtonElement>('play');
 const statusEl = $<HTMLElement>('status');
 const stateDot = $<HTMLElement>('state-dot');
 const errorsEl = $<HTMLElement>('errors');
-const expandedEl = $<HTMLElement>('expanded');
+const tracksEl = $<HTMLElement>('tracks');
 const loopViewEl = $<HTMLElement>('loopview');
 const metaEl = $<HTMLElement>('meta');
 const scope = $<HTMLCanvasElement>('scope');
 const posEl = $<HTMLElement>('pos');
 
 let lastValidPatchAt = 0; // monotonic counter of successful patch applications
+/** Per-track expanded views, kept when a fence errors (last valid patch). */
+const trackViews = new Map<number, { id: string; json: string }>();
 let engineDetail = '';
 let engineState: EngineState = 'idle';
 
@@ -59,13 +61,18 @@ function recompile(force = false): void {
   const result = compile(editor.value, currentSampleRate());
   lastResult = result;
 
-  if (result.patch) {
-    engine.sendPatch(result.patch.params);
-    lastValidPatchAt++;
-    expandedEl.textContent = JSON.stringify(result.patch.expanded, null, 2);
-  } else if (force) {
-    expandedEl.textContent = expandedEl.textContent || '(パッチ未確定)';
+  // Send only the tracks that compiled clean; the rest keep their last patch.
+  for (const track of result.tracks) {
+    engine.sendPatch(track.track, track.params);
+    trackViews.set(track.track, { id: track.id, json: JSON.stringify(track.expanded, null, 2) });
   }
+  if (result.tracks.length > 0) lastValidPatchAt++;
+  // Drop tracks the document no longer declares.
+  engine.sendClearTracks(result.trackCount);
+  for (const key of [...trackViews.keys()]) {
+    if (key >= result.trackCount) trackViews.delete(key);
+  }
+  renderTracks(result);
 
   if (result.loop) {
     // Only re-send when the timing actually changed: swapping the loop resets
@@ -87,16 +94,48 @@ function formatLoop(result: CompileResult): string {
   const loop = result.loop;
   if (!loop) return '';
   const meta = result.loopMeta;
-  const head = meta
-    ? `# ${meta.id || 'loop'}  track=${meta.trackId}  bars=${meta.bars}  bpm=${meta.bpm}\n` +
-      `# cells=${meta.cells} (${meta.cellsPerBeat}/beat)  sampleRate=${currentSampleRate()}\n`
-    : '';
-  const lines = loop.events.map(
-    (e) =>
-      `${String(e.offsetSamples).padStart(8)}  ${e.kind === 0 ? 'on ' : 'off'}  note=${e.note}` +
-      (e.kind === 0 ? `  vel=${e.velocity}` : ''),
-  );
+  const names = new Map(result.tracks.map((t) => [t.track, t.id]));
+  let head = '';
+  if (meta) {
+    head =
+      `# ${meta.id || 'loop'}  bars=${meta.bars}  bpm=${meta.bpm}  sampleRate=${currentSampleRate()}\n` +
+      meta.lines
+        .map((l) => `#   [${l.track}] ${l.trackId}: ${l.cells} cells (${l.cellsPerBeat}/beat)\n`)
+        .join('');
+  }
+  const lines = loop.events.map((e) => {
+    const who = names.get(e.track) ?? `track${e.track}`;
+    return (
+      `${String(e.offsetSamples).padStart(8)}  ${e.kind === 0 ? 'on ' : 'off'}  ` +
+      `${who.padEnd(6)} note=${e.note}` +
+      (e.kind === 0 ? `  vel=${e.velocity}` : '')
+    );
+  });
   return `${head}lengthSamples = ${loop.lengthSamples}\n${lines.join('\n')}`;
+}
+
+/** One collapsible expanded-parameter panel per track, labelled by id. */
+function renderTracks(result: CompileResult): void {
+  const failed = new Set<number>();
+  for (let t = 0; t < result.trackCount; t++) {
+    if (!result.tracks.some((x) => x.track === t)) failed.add(t);
+  }
+
+  const parts: string[] = [];
+  for (let t = 0; t < result.trackCount; t++) {
+    const view = trackViews.get(t);
+    const id = view?.id ?? `track${t}`;
+    const stale = failed.has(t) ? '<span class="stale">⚠ last valid</span>' : '';
+    const body = view ? escapeHtml(view.json) : '(まだコンパイルされていません)';
+    parts.push(
+      `<details class="expanded"><summary><span class="badge">${t}</span>${escapeHtml(id)}${stale}</summary>` +
+        `<pre>${body}</pre></details>`,
+    );
+  }
+  if (parts.length === 0) {
+    parts.push('<details class="expanded"><summary>展開済みパラメータ</summary><pre>(synth フェンスがありません)</pre></details>');
+  }
+  tracksEl.innerHTML = parts.join('');
 }
 
 // ------------------------------------------------------------------- render
@@ -108,7 +147,7 @@ function renderErrors(result: CompileResult): void {
     return;
   }
   errorsEl.hidden = false;
-  const keepsPlaying = !result.patch && lastValidPatchAt > 0;
+  const keepsPlaying = result.tracks.length < result.trackCount && lastValidPatchAt > 0;
   const items = result.errors
     .map(
       (e) =>
@@ -122,6 +161,7 @@ function renderErrors(result: CompileResult): void {
 function renderMeta(result: CompileResult): void {
   const bits: string[] = [];
   if (result.loopMeta) bits.push(`${result.loopMeta.bpm}bpm`, `${result.loopMeta.bars}bar`);
+  bits.push(`${result.tracks.length}/${result.trackCount} track${result.trackCount === 1 ? '' : 's'}`);
   if (engine.sampleRate) bits.push(`${engine.sampleRate}Hz`);
   bits.push(`${result.errors.length} error${result.errors.length === 1 ? '' : 's'}`);
   metaEl.textContent = bits.join('  ·  ');
@@ -145,7 +185,7 @@ function renderStatus(): void {
       isError = true;
       break;
   }
-  if (!isError && lastResult && !lastResult.patch && lastValidPatchAt > 0) {
+  if (!isError && lastResult && lastResult.tracks.length < lastResult.trackCount && lastValidPatchAt > 0) {
     text += ' — playing last valid patch';
   }
   statusEl.textContent = text;
@@ -204,7 +244,8 @@ async function togglePlay(): Promise<void> {
     starting = false;
   }
 
-  if (lastResult?.patch) engine.sendPatch(lastResult.patch.params);
+  for (const track of lastResult?.tracks ?? []) engine.sendPatch(track.track, track.params);
+  if (lastResult) engine.sendClearTracks(lastResult.trackCount);
   if (lastResult?.loop) engine.sendLoop(lastResult.loop);
   engine.setPlaying(true);
   renderStatus();

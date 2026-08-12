@@ -394,9 +394,27 @@ describe('fx chain — errors', () => {
 
 // --------------------------------------------------------------- expanded view
 
+// A stable document for view assertions: the showcase default doc is covered
+// by tracks.test.ts and is free to change.
+const FX_DOC = [
+  '```synth id=pad',
+  'noise: { level: -18dB, color: white }',
+  'fx:',
+  '  - { type: dist,   drive: 0.25, mix: 40% }',
+  '  - { type: eq,     low: +2dB }',
+  '  - { type: delay,  time: 3/16, mix: 25% }',
+  '  - { type: reverb, size: 70%, mix: 18% }',
+  '  - { type: comp,   ratio: 3 }',
+  '```',
+  '',
+  '```loop id=demo bars=1 bpm=124',
+  'pad: C3 . . .',
+  '```',
+].join('\n');
+
 describe('expandedView with v0.2 sections', () => {
   it('shows noise and the fx chain in processing order', () => {
-    const r = compile(DEFAULT_DOC, 48000);
+    const r = compile(FX_DOC, 48000);
     expect(r.errors).toEqual([]);
     const view = r.patch!.expanded as {
       noise: { enabled: boolean; color: string; level: string };
@@ -421,6 +439,21 @@ describe('expandedView with v0.2 sections', () => {
     expect(json).toContain('"pingpong": true');
     expect(json).toContain('delay (id 6)');
   });
+
+  it('keeps the fx chain and noise per track', () => {
+    const r = compile(DEFAULT_DOC, 48000);
+    expect(r.errors).toEqual([]);
+    const lead = r.tracks.find((t) => t.id === 'lead')!;
+    const hat = r.tracks.find((t) => t.id === 'hat')!;
+    const leadView = lead.expanded as { fx: { type: string }[]; noise: { enabled: boolean } };
+    const hatView = hat.expanded as { fx: unknown[]; noise: { enabled: boolean; level: string } };
+
+    expect(leadView.fx.map((f) => f.type.split(' ')[0])).toEqual(['reverb', 'comp']);
+    expect(leadView.noise.enabled).toBe(false);
+    expect(hatView.fx).toEqual([]);
+    expect(hatView.noise.enabled).toBe(true);
+    expect(hatView.noise.level).toMatch(/-6dB/);
+  });
 });
 
 function expandedViewOf(r: { ir: { fx: unknown } | null }): unknown {
@@ -428,30 +461,11 @@ function expandedViewOf(r: { ir: { fx: unknown } | null }): unknown {
   return expandedView(r.ir as Parameters<typeof expandedView>[0]);
 }
 
-// ------------------------------------------------------------- default doc
-
-describe('the default document', () => {
-  it('compiles clean, with the noise layer, the fx chain and a chord cell', () => {
-    const r = compile(DEFAULT_DOC, 48000);
+describe('the fx showcase document', () => {
+  it('compiles clean with the delay tracking the tempo', () => {
+    const r = compile(FX_DOC, 48000);
     expect(r.errors).toEqual([]);
-    expect(r.patch).toBeDefined();
-    expect(r.loop).toBeDefined();
-
-    expect(r.patch!.ir.noise.enabled).toBe(true);
-    expect(r.patch!.ir.fx.map((f) => f.type)).toEqual(['dist', 'eq', 'delay', 'reverb', 'comp']);
-
-    // The chord cell fires three simultaneous noteOns.
-    const byOffset = new Map<number, number>();
-    for (const e of r.loop!.events) {
-      if (e.kind === 0) byOffset.set(e.offsetSamples, (byOffset.get(e.offsetSamples) ?? 0) + 1);
-    }
-    expect(Math.max(...byOffset.values())).toBe(3);
-  });
-
-  it('keeps the delay in sync with the document tempo', () => {
-    const r = compile(DEFAULT_DOC, 48000);
     const delay = r.patch!.ir.fx.find((f) => f.type === 'delay');
-    expect(delay).toBeDefined();
     if (delay?.type !== 'delay') throw new Error('expected delay');
     expect(delay.params.timeS).toBeCloseTo(beatsToSeconds(0.75, 124), 9);
   });

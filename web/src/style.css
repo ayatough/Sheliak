@@ -250,6 +250,25 @@ details.expanded[open] > summary {
   color: var(--fg);
 }
 
+.tracks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+details.expanded > summary .badge {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 11px;
+  margin-right: 6px;
+}
+
+details.expanded > summary .stale {
+  color: var(--warn);
+  font-size: 11px;
+  margin-left: 6px;
+}
+
 details.expanded pre {
   margin: 0;
   padding: 10px;

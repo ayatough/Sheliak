@@ -121,6 +121,12 @@ function readTop(root: YMap, input: PatchInput, bpm: number, sink: ErrorSink): v
 
   const fxNode = fields['fx'];
   if (fxNode) input.fx = readFxList(fxNode, bpm, sink);
+
+  // `osc: []` only makes sense together with a noise layer.
+  if (input.osc && input.osc.length === 0 && !input.noise) {
+    const oscKey = root.entries.find((e) => e.key === 'osc');
+    sink.push(oscKey ? oscKey.keyPos : nodePos(root), 'patch produces no sound: osc is empty and no noise section');
+  }
 }
 
 // ---------------------------------------------------------------------- noise

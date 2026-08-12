@@ -39,7 +39,8 @@ describe('parseLoop — demo loop at 124bpm / 48000Hz', () => {
   // → 2 cells per beat → 11612.903… samples per cell.
   it('infers cells per beat', () => {
     expect(r.errors).toEqual([]);
-    expect(r.meta).toMatchObject({ trackId: 'lead', bars: 2, bpm: 124, cells: 16, cellsPerBeat: 2 });
+    expect(r.meta).toMatchObject({ bars: 2, bpm: 124 });
+    expect(r.meta!.lines).toEqual([{ trackId: 'lead', track: 0, cells: 16, cellsPerBeat: 2 }]);
   });
 
   it('computes the loop length in samples', () => {
@@ -48,18 +49,18 @@ describe('parseLoop — demo loop at 124bpm / 48000Hz', () => {
 
   it('emits sample-accurate note events (ties, rests, noteOff at cell end - 1)', () => {
     expect(r.loop!.events).toEqual([
-      { offsetSamples: 0, kind: 0, note: 48, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: 11612, kind: 1, note: 48, velocity: 0 },
-      { offsetSamples: 23226, kind: 0, note: 51, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: 34838, kind: 1, note: 51, velocity: 0 },
-      { offsetSamples: 46452, kind: 0, note: 55, velocity: DEFAULT_VELOCITY },
+      { offsetSamples: 0, track: 0, kind: 0, note: 48, velocity: DEFAULT_VELOCITY },
+      { offsetSamples: 11612, track: 0, kind: 1, note: 48, velocity: 0 },
+      { offsetSamples: 23226, track: 0, kind: 0, note: 51, velocity: DEFAULT_VELOCITY },
+      { offsetSamples: 34838, track: 0, kind: 1, note: 51, velocity: 0 },
+      { offsetSamples: 46452, track: 0, kind: 0, note: 55, velocity: DEFAULT_VELOCITY },
       // G3 is tied across three cells → off at cell 7 end - 1
-      { offsetSamples: 81289, kind: 1, note: 55, velocity: 0 },
-      { offsetSamples: 92903, kind: 0, note: 58, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: 104515, kind: 1, note: 58, velocity: 0 },
-      { offsetSamples: 139355, kind: 0, note: 60, velocity: DEFAULT_VELOCITY },
+      { offsetSamples: 81289, track: 0, kind: 1, note: 55, velocity: 0 },
+      { offsetSamples: 92903, track: 0, kind: 0, note: 58, velocity: DEFAULT_VELOCITY },
+      { offsetSamples: 104515, track: 0, kind: 1, note: 58, velocity: 0 },
+      { offsetSamples: 139355, track: 0, kind: 0, note: 60, velocity: DEFAULT_VELOCITY },
       // C4 is tied to the end of the loop
-      { offsetSamples: 185805, kind: 1, note: 60, velocity: 0 },
+      { offsetSamples: 185805, track: 0, kind: 1, note: 60, velocity: 0 },
     ]);
   });
 
@@ -82,14 +83,14 @@ describe('parseLoop — cells and chords', () => {
     const withBars = parseLoop('x: C3 . . . | . . . .', { bars: '1' }, { sampleRate: SR });
     const without = parseLoop('x: C3 . . . . . . .', { bars: '1' }, { sampleRate: SR });
     expect(withBars.errors).toEqual([]);
-    expect(withBars.meta!.cells).toBe(8);
+    expect(withBars.meta!.lines[0]!.cells).toBe(8);
     expect(withBars.loop!.events).toEqual(without.loop!.events);
   });
 
   it('parses chords as one cell', () => {
     const r = parseLoop('x: [C3 Eb3 G3] . . .', { bars: '1' }, { sampleRate: SR });
     expect(r.errors).toEqual([]);
-    expect(r.meta!.cells).toBe(4);
+    expect(r.meta!.lines[0]!.cells).toBe(4);
     const ons = r.loop!.events.filter((e) => e.kind === 0);
     expect(ons.map((e) => e.note)).toEqual([48, 51, 55]);
     expect(ons.every((e) => e.offsetSamples === 0)).toBe(true);
@@ -110,8 +111,8 @@ describe('parseLoop — cells and chords', () => {
     const r = parseLoop('x: C3 . . .', { bars: '1' }, { sampleRate: SR });
     const cell = (60 / 120) * SR;
     expect(r.loop!.events).toEqual([
-      { offsetSamples: 0, kind: 0, note: 48, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: Math.round(cell) - 1, kind: 1, note: 48, velocity: 0 },
+      { offsetSamples: 0, track: 0, kind: 0, note: 48, velocity: DEFAULT_VELOCITY },
+      { offsetSamples: Math.round(cell) - 1, track: 0, kind: 1, note: 48, velocity: 0 },
     ]);
   });
 });
@@ -167,7 +168,7 @@ describe('compile — whole document', () => {
     // LFO rate `1/4` resolved with the loop's bpm.
     expect(r.patch!.ir.lfo1.rateHz).toBeCloseTo(124 / 60, 9);
     expect(r.loop!.lengthSamples).toBe(185806);
-    expect(r.loopMeta!.cellsPerBeat).toBe(2);
+    expect(r.loopMeta!.lines[0]!.cellsPerBeat).toBe(2);
   });
 
   it('still returns the loop when the patch fails (Glicol style)', () => {

@@ -5,8 +5,12 @@
  * imports: bundlers rewrite module graphs in ways that break worklet scope.
  *
  * Protocol (docs/SPEC.md §6):
- *   main → worklet: 'load-wasm' | 'patch' | 'loop' | 'transport'
+ *   main → worklet: 'load-wasm' | 'patch' | 'clear-tracks' | 'loop' | 'transport'
  *   worklet → main: 'ready' | 'position' | 'error'
+ *
+ * v0.3 is multi-track: 'patch' carries a track index, params_ptr/apply_patch/
+ * note_on/note_off are all track-indexed, and 'clear-tracks' disables the
+ * tracks a shrinking document no longer declares.
  *
  * Scheduling: the loop position is a plain sample counter. Each 128-frame
  * render quantum is split at event boundaries so note_on/note_off land on the
@@ -15,6 +19,7 @@
 
 // Mirror of web/src/shared/params.ts / dsp/src/params.rs.
 const PARAM_COUNT = 192;
+const MAX_TRACKS = 8;
 
 // Buffers exported by the DSP core are 128 frames (the render quantum).
 const MAX_BLOCK = 128;
@@ -35,7 +40,8 @@ class SheliakProcessor extends AudioWorkletProcessor {
     this.viewBuffer = null;
     this.outL = null;
     this.outR = null;
-    this.paramsView = null;
+    // One params view per track (params_ptr is track-indexed since v0.3).
+    this.paramsViews = new Array(MAX_TRACKS).fill(null);
 
     // Transport / scheduler state.
     this.playing = false;
@@ -44,8 +50,9 @@ class SheliakProcessor extends AudioWorkletProcessor {
     this.evIdx = 0; // index of the next event to dispatch this pass
     this.posAccum = 0;
 
-    // A patch may arrive before the wasm module finished instantiating.
-    this.pendingParams = null;
+    // Patches may arrive before the wasm module finished instantiating.
+    this.pendingParams = new Array(MAX_TRACKS).fill(null);
+    this.pendingClear = -1;
 
     this.port.onmessage = (event) => this.onMessage(event.data);
   }
@@ -57,7 +64,10 @@ class SheliakProcessor extends AudioWorkletProcessor {
         this.loadWasm(msg.bytes);
         break;
       case 'patch':
-        this.applyPatch(msg.params);
+        this.applyPatch(msg.track | 0, msg.params);
+        break;
+      case 'clear-tracks':
+        this.clearTracks(msg.keep | 0);
         break;
       case 'loop':
         this.setLoop(msg.loop || null);
@@ -107,10 +117,17 @@ class SheliakProcessor extends AudioWorkletProcessor {
       this.ready = true;
       this.port.postMessage({ type: 'ready', sampleRate: sampleRate });
 
-      if (this.pendingParams) {
-        const p = this.pendingParams;
-        this.pendingParams = null;
-        this.applyPatch(p);
+      for (let t = 0; t < MAX_TRACKS; t++) {
+        const p = this.pendingParams[t];
+        if (p) {
+          this.pendingParams[t] = null;
+          this.applyPatch(t, p);
+        }
+      }
+      if (this.pendingClear >= 0) {
+        const keep = this.pendingClear;
+        this.pendingClear = -1;
+        this.clearTracks(keep);
       }
     } catch (e) {
       this.ready = false;
@@ -122,7 +139,9 @@ class SheliakProcessor extends AudioWorkletProcessor {
     const buf = this.memory.buffer;
     this.outL = new Float32Array(buf, this.exports.out_l_ptr(), MAX_BLOCK);
     this.outR = new Float32Array(buf, this.exports.out_r_ptr(), MAX_BLOCK);
-    this.paramsView = new Float32Array(buf, this.exports.params_ptr(), PARAM_COUNT);
+    for (let t = 0; t < MAX_TRACKS; t++) {
+      this.paramsViews[t] = new Float32Array(buf, this.exports.params_ptr(t), PARAM_COUNT);
+    }
     this.viewBuffer = buf;
   }
 
@@ -133,16 +152,34 @@ class SheliakProcessor extends AudioWorkletProcessor {
 
   // ----------------------------------------------------------------- state
 
-  applyPatch(params) {
-    if (!params) return;
+  applyPatch(track, params) {
+    if (!params || track < 0 || track >= MAX_TRACKS) return;
     if (!this.ready) {
-      this.pendingParams = params;
+      this.pendingParams[track] = params;
       return;
     }
     this.ensureViews();
+    const view = this.paramsViews[track];
     const n = Math.min(params.length, PARAM_COUNT);
-    for (let i = 0; i < n; i++) this.paramsView[i] = params[i];
-    this.exports.apply_patch();
+    for (let i = 0; i < n; i++) view[i] = params[i];
+    this.exports.apply_patch(track);
+  }
+
+  /**
+   * Silence tracks the document no longer declares: zeroing a block disables
+   * its oscillators and noise, so the track stops costing anything.
+   */
+  clearTracks(keep) {
+    if (!this.ready) {
+      this.pendingClear = keep;
+      return;
+    }
+    this.ensureViews();
+    for (let t = Math.max(keep, 0); t < MAX_TRACKS; t++) {
+      const view = this.paramsViews[t];
+      for (let i = 0; i < PARAM_COUNT; i++) view[i] = 0;
+      this.exports.apply_patch(t);
+    }
   }
 
   setLoop(loop) {
@@ -198,8 +235,9 @@ class SheliakProcessor extends AudioWorkletProcessor {
         // Fire everything due at the current sample position.
         while (this.evIdx < events.length && events[this.evIdx].offsetSamples <= this.counter) {
           const ev = events[this.evIdx++];
-          if (ev.kind === 0) this.exports.note_on(ev.note, ev.velocity);
-          else this.exports.note_off(ev.note);
+          const track = ev.track | 0;
+          if (ev.kind === 0) this.exports.note_on(track, ev.note, ev.velocity);
+          else this.exports.note_off(track, ev.note);
         }
 
         // Render only up to the next boundary (next event, or the loop wrap).

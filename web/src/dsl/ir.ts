@@ -232,13 +232,16 @@ export const DEFAULT_BPM = 120;
 
 /** Fill every unspecified field with its default → the "展開済みビュー". */
 export function expandPatch(input: PatchInput = {}): PatchIR {
-  const oscIn = input.osc ?? [];
+  const oscIn = input.osc;
+  // `osc: []` is an explicit "no oscillators" (noise-only patch such as a hat);
+  // omitting `osc:` entirely still gives the default single saw.
+  const explicitlyEmpty = oscIn !== undefined && oscIn.length === 0;
   const osc: OscIR[] = [];
   for (let i = 0; i < 2; i++) {
-    const given = oscIn[i];
-    // Osc A is enabled by default so an empty patch still makes sound;
+    const given = oscIn?.[i];
+    // Osc A is enabled by default so a bare patch still makes sound;
     // Osc B only exists when the DSL declares it.
-    const base = defaultOsc(given !== undefined || i === 0);
+    const base = defaultOsc(given !== undefined || (i === 0 && !explicitlyEmpty));
     osc.push(given ? { ...base, ...given, enabled: true } : base);
   }
 

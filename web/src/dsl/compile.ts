@@ -1,13 +1,15 @@
-// Top level: markdown document → patch params + loop IR + diagnostics.
+// Top level: markdown document → per-track patch params + loop IR + diagnostics.
 //
-// Glicol style: whatever compiled successfully is returned even when other
-// parts failed, so the caller can keep the last valid patch playing.
+// v0.3: every ```synth fence is a track, indexed by order of appearance
+// (SPEC §7). Glicol style per track — a fence with an error yields no params so
+// the caller keeps that track's last valid patch, while the others reload.
 
 import { extractFences, findFence, type Fence } from './fences.ts';
 import { parseSynth } from './synth.ts';
 import { parseLoop, type LoopIR, type LoopMeta } from './loop.ts';
 import { expandedView, DEFAULT_BPM, type PatchIR } from './ir.ts';
 import { sortErrors, type DslError } from './errors.ts';
+import { MAX_TRACKS } from '../shared/params.ts';
 
 export interface CompiledPatch {
   ir: PatchIR;
@@ -16,7 +18,23 @@ export interface CompiledPatch {
   expanded: unknown;
 }
 
+export interface CompiledTrack extends CompiledPatch {
+  /** The fence's `id=` (or a generated `trackN` when absent). */
+  id: string;
+  /** Track index = order of appearance among synth fences. */
+  track: number;
+}
+
 export interface CompileResult {
+  /** Tracks that compiled cleanly, in track order. */
+  tracks: CompiledTrack[];
+  /**
+   * How many synth fences the document declares (including ones that failed to
+   * compile, so their index stays reserved). Tracks at or above this index are
+   * stale and should be cleared.
+   */
+  trackCount: number;
+  /** Convenience alias for tracks[0], kept for single-track callers. */
   patch?: CompiledPatch;
   loop?: LoopIR;
   loopMeta?: LoopMeta;
@@ -31,20 +49,59 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
   const fences = extractFences(markdown);
   const errors: DslError[] = [];
 
-  const synthFence = findFence(fences, 'synth');
+  const synthFences = fences.filter((f) => f.lang === 'synth');
   const loopFence = findFence(fences, 'loop');
 
-  // The loop fence owns the tempo; the patch needs it to resolve musical units
-  // (`rate: 1/4`, `d: 1/8`, ...).
+  // The loop fence owns the tempo; patches need it to resolve musical units
+  // (`rate: 1/4`, delay `time: 3/16`, ...).
   let bpm = DEFAULT_BPM;
   if (loopFence?.attrs['bpm'] !== undefined) {
     const v = Number(loopFence.attrs['bpm']);
     if (Number.isFinite(v) && v > 0) bpm = v;
   }
 
-  const result: CompileResult = { bpm, errors, fences };
+  if (synthFences.length > MAX_TRACKS) {
+    for (const extra of synthFences.slice(MAX_TRACKS)) {
+      errors.push({
+        line: extra.fenceLine,
+        col: 1,
+        message: `at most ${MAX_TRACKS} synth fences (tracks) are supported, got ${synthFences.length}`,
+      });
+    }
+  }
 
-  if (!synthFence && !loopFence) {
+  const used = synthFences.slice(0, MAX_TRACKS);
+  const tracks: CompiledTrack[] = [];
+  // Every declared fence gets an id, so loop lines can bind even to a fence
+  // that failed to compile.
+  const trackIds: Record<string, number> = {};
+
+  used.forEach((fence, index) => {
+    const id = fence.attrs['id'] ?? `track${index}`;
+    if (trackIds[id] !== undefined) {
+      errors.push({
+        line: fence.fenceLine,
+        col: 1,
+        message: `duplicate synth id "${id}" — each track needs a unique id`,
+      });
+    } else {
+      trackIds[id] = index;
+    }
+
+    const r = parseSynth(fence.body, fence.attrs, {
+      bodyStartLine: fence.bodyStartLine,
+      bpm,
+    });
+    errors.push(...r.errors);
+    if (r.ir && r.params) {
+      tracks.push({ id, track: index, ir: r.ir, params: r.params, expanded: expandedView(r.ir) });
+    }
+  });
+
+  const result: CompileResult = { tracks, trackCount: used.length, bpm, errors, fences };
+  if (tracks[0]) result.patch = tracks[0];
+
+  if (used.length === 0 && !loopFence) {
     errors.push({
       line: 1,
       col: 1,
@@ -52,21 +109,11 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     });
   }
 
-  if (synthFence) {
-    const r = parseSynth(synthFence.body, synthFence.attrs, {
-      bodyStartLine: synthFence.bodyStartLine,
-      bpm,
-    });
-    errors.push(...r.errors);
-    if (r.ir && r.params) {
-      result.patch = { ir: r.ir, params: r.params, expanded: expandedView(r.ir) };
-    }
-  }
-
   if (loopFence) {
     const r = parseLoop(loopFence.body, loopFence.attrs, {
       bodyStartLine: loopFence.bodyStartLine,
       sampleRate,
+      trackIds,
     });
     errors.push(...r.errors);
     if (r.loop) result.loop = r.loop;

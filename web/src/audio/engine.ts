@@ -7,6 +7,7 @@
 // (COOP/COEP), which we deliberately avoid (REQUIREMENTS §5.1).
 
 import type { LoopIR } from '../dsl/loop.ts';
+import { MAX_TRACKS } from '../shared/params.ts';
 
 export type EngineState = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -36,7 +37,9 @@ export class AudioEngine {
   private state: EngineState = 'idle';
   private playing = false;
 
-  private lastParams: Float32Array | null = null;
+  /** Last params sent per track, replayed once the worklet is ready. */
+  private lastParams: (Float32Array | null)[] = new Array(MAX_TRACKS).fill(null);
+  private lastKeep = MAX_TRACKS;
   private lastLoop: LoopIR | null = null;
 
   constructor(private readonly events: EngineEvents = {}) {}
@@ -137,7 +140,11 @@ export class AudioEngine {
     this.setState('ready', `dsp ready @ ${ctx.sampleRate}Hz`);
 
     // Replay whatever the UI compiled while we were booting.
-    if (this.lastParams) this.sendPatch(this.lastParams);
+    for (let t = 0; t < MAX_TRACKS; t++) {
+      const params = this.lastParams[t];
+      if (params) this.sendPatch(t, params);
+    }
+    this.sendClearTracks(this.lastKeep);
     if (this.lastLoop) this.sendLoop(this.lastLoop);
     if (this.playing) this.setPlaying(true);
   }
@@ -163,10 +170,18 @@ export class AudioEngine {
 
   // ------------------------------------------------------------- messaging
 
-  /** Hot reload: swap parameters without touching the transport. */
-  sendPatch(params: Float32Array): void {
-    this.lastParams = params;
-    this.node?.port.postMessage({ type: 'patch', params });
+  /** Hot reload: swap one track's parameters without touching the transport. */
+  sendPatch(track: number, params: Float32Array): void {
+    if (track < 0 || track >= MAX_TRACKS) return;
+    this.lastParams[track] = params;
+    this.node?.port.postMessage({ type: 'patch', track, params });
+  }
+
+  /** Disable tracks at or above `keep` (a synth fence was deleted). */
+  sendClearTracks(keep: number): void {
+    this.lastKeep = keep;
+    for (let t = keep; t < MAX_TRACKS; t++) this.lastParams[t] = null;
+    this.node?.port.postMessage({ type: 'clear-tracks', keep });
   }
 
   sendLoop(loop: LoopIR | null): void {
