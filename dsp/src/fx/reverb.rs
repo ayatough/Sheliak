@@ -25,6 +25,9 @@ const COMB_TUNING: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
 const ALLPASS_TUNING: [usize; 4] = [556, 441, 341, 225];
 const STEREO_SPREAD: usize = 23;
 const FIXED_GAIN: f32 = 0.015;
+/// Freeverb's `scalewet`: the comb bank spreads the input energy over time, so
+/// the wet path needs this much gain to sit at a comparable level to the dry.
+const WET_GAIN: f32 = 3.0;
 const MAX_SIZE_SCALE: f32 = 1.25;
 const MIN_SIZE_SCALE: f32 = 0.75;
 /// Predelay allocation (SPEC §3: PREDELAY_S ≤ 0.25).
@@ -206,8 +209,8 @@ impl Reverb {
                 wr = a.process(wr);
             }
 
-            let ol = wl * wet1 + wr * wet2;
-            let or = wr * wet1 + wl * wet2;
+            let ol = (wl * wet1 + wr * wet2) * WET_GAIN;
+            let or = (wr * wet1 + wl * wet2) * WET_GAIN;
             l[i] += (ol - l[i]) * m;
             r[i] += (or - r[i]) * m;
         }

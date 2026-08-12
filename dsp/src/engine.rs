@@ -29,6 +29,7 @@
 //! depends on.
 
 use crate::envelope::EnvConfig;
+use crate::fx::Fx;
 use crate::params::*;
 use crate::smoother::{Ramp, Smoother, DEFAULT_TAU};
 use crate::tables::{self, Table};
@@ -74,12 +75,14 @@ pub struct BlockCtx<'a> {
     pub lfo_wave: u32,
     pub lfo_rate: f32,
     pub mods: [ModSlot; MOD_SLOTS],
+    pub noise_level: Ramp,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
 struct BlockParams {
     osc: [OscBlock; 2],
     filter: FilterBlock,
+    noise_level: Ramp,
 }
 
 /// Discrete (non-smoothed) oscillator configuration, latched at note-on.
@@ -134,6 +137,7 @@ pub struct Engine {
     drive: Smoother,
     keytrack: Smoother,
     master: Smoother,
+    noise_level: Smoother,
 
     // ---- discrete parameters ----
     osc_d: [OscDiscrete; 2],
@@ -147,6 +151,11 @@ pub struct Engine {
     env_amp: EnvConfig,
     env_filter: EnvConfig,
     mods: [ModSlot; MOD_SLOTS],
+    noise_enabled: bool,
+    noise_color: u32,
+
+    /// Master FX chain (v0.2). Buffers allocated here, never in `process()`.
+    fx: Fx,
 
     age: u64,
     last_note: Option<f32>,
@@ -175,6 +184,7 @@ impl Engine {
             drive: Smoother::new(sr, DEFAULT_TAU, 0.0),
             keytrack: Smoother::new(sr, DEFAULT_TAU, 0.0),
             master: Smoother::new(sr, DEFAULT_TAU, 0.5),
+            noise_level: Smoother::new(sr, DEFAULT_TAU, 0.0),
             osc_d: [
                 OscDiscrete::default(),
                 OscDiscrete {
@@ -192,6 +202,9 @@ impl Engine {
             env_amp: EnvConfig::new(0.005, 0.2, 0.7, 0.12, sr),
             env_filter: EnvConfig::new(0.002, 0.4, 0.0, 0.1, sr),
             mods: [ModSlot::default(); MOD_SLOTS],
+            noise_enabled: false,
+            noise_color: 0,
+            fx: Fx::new(sr),
             age: 0,
             last_note: None,
             primed: false,
@@ -266,6 +279,14 @@ impl Engine {
         self.lfo_rate = fclamp(p[P_LFO_RATE_HZ], 0.0, sr * 0.25);
         self.lfo_phase = p[P_LFO_PHASE];
 
+        self.noise_enabled = p[NOISE_BASE + NOISE_ENABLED] >= 0.5;
+        self.noise_color = fclamp(p[NOISE_BASE + NOISE_COLOR], 0.0, 1.0).round() as u32;
+        set(
+            &mut self.noise_level,
+            fclamp(p[NOISE_BASE + NOISE_LEVEL], 0.0, 8.0),
+            first,
+        );
+
         for (i, slot) in self.mods.iter_mut().enumerate() {
             let b = MOD_BASE + i * MOD_STRIDE;
             slot.src = fclamp(p[b + MOD_SRC], 0.0, 4.0).round() as u32;
@@ -276,6 +297,8 @@ impl Engine {
                 0.0
             };
         }
+
+        self.fx.apply_patch(p, first);
     }
 
     // ---------------------------------------------------------------- notes
@@ -364,6 +387,8 @@ impl Engine {
                     phase_random: self.osc_d[1].phase_random,
                 },
             ],
+            noise_enabled: self.noise_enabled,
+            noise_color: self.noise_color,
         }
     }
 
@@ -418,6 +443,7 @@ impl Engine {
                 lfo_wave: self.lfo_wave,
                 lfo_rate: self.lfo_rate,
                 mods: self.mods,
+                noise_level: bp.noise_level,
             };
             for v in self.voices.iter_mut() {
                 v.process(&ctx, &mut out_l[..n], &mut out_r[..n]);
@@ -430,6 +456,10 @@ impl Engine {
             out_l[i] *= g;
             out_r[i] *= g;
         }
+
+        // Master FX chain runs on the summed bus, after the master gain, so
+        // delay/reverb tails keep ringing even when no voice is active.
+        self.fx.process(&mut out_l[..n], &mut out_r[..n]);
     }
 
     fn block_params(&mut self, n: usize) -> BlockParams {
@@ -449,6 +479,7 @@ impl Engine {
         let log2hz_end = self.cutoff_log2.advance(n);
         BlockParams {
             osc,
+            noise_level: self.noise_level.block(n),
             filter: FilterBlock {
                 mode: self.filter_mode,
                 log2hz_start,

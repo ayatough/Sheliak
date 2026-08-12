@@ -42,7 +42,9 @@
 pub mod engine;
 pub mod envelope;
 pub mod filter;
+pub mod fx;
 pub mod lfo;
+pub mod noise;
 pub mod oscillator;
 pub mod params;
 pub mod rng;

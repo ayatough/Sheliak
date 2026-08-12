@@ -14,7 +14,7 @@
 
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
-use super::common::OnePole;
+use super::common::{DcBlock, OnePole};
 
 /// Maximum pre-gain at `drive = 1` (≈ +28 dB).
 const MAX_PRE: f32 = 24.0;
@@ -59,6 +59,7 @@ pub struct Dist {
     tone: Smoother,
     mode: u32,
     lp: [OnePole; 2],
+    dc: [DcBlock; 2],
     comp: f32,
     cached_pre: f32,
 }
@@ -71,6 +72,12 @@ impl Dist {
             tone: Smoother::new(sample_rate, DEFAULT_TAU, TONE_BYPASS_HZ),
             mode: 0,
             lp: [OnePole::default(); 2],
+            dc: {
+                let mut d = [DcBlock::default(); 2];
+                d[0].set_sample_rate(sample_rate);
+                d[1].set_sample_rate(sample_rate);
+                d
+            },
             comp: 1.0,
             cached_pre: -1.0,
         }
@@ -79,6 +86,8 @@ impl Dist {
     pub fn reset(&mut self) {
         self.lp[0].reset();
         self.lp[1].reset();
+        self.dc[0].reset();
+        self.dc[1].reset();
     }
 
     pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
@@ -130,8 +139,9 @@ impl Dist {
         let (comp, mode) = (self.comp, self.mode);
         for i in 0..n {
             let m = mix.next();
-            let mut wl = shape(l[i] * pre, mode) * comp;
-            let mut wr = shape(r[i] * pre, mode) * comp;
+            // DC-block the wet path: the fold and clip shapers can rectify.
+            let mut wl = self.dc[0].process(shape(l[i] * pre, mode) * comp);
+            let mut wr = self.dc[1].process(shape(r[i] * pre, mode) * comp);
             if tone_on {
                 wl = self.lp[0].process(wl);
                 wr = self.lp[1].process(wr);

@@ -32,7 +32,9 @@ use crate::rng::{hash_stream, Xorshift32};
 pub const NOISE_STREAM: u32 = 0x6e6f_6973;
 
 /// 1 / (RMS gain of the Kellett economy pink filter for uniform white input).
-const PINK_NORM: f32 = 0.108;
+/// Measured over 200 k samples: the raw filter has an RMS gain of ≈3.0 for
+/// uniform white in, so this lands pink at the same 1/√3 RMS as white.
+const PINK_NORM: f32 = 0.3336;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Noise {
@@ -66,7 +68,11 @@ impl Noise {
         self.pink = color >= 1;
     }
 
+    /// Next sample. Named `next` to match the other per-sample generators in
+    /// this crate; it is deliberately not an `Iterator` (that would cost an
+    /// `Option` in the innermost audio loop).
     #[inline(always)]
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> f32 {
         let white = self.rng.next_bipolar();
         if !self.pink {

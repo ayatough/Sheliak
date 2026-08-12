@@ -1,14 +1,19 @@
 //! Offline verification of the DSP core (SPEC §8 / REQUIREMENTS §9).
 //!
-//! 1. determinism — same patch + seed + sample rate ⇒ bit-identical output
+//! 1. determinism — same patch + seed + sample rate ⇒ bit-identical output,
+//!    for both the v0.1 voice path and the full v0.2 noise + 8-effect chain
 //! 2. aliasing    — saw at ~C7, non-harmonic spectrum ≥60 dB below fundamental
-//! 3. DC / level  — sustained supersaw has no DC offset and does not clip
+//! 3. DC / level  — sustained supersaw, and dist + reverb, stay DC-free/unclipped
 //! 4. click       — note on/off and a mid-note cutoff jump stay continuous
-//! 5. unit checks — detune curve symmetry, mipmap band limits
+//! 5. noise       — deterministic, colours differ, disabled is a true no-op
+//! 6. FX          — empty chain is a bit-exact bypass, mbcomp is transparent
+//!    below threshold, and delay/reverb tails decay without runaway
+//! 7. unit checks — detune curve symmetry, mipmap band limits
 
 use rustfft::num_complex::Complex32;
 use rustfft::FftPlanner;
 
+use sheliak_dsp::noise::Noise;
 use sheliak_dsp::oscillator::{detune_offsets, mip_level_for};
 use sheliak_dsp::params::*;
 use sheliak_dsp::tables::{mip_harmonics, mip_len, NUM_MIPS};
@@ -91,6 +96,90 @@ fn base_params() -> [f32; PARAM_COUNT] {
     p[P_LFO_RATE_HZ] = 1.0;
     p[P_LFO_PHASE] = 0.0;
     p
+}
+
+/// Writes one parameter of an effect's 8-float block.
+fn fxp(p: &mut [f32; PARAM_COUNT], ty: u32, off: usize, v: f32) {
+    p[FX_PARAMS_BASE + (ty as usize - 1) * FX_PARAMS_STRIDE + off] = v;
+}
+
+/// Fills every effect's parameter block with a musically sensible setting.
+/// Does *not* touch FX_ORDER — the caller decides which ones run.
+fn fill_all_fx_params(p: &mut [f32; PARAM_COUNT]) {
+    fxp(p, FX_DIST, DIST_DRIVE, 0.35);
+    fxp(p, FX_DIST, DIST_MIX, 0.6);
+    fxp(p, FX_DIST, DIST_MODE, 0.0);
+    fxp(p, FX_DIST, DIST_TONE_HZ, 9_000.0);
+
+    fxp(p, FX_EQ, EQ_LOW_DB, 3.0);
+    fxp(p, FX_EQ, EQ_MID_DB, -2.5);
+    fxp(p, FX_EQ, EQ_HIGH_DB, 4.0);
+    fxp(p, FX_EQ, EQ_MID_FREQ_HZ, 1_200.0);
+
+    fxp(p, FX_CHORUS, CHORUS_RATE_HZ, 0.8);
+    fxp(p, FX_CHORUS, CHORUS_DEPTH, 0.4);
+    fxp(p, FX_CHORUS, CHORUS_MIX, 0.35);
+
+    fxp(p, FX_PHASER, PHASER_RATE_HZ, 0.4);
+    fxp(p, FX_PHASER, PHASER_DEPTH, 0.7);
+    fxp(p, FX_PHASER, PHASER_FEEDBACK, 0.4);
+    fxp(p, FX_PHASER, PHASER_MIX, 0.4);
+    fxp(p, FX_PHASER, PHASER_STAGES, 6.0);
+    fxp(p, FX_PHASER, PHASER_CENTER_HZ, 800.0);
+
+    fxp(p, FX_FLANGER, FLANGER_RATE_HZ, 0.25);
+    fxp(p, FX_FLANGER, FLANGER_DEPTH, 0.6);
+    fxp(p, FX_FLANGER, FLANGER_FEEDBACK, 0.5);
+    fxp(p, FX_FLANGER, FLANGER_MIX, 0.35);
+
+    fxp(p, FX_DELAY, DELAY_TIME_S, 0.28);
+    fxp(p, FX_DELAY, DELAY_FEEDBACK, 0.45);
+    fxp(p, FX_DELAY, DELAY_MIX, 0.25);
+    fxp(p, FX_DELAY, DELAY_PINGPONG, 1.0);
+    fxp(p, FX_DELAY, DELAY_TONE_HZ, 4_000.0);
+
+    fxp(p, FX_REVERB, REVERB_SIZE, 0.6);
+    fxp(p, FX_REVERB, REVERB_DAMP, 0.5);
+    fxp(p, FX_REVERB, REVERB_MIX, 0.2);
+    fxp(p, FX_REVERB, REVERB_PREDELAY_S, 0.02);
+    fxp(p, FX_REVERB, REVERB_WIDTH, 1.0);
+
+    fxp(p, FX_MBCOMP, MBCOMP_THRESH_LOW_DB, -18.0);
+    fxp(p, FX_MBCOMP, MBCOMP_THRESH_MID_DB, -20.0);
+    fxp(p, FX_MBCOMP, MBCOMP_THRESH_HIGH_DB, -22.0);
+    fxp(p, FX_MBCOMP, MBCOMP_RATIO, 3.0);
+    fxp(p, FX_MBCOMP, MBCOMP_ATTACK_S, 0.01);
+    fxp(p, FX_MBCOMP, MBCOMP_RELEASE_S, 0.12);
+    fxp(p, FX_MBCOMP, MBCOMP_MAKEUP, 1.4);
+}
+
+/// Puts all eight effects in the chain, in type order.
+fn chain_all(p: &mut [f32; PARAM_COUNT]) {
+    for (i, ty) in [
+        FX_DIST, FX_EQ, FX_CHORUS, FX_PHASER, FX_FLANGER, FX_DELAY, FX_REVERB, FX_MBCOMP,
+    ]
+    .iter()
+    .enumerate()
+    {
+        p[FX_ORDER_BASE + i] = *ty as f32;
+    }
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+}
+
+fn assert_bit_identical(a: &[f32], b: &[f32], what: &str) {
+    assert_eq!(a.len(), b.len());
+    for i in 0..a.len() {
+        assert_eq!(
+            a[i].to_bits(),
+            b[i].to_bits(),
+            "{what}: sample {i} differs ({} vs {})",
+            a[i],
+            b[i]
+        );
+    }
 }
 
 fn peak(x: &[f32]) -> f32 {
@@ -444,4 +533,468 @@ fn tables_are_normalised_and_dc_free() {
             assert!(s.abs() < 1e-4, "table {id} frame {f} has DC {s}");
         }
     }
+}
+
+// ============================================================ v0.2: noise
+
+#[test]
+fn noise_is_deterministic() {
+    let mut p = base_params();
+    p[OSC_A_BASE + OSC_LEVEL] = 0.5;
+    p[NOISE_BASE + NOISE_ENABLED] = 1.0;
+    p[NOISE_BASE + NOISE_LEVEL] = 0.8;
+    p[NOISE_BASE + NOISE_COLOR] = 1.0; // pink
+    p[ENV_AMP_BASE + ENV_S] = 1.0;
+    p[P_FILTER_CUTOFF_HZ] = 6_000.0;
+
+    let events = vec![
+        (0usize, Ev::Patch(Box::new(p))),
+        (0, Ev::On(45.0, 0.9)),
+        (5_000, Ev::On(52.0, 0.7)),
+        (20_000, Ev::Off(45.0)),
+    ];
+    let total = SR as usize / 2;
+
+    let mut a = Engine::new(SR);
+    let (al, ar) = render(&mut a, &events, total);
+    let mut b = Engine::new(SR);
+    let (bl, br) = render(&mut b, &events, total);
+
+    assert!(peak(&al) > 0.01, "noise patch produced no signal");
+    assert_bit_identical(&al, &bl, "noise L");
+    assert_bit_identical(&ar, &br, "noise R");
+}
+
+#[test]
+fn noise_colours_differ_and_share_rms() {
+    // Straight from the generator: 1/√3 is the RMS of uniform white.
+    let mut white = Noise::default();
+    white.note_on(1234, 48.0, 0);
+    let w: Vec<f32> = (0..120_000).map(|_| white.next()).collect();
+    let mut pink = Noise::default();
+    pink.note_on(1234, 48.0, 1);
+    let k: Vec<f32> = (0..120_000).map(|_| pink.next()).collect();
+
+    let (rw, rk) = (rms(&w), rms(&k));
+    let db = 20.0 * (rk / rw).log10();
+    assert!(db.abs() < 1.0, "white {rw} vs pink {rk} differ by {db} dB");
+    assert!((rw - 1.0 / 3.0f32.sqrt()).abs() < 0.01, "white RMS {rw}");
+
+    // Pink must actually be filtered: neighbouring samples correlate.
+    let corr = |x: &[f32]| {
+        let mut acc = 0.0f64;
+        for i in 1..x.len() {
+            acc += (x[i] * x[i - 1]) as f64;
+        }
+        acc / (x.len() - 1) as f64 / (rms(x) * rms(x)) as f64
+    };
+    assert!(corr(&w).abs() < 0.02, "white should be uncorrelated");
+    assert!(corr(&k) > 0.5, "pink should be strongly correlated");
+
+    // And the two colours must not produce the same stream.
+    assert!(w.iter().zip(k.iter()).any(|(a, b)| a != b));
+}
+
+#[test]
+fn disabled_noise_is_a_true_no_op() {
+    // Same patch twice, except one has a loud noise layer that is *disabled*.
+    // Bit-identical output proves the disabled path adds nothing, consumes no
+    // shared randomness and leaves no DC behind.
+    let mut off = base_params();
+    off[ENV_AMP_BASE + ENV_S] = 1.0;
+    let mut loud_but_off = off;
+    loud_but_off[NOISE_BASE + NOISE_ENABLED] = 0.0;
+    loud_but_off[NOISE_BASE + NOISE_LEVEL] = 4.0;
+    loud_but_off[NOISE_BASE + NOISE_COLOR] = 1.0;
+
+    let events_a = vec![(0usize, Ev::Patch(Box::new(off))), (0, Ev::On(48.0, 1.0))];
+    let events_b = vec![
+        (0usize, Ev::Patch(Box::new(loud_but_off))),
+        (0, Ev::On(48.0, 1.0)),
+    ];
+    let n = SR as usize / 4;
+    let mut a = Engine::new(SR);
+    let (al, ar) = render(&mut a, &events_a, n);
+    let mut b = Engine::new(SR);
+    let (bl, br) = render(&mut b, &events_b, n);
+    assert_bit_identical(&al, &bl, "disabled noise L");
+    assert_bit_identical(&ar, &br, "disabled noise R");
+}
+
+// =============================================================== v0.2: FX
+
+#[test]
+fn determinism_with_full_fx_chain() {
+    let mut p = base_params();
+    p[OSC_A_BASE + OSC_UNISON] = 7.0;
+    p[OSC_A_BASE + OSC_DETUNE_CENTS] = 20.0;
+    p[OSC_A_BASE + OSC_SPREAD] = 0.9;
+    p[OSC_B_BASE + OSC_ENABLED] = 1.0;
+    p[OSC_B_BASE + OSC_TABLE_ID] = TABLE_FOLD as f32;
+    p[OSC_B_BASE + OSC_MORPH] = 0.6;
+    p[OSC_B_BASE + OSC_UNISON] = 3.0;
+    p[NOISE_BASE + NOISE_ENABLED] = 1.0;
+    p[NOISE_BASE + NOISE_LEVEL] = 0.3;
+    p[NOISE_BASE + NOISE_COLOR] = 1.0;
+    p[P_FILTER_CUTOFF_HZ] = 3_000.0;
+    p[P_FILTER_RES] = 0.4;
+    p[MOD_BASE + MOD_SRC] = 1.0;
+    p[MOD_BASE + MOD_DST] = DST_FILTER_CUTOFF as f32;
+    p[MOD_BASE + MOD_AMOUNT] = 2_400.0;
+    fill_all_fx_params(&mut p);
+    chain_all(&mut p);
+
+    // A second patch mid-render exercises hot reload through the chain too.
+    let mut p2 = p;
+    fxp(&mut p2, FX_DELAY, DELAY_TIME_S, 0.15);
+    fxp(&mut p2, FX_REVERB, REVERB_SIZE, 0.85);
+    fxp(&mut p2, FX_DIST, DIST_MODE, 1.0);
+
+    let sr = SR as usize;
+    let events = vec![
+        (0usize, Ev::Patch(Box::new(p))),
+        (0, Ev::On(43.0, 0.9)),
+        (211, Ev::On(50.0, 0.6)),
+        (sr / 3, Ev::Patch(Box::new(p2))),
+        (sr / 2, Ev::Off(43.0)),
+        (sr / 2 + 777, Ev::Off(50.0)),
+    ];
+
+    let mut a = Engine::new(SR);
+    let (al, ar) = render(&mut a, &events, sr);
+    let mut b = Engine::new(SR);
+    let (bl, br) = render(&mut b, &events, sr);
+
+    assert!(peak(&al) > 0.01, "full-chain render produced no signal");
+    assert!(al.iter().all(|v| v.is_finite()));
+    assert_bit_identical(&al, &bl, "full fx chain L");
+    assert_bit_identical(&ar, &br, "full fx chain R");
+}
+
+#[test]
+fn empty_fx_chain_is_a_bit_exact_bypass() {
+    // Identical patches; one carries a fully populated FX parameter area but
+    // an empty FX_ORDER. Nothing may reach the bus.
+    let mut plain = base_params();
+    plain[OSC_A_BASE + OSC_UNISON] = 5.0;
+    plain[OSC_A_BASE + OSC_DETUNE_CENTS] = 15.0;
+    plain[NOISE_BASE + NOISE_ENABLED] = 1.0;
+    plain[NOISE_BASE + NOISE_LEVEL] = 0.2;
+
+    let mut with_params = plain;
+    fill_all_fx_params(&mut with_params);
+    // FX_ORDER left at all-zero.
+
+    let events_a = vec![(0usize, Ev::Patch(Box::new(plain))), (0, Ev::On(48.0, 1.0))];
+    let events_b = vec![
+        (0usize, Ev::Patch(Box::new(with_params))),
+        (0, Ev::On(48.0, 1.0)),
+    ];
+    let n = SR as usize / 2;
+    let mut a = Engine::new(SR);
+    let (al, ar) = render(&mut a, &events_a, n);
+    let mut b = Engine::new(SR);
+    let (bl, br) = render(&mut b, &events_b, n);
+
+    assert!(peak(&al) > 0.01);
+    assert_bit_identical(&al, &bl, "empty chain bypass L");
+    assert_bit_identical(&ar, &br, "empty chain bypass R");
+}
+
+#[test]
+fn mbcomp_below_threshold_is_transparent() {
+    // Thresholds parked at +12 dBFS: nothing can trigger, makeup is unity, so
+    // the crossover must reconstruct the input. The matched complementary
+    // one-pole split reconstructs sample-for-sample (see fx/mbcomp.rs), so the
+    // tolerance here is far tighter than the 1e-2 the contract asks for.
+    let mut plain = base_params();
+    plain[ENV_AMP_BASE + ENV_S] = 1.0;
+    plain[OSC_A_BASE + OSC_UNISON] = 5.0;
+    plain[OSC_A_BASE + OSC_DETUNE_CENTS] = 18.0;
+
+    let mut comp = plain;
+    comp[FX_ORDER_BASE] = FX_MBCOMP as f32;
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_THRESH_LOW_DB, 12.0);
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_THRESH_MID_DB, 12.0);
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_THRESH_HIGH_DB, 12.0);
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_RATIO, 4.0);
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_ATTACK_S, 0.01);
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_RELEASE_S, 0.12);
+    fxp(&mut comp, FX_MBCOMP, MBCOMP_MAKEUP, 1.0);
+
+    let n = SR as usize / 2;
+    let mut a = Engine::new(SR);
+    let (al, _ar) = render(
+        &mut a,
+        &[(0usize, Ev::Patch(Box::new(plain))), (0, Ev::On(48.0, 1.0))],
+        n,
+    );
+    let mut b = Engine::new(SR);
+    let (bl, _br) = render(
+        &mut b,
+        &[(0usize, Ev::Patch(Box::new(comp))), (0, Ev::On(48.0, 1.0))],
+        n,
+    );
+
+    let reference = peak(&al);
+    assert!(reference > 0.05);
+    let err = al
+        .iter()
+        .zip(bl.iter())
+        .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
+    assert!(
+        err / reference < 1.0e-2,
+        "mbcomp is not transparent below threshold: rel err {}",
+        err / reference
+    );
+}
+
+#[test]
+fn delay_and_reverb_tails_decay_without_runaway() {
+    let mut p = base_params();
+    p[P_MASTER_GAIN] = 0.5;
+    p[FX_ORDER_BASE] = FX_DELAY as f32;
+    p[FX_ORDER_BASE + 1] = FX_REVERB as f32;
+    fxp(&mut p, FX_DELAY, DELAY_TIME_S, 0.2);
+    fxp(&mut p, FX_DELAY, DELAY_FEEDBACK, 0.9); // top of the allowed range
+    fxp(&mut p, FX_DELAY, DELAY_MIX, 0.5);
+    fxp(&mut p, FX_DELAY, DELAY_PINGPONG, 1.0);
+    fxp(&mut p, FX_DELAY, DELAY_TONE_HZ, 4_000.0);
+    fxp(&mut p, FX_REVERB, REVERB_SIZE, 0.7);
+    fxp(&mut p, FX_REVERB, REVERB_DAMP, 0.4);
+    fxp(&mut p, FX_REVERB, REVERB_MIX, 0.4);
+    fxp(&mut p, FX_REVERB, REVERB_WIDTH, 1.0);
+
+    let mut e = Engine::new(SR);
+    e.apply_patch(&p);
+    e.note_on(48.0, 1.0);
+    let half = SR as usize / 2;
+    let (mut l, mut r) = (vec![0.0f32; half], vec![0.0f32; half]);
+    e.render(&mut l, &mut r);
+    let note_peak = peak(&l);
+    assert!(note_peak > 0.05);
+    e.note_off(48.0);
+
+    // 0.5 s after note-off the amp envelope (120 ms release) is long gone,
+    // so anything left is the FX tail.
+    let (mut l, mut r) = (vec![0.0f32; half], vec![0.0f32; half]);
+    e.render(&mut l, &mut r);
+    assert_eq!(e.active_voices(), 0, "voice should have been released");
+    let tail = peak(&l[half / 2..]);
+    assert!(
+        tail > note_peak * 1.0e-3,
+        "no audible tail after release: {tail}"
+    );
+
+    // ...and it must run down instead of self-oscillating.
+    let mut prev = tail;
+    let mut last = 0.0f32;
+    for sec in 0..14 {
+        let (mut l, mut r) = (vec![0.0f32; SR as usize], vec![0.0f32; SR as usize]);
+        e.render(&mut l, &mut r);
+        assert!(l.iter().all(|v| v.is_finite()), "non-finite tail");
+        last = peak(&l);
+        assert!(
+            last <= prev * 1.05,
+            "tail grew at second {sec}: {prev} -> {last}"
+        );
+        prev = last;
+        if last < note_peak * 1.0e-3 {
+            break;
+        }
+    }
+    let db = 20.0 * (last / note_peak).log10();
+    assert!(db < -60.0, "tail never fell below -60 dB (reached {db:.1} dB)");
+}
+
+#[test]
+fn dist_and_reverb_stay_dc_free_and_unclipped() {
+    // SPEC §5 default-ish dist + reverb over a supersaw with a noise layer.
+    let mut p = base_params();
+    p[OSC_A_BASE + OSC_UNISON] = 7.0;
+    p[OSC_A_BASE + OSC_DETUNE_CENTS] = 22.0;
+    p[OSC_A_BASE + OSC_SPREAD] = 0.8;
+    p[ENV_AMP_BASE + ENV_S] = 1.0;
+    p[NOISE_BASE + NOISE_ENABLED] = 1.0;
+    p[NOISE_BASE + NOISE_LEVEL] = 0.25;
+    p[FX_ORDER_BASE] = FX_DIST as f32;
+    p[FX_ORDER_BASE + 1] = FX_REVERB as f32;
+    fxp(&mut p, FX_DIST, DIST_DRIVE, 0.3);
+    fxp(&mut p, FX_DIST, DIST_MIX, 1.0);
+    fxp(&mut p, FX_DIST, DIST_MODE, 0.0);
+    fxp(&mut p, FX_DIST, DIST_TONE_HZ, 20_000.0);
+    fxp(&mut p, FX_REVERB, REVERB_SIZE, 0.6);
+    fxp(&mut p, FX_REVERB, REVERB_DAMP, 0.5);
+    fxp(&mut p, FX_REVERB, REVERB_MIX, 0.2);
+    fxp(&mut p, FX_REVERB, REVERB_PREDELAY_S, 0.02);
+    fxp(&mut p, FX_REVERB, REVERB_WIDTH, 1.0);
+
+    let total = SR as usize;
+    let mut e = Engine::new(SR);
+    let (l, r) = render(
+        &mut e,
+        &[(0usize, Ev::Patch(Box::new(p))), (0, Ev::On(48.0, 1.0))],
+        total,
+    );
+
+    let tail = SR as usize / 10;
+    let dl = mean(&l[tail..]).abs();
+    let dr = mean(&r[tail..]).abs();
+    assert!(dl < 1.0e-3 && dr < 1.0e-3, "DC offset L={dl} R={dr}");
+    let (pl, pr) = (peak(&l), peak(&r));
+    assert!(pl > 0.05 && pr > 0.05, "silent ({pl}, {pr})");
+    assert!(pl <= 1.0 && pr <= 1.0, "clipping: L={pl} R={pr}");
+}
+
+#[test]
+fn every_effect_alone_is_stable_and_finite() {
+    for ty in [
+        FX_DIST, FX_EQ, FX_CHORUS, FX_PHASER, FX_FLANGER, FX_DELAY, FX_REVERB, FX_MBCOMP,
+    ] {
+        let mut p = base_params();
+        p[ENV_AMP_BASE + ENV_S] = 1.0;
+        fill_all_fx_params(&mut p);
+        // Push every feedback path to its maximum for this stability check.
+        fxp(&mut p, FX_DELAY, DELAY_FEEDBACK, 1.0);
+        fxp(&mut p, FX_FLANGER, FLANGER_FEEDBACK, 1.0);
+        fxp(&mut p, FX_PHASER, PHASER_FEEDBACK, 1.0);
+        fxp(&mut p, FX_REVERB, REVERB_SIZE, 1.0);
+        fxp(&mut p, FX_DIST, DIST_DRIVE, 1.0);
+        p[FX_ORDER_BASE] = ty as f32;
+
+        let mut e = Engine::new(SR);
+        let (l, r) = render(
+            &mut e,
+            &[
+                (0usize, Ev::Patch(Box::new(p))),
+                (0, Ev::On(48.0, 1.0)),
+                (SR as usize / 4, Ev::Off(48.0)),
+            ],
+            SR as usize,
+        );
+        assert!(l.iter().all(|v| v.is_finite()), "fx {ty} produced non-finite L");
+        assert!(r.iter().all(|v| v.is_finite()), "fx {ty} produced non-finite R");
+        assert!(peak(&l) < 4.0, "fx {ty} runaway: peak {}", peak(&l));
+    }
+}
+
+#[test]
+fn fx_order_is_respected_and_deduplicated() {
+    // dist → delay and delay → dist are different signal chains.
+    let mut a = base_params();
+    a[ENV_AMP_BASE + ENV_S] = 1.0;
+    fill_all_fx_params(&mut a);
+    fxp(&mut a, FX_DIST, DIST_DRIVE, 0.9);
+    fxp(&mut a, FX_DIST, DIST_MIX, 1.0);
+    fxp(&mut a, FX_DELAY, DELAY_MIX, 0.5);
+    fxp(&mut a, FX_DELAY, DELAY_FEEDBACK, 0.6);
+    let mut b = a;
+    a[FX_ORDER_BASE] = FX_DIST as f32;
+    a[FX_ORDER_BASE + 1] = FX_DELAY as f32;
+    b[FX_ORDER_BASE] = FX_DELAY as f32;
+    b[FX_ORDER_BASE + 1] = FX_DIST as f32;
+    // A duplicate type must be ignored rather than processed twice.
+    let mut c = a;
+    c[FX_ORDER_BASE + 2] = FX_DIST as f32;
+    c[FX_ORDER_BASE + 3] = FX_DELAY as f32;
+
+    let n = SR as usize / 2;
+    let run = |p: [f32; PARAM_COUNT]| {
+        let mut e = Engine::new(SR);
+        render(
+            &mut e,
+            &[(0usize, Ev::Patch(Box::new(p))), (0, Ev::On(48.0, 1.0))],
+            n,
+        )
+        .0
+    };
+    let (ra, rb, rc) = (run(a), run(b), run(c));
+    assert!(
+        ra.iter().zip(rb.iter()).any(|(x, y)| (x - y).abs() > 1.0e-4),
+        "chain order had no effect"
+    );
+    assert_bit_identical(&ra, &rc, "duplicate fx types must be ignored");
+}
+
+#[test]
+fn fx_hot_reload_is_click_free() {
+    // A sine carrier makes any discontinuity obvious (see the note on the
+    // saw flyback above). Every continuous FX parameter is yanked mid-note.
+    let mut p = base_params();
+    p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SINE as f32;
+    p[ENV_AMP_BASE + ENV_S] = 1.0;
+    p[P_MASTER_GAIN] = 1.0;
+    fill_all_fx_params(&mut p);
+    chain_all(&mut p);
+
+    let mut jump = p;
+    fxp(&mut jump, FX_DIST, DIST_DRIVE, 0.95);
+    fxp(&mut jump, FX_DIST, DIST_MIX, 1.0);
+    fxp(&mut jump, FX_EQ, EQ_LOW_DB, -12.0);
+    fxp(&mut jump, FX_EQ, EQ_HIGH_DB, 12.0);
+    fxp(&mut jump, FX_CHORUS, CHORUS_DEPTH, 1.0);
+    fxp(&mut jump, FX_CHORUS, CHORUS_MIX, 1.0);
+    fxp(&mut jump, FX_PHASER, PHASER_FEEDBACK, 0.9);
+    fxp(&mut jump, FX_FLANGER, FLANGER_MIX, 1.0);
+    fxp(&mut jump, FX_DELAY, DELAY_TIME_S, 0.05);
+    fxp(&mut jump, FX_DELAY, DELAY_MIX, 0.8);
+    fxp(&mut jump, FX_REVERB, REVERB_SIZE, 1.0);
+    fxp(&mut jump, FX_REVERB, REVERB_MIX, 0.9);
+    fxp(&mut jump, FX_MBCOMP, MBCOMP_MAKEUP, 2.0);
+
+    let sr = SR as usize;
+    let mut e = Engine::new(SR);
+    let (l, r) = render(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(Box::new(p))),
+            (0, Ev::On(48.0, 1.0)),
+            (sr / 3, Ev::Patch(Box::new(jump))),
+            (2 * sr / 3, Ev::Patch(Box::new(p))),
+        ],
+        sr,
+    );
+    let (dl, at) = max_delta(&l);
+    let (dr, _) = max_delta(&r);
+    assert!(peak(&l) > 0.02, "silent render");
+    assert!(
+        dl < 0.25 && dr < 0.25,
+        "fx hot-reload discontinuity {dl} at sample {at} (R {dr})"
+    );
+}
+
+#[test]
+fn delay_reaches_its_two_second_maximum() {
+    // Verifies the delay line really is allocated for the full 2 s the
+    // contract allows: a short blip must reappear ~2 s later, once.
+    let mut p = base_params();
+    p[P_MASTER_GAIN] = 1.0;
+    p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SINE as f32;
+    p[ENV_AMP_BASE + ENV_R] = 0.01;
+    p[FX_ORDER_BASE] = FX_DELAY as f32;
+    fxp(&mut p, FX_DELAY, DELAY_TIME_S, 2.0);
+    fxp(&mut p, FX_DELAY, DELAY_FEEDBACK, 0.0);
+    fxp(&mut p, FX_DELAY, DELAY_MIX, 1.0);
+    fxp(&mut p, FX_DELAY, DELAY_TONE_HZ, 18_000.0);
+
+    let sr = SR as usize;
+    let mut e = Engine::new(SR);
+    let (l, _r) = render(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(Box::new(p))),
+            (0, Ev::On(60.0, 1.0)),
+            (sr / 10, Ev::Off(60.0)),
+        ],
+        3 * sr,
+    );
+
+    // Fully wet: nothing until the repeat arrives.
+    assert!(peak(&l[..sr]) < 1.0e-4, "wet-only delay leaked dry signal");
+    let echo = peak(&l[2 * sr - sr / 20..2 * sr + sr / 5]);
+    assert!(echo > 0.02, "no echo at 2 s: {echo}");
+    assert!(
+        peak(&l[2 * sr + sr / 2..]) < echo * 0.05,
+        "echo repeated with feedback at 0"
+    );
 }

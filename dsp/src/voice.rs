@@ -12,6 +12,7 @@ use crate::engine::{BlockCtx, ModSlot};
 use crate::envelope::Env;
 use crate::filter::{prewarp, Coeffs, StereoFilter};
 use crate::lfo::Lfo;
+use crate::noise::Noise;
 use crate::oscillator::Osc;
 use crate::params::{
     DST_AMP, DST_FILTER_CUTOFF, DST_OSC1_MORPH, DST_OSC2_MORPH, DST_PITCH, MAX_BLOCK,
@@ -58,6 +59,9 @@ pub struct NoteStart {
     pub glide_samples: f32,
     pub lfo_phase: f32,
     pub osc: [OscNoteCfg; 2],
+    /// Noise layer, latched at note-on like the oscillator table id.
+    pub noise_enabled: bool,
+    pub noise_color: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -77,6 +81,8 @@ pub struct Voice {
     pub seed: u32,
 
     osc: [Osc; 2],
+    noise: Noise,
+    noise_on: bool,
     env_amp: Env,
     env_flt: Env,
     lfo: Lfo,
@@ -109,6 +115,8 @@ impl Default for Voice {
             released: false,
             seed: 0,
             osc: [Osc::default(), Osc::default()],
+            noise: Noise::default(),
+            noise_on: false,
             env_amp: Env::default(),
             env_flt: Env::default(),
             lfo: Lfo::default(),
@@ -172,6 +180,11 @@ impl Voice {
                 c.table_id,
                 c.phase_random,
             );
+        }
+
+        self.noise_on = ns.noise_enabled;
+        if self.noise_on {
+            self.noise.note_on(ns.seed, ns.note, ns.noise_color);
         }
 
         self.env_amp.kill();
@@ -295,6 +308,18 @@ impl Voice {
                 morph,
             );
             self.osc[i].render(table, n, scratch_l, scratch_r, ob.level);
+        }
+
+        // Noise layer, summed with the oscillators ahead of the filter. It is
+        // a centred mono source, so it takes the same -3 dB equal-power gain
+        // the oscillators' centre pan position gets.
+        if self.noise_on {
+            let mut lv = ctx.noise_level;
+            for i in 0..n {
+                let s = self.noise.next() * lv.next() * std::f32::consts::FRAC_1_SQRT_2;
+                scratch_l[i] += s;
+                scratch_r[i] += s;
+            }
         }
 
         // ---- filter coefficients (ramped across the block) ---------------

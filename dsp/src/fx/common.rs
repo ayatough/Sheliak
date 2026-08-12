@@ -114,6 +114,36 @@ impl OnePole {
     }
 }
 
+/// DC blocker (one-pole/one-zero highpass at ~20 Hz).
+///
+/// Asymmetric or folding waveshapers can rectify a signal into a real DC
+/// offset; left alone that eats headroom and shows up in the DC test.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct DcBlock {
+    x1: f32,
+    y1: f32,
+    r: f32,
+}
+
+impl DcBlock {
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.r = 1.0 - std::f32::consts::TAU * 20.0 / sample_rate.max(1.0);
+    }
+
+    pub fn reset(&mut self) {
+        self.x1 = 0.0;
+        self.y1 = 0.0;
+    }
+
+    #[inline(always)]
+    pub fn process(&mut self, x: f32) -> f32 {
+        let y = x - self.x1 + self.r * self.y1;
+        self.x1 = x;
+        self.y1 = y;
+        y
+    }
+}
+
 /// RBJ biquad coefficients (normalised by `a0`).
 #[derive(Copy, Clone, Debug)]
 pub struct BiquadCoeffs {
