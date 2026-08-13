@@ -13,7 +13,7 @@
 //! init(sample_rate: f32)
 //! params_ptr(track: u32) -> *mut f32   // f32 × PARAM_COUNT, per track
 //! apply_patch(track: u32)
-//! note_on(track: u32, note: f32, velocity: f32)
+//! note_on(track: u32, note: f32, velocity: f32, glide_s: f32, legato: u32)
 //! note_off(track: u32, note: f32)
 //! all_notes_off()                      // every track
 //! process(nframes: u32)                // nframes ≤ 128, summed master bus
@@ -136,10 +136,19 @@ pub extern "C" fn apply_patch(track: u32) {
     }
 }
 
+/// Starts a note. `glide_s` is a per-note glide time in seconds; a negative
+/// value (the worklet sends `-1`) means "use the patch's `voice.glide`", which
+/// is the behaviour this export had when it took three arguments. `legato != 0`
+/// bends the newest sounding voice on the track to the new pitch instead of
+/// starting a note, leaving the amplitude envelope running.
+///
+/// A host that still calls this with three arguments gets `NaN` for `glide_s`
+/// and `0` for `legato` — non-finite is treated as the patch glide, so the old
+/// call is bit-identical to `note_on(track, note, velocity, -1.0, 0)`.
 #[no_mangle]
-pub extern "C" fn note_on(track: u32, note: f32, velocity: f32) {
+pub extern "C" fn note_on(track: u32, note: f32, velocity: f32, glide_s: f32, legato: u32) {
     if let Some(e) = shell().engine.as_mut() {
-        e.note_on(track as usize, note, velocity);
+        e.note_on_ex(track as usize, note, velocity, glide_s, legato != 0);
     }
 }
 

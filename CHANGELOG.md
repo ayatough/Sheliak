@@ -51,6 +51,16 @@ first tag will close this section.
   DC offset and clicks at note boundaries and patch changes.
 - **A published build.** GitHub Pages deploys the app on every push to `main`,
   after CI has passed.
+- **Note events carry a glide time and a legato flag.** `note_on` is now
+  `note_on(track, note, velocity, glide_s, legato)`: `glide_s` is that note's
+  glide in seconds, a negative value asks for the patch's own `voice.glide`, and
+  `legato` bends the sounding voice to the new pitch instead of starting a note,
+  so a slide is one note rather than two. This is what the planned `gliss`
+  gesture needs from the DSP core
+  ([workstreams §10](docs/workstreams.md#10-what-the-dsp-core-needs)); nothing in
+  the notation asks for it yet, so the worklet passes `-1` and `0` and the audio
+  is bit-identical, which is checked against the previous build. The parameter
+  block layout is unchanged.
 
 ### Changed
 - **The interface is in English.** Button labels, status lines, editor hints and

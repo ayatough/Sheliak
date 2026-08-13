@@ -41,7 +41,10 @@ exports:
   init(sample_rate: f32)            // 全状態リセット + テーブル/ミップマップ生成。ここでのみアロケーション可
   params_ptr(track: u32) -> u32     // トラックの f32 × PARAM_COUNT ブロック先頭 (wasmメモリ内オフセット)
   apply_patch(track: u32)           // トラックのパラメータブロックを読み込んで反映 (アロケーションなし)
-  note_on(track: u32, note: f32, velocity: f32) // note: MIDIノート番号 (小数可), velocity: 0..1。即時発音
+  note_on(track: u32, note: f32, velocity: f32, glide_s: f32, legato: u32)
+                                    // note: MIDIノート番号 (小数可), velocity: 0..1。即時発音
+                                    // glide_s < 0: パッチの voice.glide を使う (Workletは -1 を渡す)
+                                    // legato != 0: 発音中のボイスをそのままピッチ変更 (アンプEnv再トリガなし)
   note_off(track: u32, note: f32)
   all_notes_off()                   // 全トラック高速フェード付き全消音
   process(nframes: u32)             // nframes ≤ 128。out_l/out_r に書き込む

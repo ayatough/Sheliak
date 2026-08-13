@@ -202,6 +202,26 @@ impl Voice {
         }
     }
 
+    /// Bends a sounding voice to a new pitch without starting a note: the
+    /// oscillator phases, both envelopes, the filter state and the LFO all
+    /// carry on untouched. This is what a legato `note_on` does
+    /// (docs/workstreams.md §10) — a glissando is one note, not two.
+    ///
+    /// Velocity is deliberately *not* updated. It scales the per-sample gain
+    /// and feeds the mod matrix, so changing it mid-note would step both; the
+    /// slide keeps the expression of the note it started from.
+    pub fn retarget(&mut self, note: f32, glide_samples: f32, age: u64) {
+        self.note = note;
+        self.age = age;
+        self.target_cents = note_cents(note);
+        self.glide_inc = if glide_samples > 0.5 {
+            (self.target_cents - self.pitch_cents) / glide_samples
+        } else {
+            self.pitch_cents = self.target_cents;
+            0.0
+        };
+    }
+
     pub fn note_off(&mut self) {
         if self.state == State::Active {
             self.released = true;

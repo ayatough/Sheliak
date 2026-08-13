@@ -8,7 +8,8 @@ The longer arc is in [roadmap.md](roadmap.md).
 
 # Stream 1 — The note layer
 
-**Status:** specified, not implemented. Nothing here runs yet; see
+**Status:** Track B (the note-event ABI, below) has landed. The notation itself
+— Track A — is specified and not implemented: no `phrase` fence runs yet, so see
 [syntax.md](syntax.md) for the notation that does.
 
 ## Why
@@ -88,7 +89,7 @@ code exists.
 canonical text, and an operation that emits a second valid spelling of the same
 structure makes invariant 1 untestable.
 
-### Track B — note events
+### Track B — note events — **landed**
 
 **Owns** `dsp/src/lib.rs`, `dsp/src/voice.rs`, `dsp/src/engine.rs`,
 `web/public/worklet.js`, and the ABI section of `docs/architecture.md`.
@@ -115,6 +116,17 @@ Finished when:
 **Track B can land before Track A starts**, and should. Nothing in it waits on
 the notation, and having it in place means `gliss` is implementable the moment
 A4 exists.
+
+It has landed. Two notes for whoever wires `gliss` up on the TS side:
+
+- **Legato is monophonic per track.** It bends the newest sounding, unreleased
+  voice; the ABI has no room to say *which* note is sliding. A chord-wide
+  `gliss` (§4) therefore needs either one legato event per member with the
+  members separated in time, or an ABI that names the source note — pick that
+  fight when A4 is written, not before.
+- **A legato note-on keeps the sounding voice's velocity**, because velocity
+  scales the per-sample gain and feeds the mod matrix, so moving it mid-note
+  would step both. The slide inherits the expression of the note it left.
 
 ### Crossings
 

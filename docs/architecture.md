@@ -84,7 +84,10 @@ init(sample_rate: f32)          reset everything, build tables and mipmaps.
                                 the only place allocation is allowed
 params_ptr(track: u32) -> u32   offset of that track's f32 x PARAM_COUNT block
 apply_patch(track: u32)         read the block and apply it (no allocation)
-note_on(track: u32, note: f32, velocity: f32)     note may be fractional
+note_on(track: u32, note: f32, velocity: f32, glide_s: f32, legato: u32)
+                                note may be fractional. glide_s < 0 = use the
+                                patch's voice.glide; legato != 0 = bend the
+                                sounding voice instead of starting a note
 note_off(track: u32, note: f32)
 all_notes_off()                 fast fade to silence on every track
 process(nframes: u32)           nframes <= 128; writes out_l / out_r
@@ -94,6 +97,17 @@ out_r_ptr() -> u32              f32 x 128
 
 - A track index outside `0..MAX_TRACKS` is ignored, never a panic. Panics abort.
 - A track with no patch applied is silent and costs nothing.
+- **`note_on` carries the glide and legato a glissando needs**
+  ([workstreams §10](workstreams.md#10-what-the-dsp-core-needs)). `glide_s` is
+  that note's glide in seconds; anything negative — the worklet sends `-1` —
+  means "use the patch's `voice.glide`", which is what the export did when it
+  took three arguments. `legato != 0` bends the newest sounding, unreleased
+  voice on the track to the new pitch rather than starting a note: oscillator
+  phases, both envelopes and the filter state carry on, so a slide is one note
+  instead of two. It is monophonic per track — one voice is taken over — and it
+  keeps that voice's velocity, since velocity scales the gain and feeds the mod
+  matrix, and moving it mid-note would step both. With nothing to bend, a legato
+  note-on is an ordinary one. The parameter block layout does not change.
 - **Events are sample-accurate.** The worklet splits the 128-frame render quantum
   at event boundaries and calls `process(n1); note_on(...); process(n2); ...`.
   The DSP core has no event queue and needs none.
