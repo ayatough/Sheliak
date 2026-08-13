@@ -1,4 +1,4 @@
-//! Per-voice noise layer (SPEC §3 v0.2: Noise ブロック).
+//! Per-voice noise layer (docs/architecture.md: the Noise block).
 //!
 //! Mixed with the two oscillators **before** the filter, so the voice filter,
 //! its drive and the amp envelope all act on the noise as well.

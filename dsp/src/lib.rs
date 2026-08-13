@@ -7,7 +7,7 @@
 //! * the raw `extern "C"` exports below (`cdylib` → `wasm32-unknown-unknown`,
 //!   no wasm-bindgen), which are a thin shell around exactly that API.
 //!
-//! ABI (SPEC §2):
+//! ABI (docs/architecture.md):
 //!
 //! ```text
 //! init(sample_rate: f32)
@@ -31,7 +31,7 @@
 //! The engine lives in a single process-wide [`Shell`] guarded by an
 //! `UnsafeCell`. This is sound **because the host is single-threaded by
 //! construction**: the exports are only ever called from one AudioWorklet
-//! render thread (SPEC §6; REQUIREMENTS §5.1 explicitly rules out
+//! render thread (docs/architecture.md explicitly rules out
 //! `SharedArrayBuffer`/wasm threads for the MVP), and the calls are strictly
 //! sequential — the worklet splits a render quantum at event boundaries and
 //! calls `process(); note_on(); process(); ...` in order. No export re-enters

@@ -1,7 +1,7 @@
 //! Zavalishin TPT/ZDF state-variable filter with drive and 2× oversampling
-//! (REQUIREMENTS §4.2).
+//! (docs/ja/requirements.md §4.2).
 //!
-//! Modes (SPEC §3): `0 = lp12`, `1 = lp24`, `2 = hp12`, `3 = bp12`.
+//! Modes (docs/architecture.md): `0 = lp12`, `1 = lp24`, `2 = hp12`, `3 = bp12`.
 //!
 //! * **lp24** is two cascaded TPT lowpass stages at the same cutoff. The
 //!   resonance is applied to the *first* stage only and the second stage runs

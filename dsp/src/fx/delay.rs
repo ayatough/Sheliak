@@ -17,7 +17,7 @@ use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::{soft_limit, DelayLine, OnePole};
 
-/// Longest delay allocated at `init()` (SPEC §3: TIME_S ≤ 2.0).
+/// Longest delay allocated at `init()` (docs/architecture.md: TIME_S ≤ 2.0).
 pub const MAX_DELAY_S: f32 = 2.0;
 const MIN_DELAY_S: f32 = 0.001;
 const MAX_FEEDBACK: f32 = 0.95;

@@ -104,7 +104,11 @@ impl MbComp {
                 first,
             );
         }
-        super::set(&mut self.ratio, super::fclamp(p[MBCOMP_RATIO], 1.0, 40.0), first);
+        super::set(
+            &mut self.ratio,
+            super::fclamp(p[MBCOMP_RATIO], 1.0, 40.0),
+            first,
+        );
         super::set(
             &mut self.makeup,
             super::fclamp(p[MBCOMP_MAKEUP], 0.0, 16.0),

@@ -30,7 +30,7 @@ const FIXED_GAIN: f32 = 0.015;
 const WET_GAIN: f32 = 3.0;
 const MAX_SIZE_SCALE: f32 = 1.25;
 const MIN_SIZE_SCALE: f32 = 0.75;
-/// Predelay allocation (SPEC §3: PREDELAY_S ≤ 0.25).
+/// Predelay allocation (docs/architecture.md: PREDELAY_S ≤ 0.25).
 pub const MAX_PREDELAY_S: f32 = 0.25;
 
 struct Comb {
@@ -98,7 +98,8 @@ fn scaled(base: usize, sr_scale: f32, size_scale: f32) -> usize {
 impl Reverb {
     pub fn new(sample_rate: f32) -> Self {
         let sr_scale = sample_rate / 44_100.0;
-        let comb_cap = |i: usize| scaled(COMB_TUNING[i] + STEREO_SPREAD, sr_scale, MAX_SIZE_SCALE) + 8;
+        let comb_cap =
+            |i: usize| scaled(COMB_TUNING[i] + STEREO_SPREAD, sr_scale, MAX_SIZE_SCALE) + 8;
         let ap_cap = |i: usize| scaled(ALLPASS_TUNING[i] + STEREO_SPREAD, sr_scale, 1.0) + 8;
         let pre_cap = (MAX_PREDELAY_S * sample_rate) as usize + 8;
         let mut rv = Reverb {
@@ -154,10 +155,22 @@ impl Reverb {
     }
 
     pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
-        super::set(&mut self.size, super::fclamp(p[REVERB_SIZE], 0.0, 1.0), first);
-        super::set(&mut self.damp, super::fclamp(p[REVERB_DAMP], 0.0, 1.0), first);
+        super::set(
+            &mut self.size,
+            super::fclamp(p[REVERB_SIZE], 0.0, 1.0),
+            first,
+        );
+        super::set(
+            &mut self.damp,
+            super::fclamp(p[REVERB_DAMP], 0.0, 1.0),
+            first,
+        );
         super::set(&mut self.mix, super::fclamp(p[REVERB_MIX], 0.0, 1.0), first);
-        super::set(&mut self.width, super::fclamp(p[REVERB_WIDTH], 0.0, 1.0), first);
+        super::set(
+            &mut self.width,
+            super::fclamp(p[REVERB_WIDTH], 0.0, 1.0),
+            first,
+        );
         super::set(
             &mut self.predelay,
             (super::fclamp(p[REVERB_PREDELAY_S], 0.0, MAX_PREDELAY_S) * sample_rate).max(2.0),

@@ -1,4 +1,4 @@
-//! Exponential ADSR (REQUIREMENTS §4.2: エンベロープ ADSR ×2、指数カーブ).
+//! Exponential ADSR (docs/ja/requirements.md §4.2: two exponential ADSR envelopes).
 //!
 //! Analogue-style one-pole segments driving toward an *overshooting* target,
 //! which is what makes the attack snap instead of creeping asymptotically:

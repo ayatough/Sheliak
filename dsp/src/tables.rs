@@ -1,4 +1,4 @@
-//! Procedural wavetable generation + per-octave FFT mipmaps (SPEC §4).
+//! Procedural wavetable generation + per-octave FFT mipmaps (docs/architecture.md).
 //!
 //! # Registry
 //!
@@ -60,7 +60,7 @@ pub const GUARD: usize = 4;
 const MAX_HARM: usize = FRAME_LEN / 2;
 /// Oversampling factor used to analyse the wavefolder.
 const FOLD_FFT: usize = FRAME_LEN * 4;
-/// Frames in the morph tables (SPEC §4).
+/// Frames in the morph tables (docs/architecture.md).
 const MORPH_FRAMES: usize = 64;
 
 /// Description of one mipmap level inside [`Table::data`].
@@ -105,7 +105,7 @@ pub fn hermite(y0: f32, y1: f32, y2: f32, y3: f32, t: f32) -> f32 {
 
 impl Table {
     /// Interpolated sample of one mip level, blending two adjacent morph
-    /// frames linearly (SPEC §4: サンプル間 Hermite / フレーム間 線形).
+    /// frames linearly (docs/architecture.md: Hermite between samples, linear between frames).
     #[inline(always)]
     pub fn sample_mip(&self, m: &Mip, fr0: u32, fr1: u32, ffrac: f32, phase: u32) -> f32 {
         let idx = (phase >> (32 - m.bits)) as usize;
@@ -241,9 +241,7 @@ fn build_table(id: usize, planner: &mut FftPlanner<f32>) -> Table {
         data: Vec::new(),
     };
 
-    let total: usize = (0..NUM_MIPS)
-        .map(|k| (mip_len(k) + GUARD) * nframes)
-        .sum();
+    let total: usize = (0..NUM_MIPS).map(|k| (mip_len(k) + GUARD) * nframes).sum();
     table.data.reserve_exact(total);
 
     let mut time = vec![0.0f32; FRAME_LEN];
@@ -295,5 +293,7 @@ fn build_table(id: usize, planner: &mut FftPlanner<f32>) -> Table {
 /// Builds the whole registry. Allocation-heavy: only ever called from `init()`.
 pub fn build_all() -> Vec<Table> {
     let mut planner = FftPlanner::<f32>::new();
-    (0..TABLE_COUNT).map(|id| build_table(id, &mut planner)).collect()
+    (0..TABLE_COUNT)
+        .map(|id| build_table(id, &mut planner))
+        .collect()
 }

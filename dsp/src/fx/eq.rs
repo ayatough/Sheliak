@@ -1,5 +1,5 @@
 //! 3-band EQ (FX_EQ): RBJ low shelf @120 Hz, peaking @MID_FREQ (Q 0.7),
-//! high shelf @6 kHz — fixed corner frequencies per SPEC §3.
+//! high shelf @6 kHz — fixed corner frequencies per docs/architecture.md.
 //!
 //! Gains are smoothed and the biquad coefficients are rebuilt once per block
 //! (≤2.7 ms), which is inaudible for shelf/peak gain moves and far cheaper
@@ -45,8 +45,16 @@ impl Eq {
     }
 
     pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
-        super::set(&mut self.low_db, super::fclamp(p[EQ_LOW_DB], -24.0, 24.0), first);
-        super::set(&mut self.mid_db, super::fclamp(p[EQ_MID_DB], -24.0, 24.0), first);
+        super::set(
+            &mut self.low_db,
+            super::fclamp(p[EQ_LOW_DB], -24.0, 24.0),
+            first,
+        );
+        super::set(
+            &mut self.mid_db,
+            super::fclamp(p[EQ_MID_DB], -24.0, 24.0),
+            first,
+        );
         super::set(
             &mut self.high_db,
             super::fclamp(p[EQ_HIGH_DB], -24.0, 24.0),

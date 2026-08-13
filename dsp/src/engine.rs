@@ -17,7 +17,7 @@
 //!   key track, master gain) go through one-pole smoothers; cutoff and tuning
 //!   are smoothed in the log domain. They apply to sounding voices at once.
 //! * **Discrete** (polyphony, filter mode, LFO wave, mod routing, seed, glide)
-//!   switch immediately — accepted MVP behaviour per SPEC §2. Switching the
+//!   switch immediately — accepted MVP behaviour per docs/architecture.md. Switching the
 //!   filter *mode* under a sounding note can step, since the SVF state means
 //!   something different in each mode; everything else is click-free.
 //! * **Latched at note-on** (table id, unison count, phase randomisation):
@@ -277,12 +277,17 @@ impl Track {
             self.osc_d[i].enabled = p[b + OSC_ENABLED] >= 0.5;
             self.osc_d[i].table_id =
                 fclamp(p[b + OSC_TABLE_ID], 0.0, (TABLE_COUNT - 1) as f32).round() as usize;
-            self.osc_d[i].unison = fclamp(p[b + OSC_UNISON], 1.0, MAX_UNISON as f32).round() as usize;
+            self.osc_d[i].unison =
+                fclamp(p[b + OSC_UNISON], 1.0, MAX_UNISON as f32).round() as usize;
             self.osc_d[i].phase_random = p[b + OSC_PHASE_RANDOM] >= 0.5;
             let s = &mut self.osc_s[i];
             set(&mut s.level, fclamp(p[b + OSC_LEVEL], 0.0, 8.0), first);
             set(&mut s.morph, fclamp(p[b + OSC_MORPH], 0.0, 1.0), first);
-            set(&mut s.detune, fclamp(p[b + OSC_DETUNE_CENTS], -200.0, 200.0), first);
+            set(
+                &mut s.detune,
+                fclamp(p[b + OSC_DETUNE_CENTS], -200.0, 200.0),
+                first,
+            );
             set(&mut s.spread, fclamp(p[b + OSC_SPREAD], 0.0, 1.0), first);
             set(
                 &mut s.tune,
@@ -297,7 +302,11 @@ impl Track {
         set(&mut self.cutoff_log2, cutoff.log2(), first);
         set(&mut self.res, fclamp(p[P_FILTER_RES], 0.0, 1.0), first);
         set(&mut self.drive, fclamp(p[P_FILTER_DRIVE], 0.0, 1.0), first);
-        set(&mut self.keytrack, fclamp(p[P_FILTER_KEYTRACK], 0.0, 1.0), first);
+        set(
+            &mut self.keytrack,
+            fclamp(p[P_FILTER_KEYTRACK], 0.0, 1.0),
+            first,
+        );
 
         self.env_amp = EnvConfig::new(
             p[ENV_AMP_BASE + ENV_A].max(0.0),
@@ -438,7 +447,7 @@ impl Track {
         }
     }
 
-    /// Fast-fade every sounding voice (SPEC §2: 高速フェード付き全消音).
+    /// Fast-fade every sounding voice (docs/architecture.md: `all_notes_off`).
     pub fn all_notes_off(&mut self) {
         self.wake();
         let sr = self.sample_rate;
@@ -597,7 +606,7 @@ fn set(s: &mut Smoother, v: f32, first: bool) {
     }
 }
 
-/// The seed arrives as an integer stored in an f32 (SPEC §3).
+/// The seed arrives as an integer stored in an f32 (docs/architecture.md).
 #[inline]
 fn f32_to_seed(v: f32) -> u32 {
     if !v.is_finite() {

@@ -1,5 +1,5 @@
 //! One polyphonic voice: 2 wavetable oscillators (≤7 unison each, stereo) →
-//! mix → TPT SVF → amp envelope (REQUIREMENTS §4.2).
+//! mix → TPT SVF → amp envelope (docs/ja/requirements.md §4.2).
 //!
 //! Modulation is evaluated once per block (≤128 samples ≈ 2.7 ms). Everything
 //! that would zipper at that rate is ramped per sample instead: the filter
@@ -20,11 +20,11 @@ use crate::params::{
 use crate::smoother::Ramp;
 
 /// Fixed headroom applied to every voice before the master gain, so that a
-/// stack of unison voices does not clip on its own (SPEC §5 keeps the default
+/// stack of unison voices does not clip on its own (docs/syntax.md keeps the default
 /// master gain at 0.5 for the same reason).
 pub const VOICE_HEADROOM: f32 = 0.5;
 
-/// Steal / all-notes-off fade length (REQUIREMENTS §4.3: 1–2 ms).
+/// Steal / all-notes-off fade length (docs/ja/requirements.md §4.3: 1-2 ms).
 pub const STEAL_FADE_S: f32 = 0.0015;
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

@@ -1,7 +1,7 @@
 //! The three LFO-driven effects: chorus, flanger and phaser.
 //!
 //! They share the same skeleton — a free-running [`FxLfo`] (never reset after
-//! `init()`, SPEC §3) read per sample, with the left and right channels taking
+//! `init()`, docs/architecture.md) read per sample, with the left and right channels taking
 //! the LFO at different phase offsets to open up the stereo image.
 
 use crate::params::*;
@@ -42,8 +42,16 @@ impl Chorus {
     }
 
     pub fn apply_patch(&mut self, p: &[f32], _sample_rate: f32, first: bool) {
-        super::set(&mut self.rate, super::fclamp(p[CHORUS_RATE_HZ], 0.0, 20.0), first);
-        super::set(&mut self.depth, super::fclamp(p[CHORUS_DEPTH], 0.0, 1.0), first);
+        super::set(
+            &mut self.rate,
+            super::fclamp(p[CHORUS_RATE_HZ], 0.0, 20.0),
+            first,
+        );
+        super::set(
+            &mut self.depth,
+            super::fclamp(p[CHORUS_DEPTH], 0.0, 1.0),
+            first,
+        );
         super::set(&mut self.mix, super::fclamp(p[CHORUS_MIX], 0.0, 1.0), first);
     }
 
@@ -111,14 +119,26 @@ impl Flanger {
     }
 
     pub fn apply_patch(&mut self, p: &[f32], _sample_rate: f32, first: bool) {
-        super::set(&mut self.rate, super::fclamp(p[FLANGER_RATE_HZ], 0.0, 20.0), first);
-        super::set(&mut self.depth, super::fclamp(p[FLANGER_DEPTH], 0.0, 1.0), first);
+        super::set(
+            &mut self.rate,
+            super::fclamp(p[FLANGER_RATE_HZ], 0.0, 20.0),
+            first,
+        );
+        super::set(
+            &mut self.depth,
+            super::fclamp(p[FLANGER_DEPTH], 0.0, 1.0),
+            first,
+        );
         super::set(
             &mut self.feedback,
             super::fclamp(p[FLANGER_FEEDBACK], -1.0, 1.0),
             first,
         );
-        super::set(&mut self.mix, super::fclamp(p[FLANGER_MIX], 0.0, 1.0), first);
+        super::set(
+            &mut self.mix,
+            super::fclamp(p[FLANGER_MIX], 0.0, 1.0),
+            first,
+        );
     }
 
     pub fn should_process(&self) -> bool {
@@ -198,8 +218,16 @@ impl Phaser {
         // 2..8, even.
         let raw = super::fclamp(p[PHASER_STAGES], 2.0, MAX_STAGES as f32).round() as usize;
         self.stages = (raw & !1).clamp(2, MAX_STAGES);
-        super::set(&mut self.rate, super::fclamp(p[PHASER_RATE_HZ], 0.0, 20.0), first);
-        super::set(&mut self.depth, super::fclamp(p[PHASER_DEPTH], 0.0, 1.0), first);
+        super::set(
+            &mut self.rate,
+            super::fclamp(p[PHASER_RATE_HZ], 0.0, 20.0),
+            first,
+        );
+        super::set(
+            &mut self.depth,
+            super::fclamp(p[PHASER_DEPTH], 0.0, 1.0),
+            first,
+        );
         super::set(
             &mut self.feedback,
             super::fclamp(p[PHASER_FEEDBACK], -1.0, 1.0),
@@ -234,8 +262,12 @@ impl Phaser {
             let ph = self.lfo.step();
             let m = mix.next();
             // Sweep in the log domain so the notch motion is musical.
-            let fl = (log_center + swing * phase_sin(ph, 0.0)).exp2().clamp(20.0, max_hz);
-            let fr = (log_center + swing * phase_sin(ph, 0.25)).exp2().clamp(20.0, max_hz);
+            let fl = (log_center + swing * phase_sin(ph, 0.0))
+                .exp2()
+                .clamp(20.0, max_hz);
+            let fr = (log_center + swing * phase_sin(ph, 0.25))
+                .exp2()
+                .clamp(20.0, max_hz);
             let al = allpass_coef(fl, sample_rate);
             let ar = allpass_coef(fr, sample_rate);
 

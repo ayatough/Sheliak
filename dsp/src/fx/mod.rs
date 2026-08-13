@@ -1,4 +1,4 @@
-//! Master FX chain (SPEC §3 v0.2).
+//! Master FX chain (docs/architecture.md v0.2).
 //!
 //! Runs on the stereo master bus, after voice summing and the master gain.
 //! `FX_ORDER_BASE[0..8]` is a list of effect type ids giving the processing
@@ -134,14 +134,21 @@ impl Fx {
         self.any = any;
 
         let sr = self.sample_rate;
-        self.dist.apply_patch(Self::params_for(p, FX_DIST), sr, first);
+        self.dist
+            .apply_patch(Self::params_for(p, FX_DIST), sr, first);
         self.eq.apply_patch(Self::params_for(p, FX_EQ), sr, first);
-        self.chorus.apply_patch(Self::params_for(p, FX_CHORUS), sr, first);
-        self.phaser.apply_patch(Self::params_for(p, FX_PHASER), sr, first);
-        self.flanger.apply_patch(Self::params_for(p, FX_FLANGER), sr, first);
-        self.delay.apply_patch(Self::params_for(p, FX_DELAY), sr, first);
-        self.reverb.apply_patch(Self::params_for(p, FX_REVERB), sr, first);
-        self.mbcomp.apply_patch(Self::params_for(p, FX_MBCOMP), sr, first);
+        self.chorus
+            .apply_patch(Self::params_for(p, FX_CHORUS), sr, first);
+        self.phaser
+            .apply_patch(Self::params_for(p, FX_PHASER), sr, first);
+        self.flanger
+            .apply_patch(Self::params_for(p, FX_FLANGER), sr, first);
+        self.delay
+            .apply_patch(Self::params_for(p, FX_DELAY), sr, first);
+        self.reverb
+            .apply_patch(Self::params_for(p, FX_REVERB), sr, first);
+        self.mbcomp
+            .apply_patch(Self::params_for(p, FX_MBCOMP), sr, first);
 
         // Rising edge (absent/silent → active) clears stale buffers.
         for ty in 1..=FX_TYPE_COUNT as u32 {

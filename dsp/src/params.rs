@@ -1,5 +1,5 @@
 //! Parameter block layout — integration contract with web/src/shared/params.ts.
-//! Do not change values without updating the TS mirror and docs/SPEC.md.
+//! Do not change values without updating the TS mirror and docs/architecture.md.
 
 pub const PARAM_COUNT: usize = 192;
 

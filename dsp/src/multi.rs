@@ -1,4 +1,4 @@
-//! Multi-track engine (v0.3) — owns every track and the shared wavetables.
+//! Multi-track engine — owns every track and the shared wavetables.
 //!
 //! ```text
 //! MultiEngine
@@ -114,7 +114,7 @@ impl MultiEngine {
 
     // ------------------------------------------------------------ contract
 
-    /// Out-of-range track indices are ignored silently (SPEC §2).
+    /// Out-of-range track indices are ignored silently (docs/architecture.md).
     pub fn apply_patch(&mut self, track: usize, p: &[f32; PARAM_COUNT]) {
         if let Some(t) = self.tracks.get_mut(track) {
             t.apply_patch(p);
@@ -150,7 +150,11 @@ impl MultiEngine {
         out_r[..n].fill(0.0);
 
         for t in self.tracks.iter_mut() {
-            if !t.process(&self.tables, &mut self.scratch_l[..n], &mut self.scratch_r[..n]) {
+            if !t.process(
+                &self.tables,
+                &mut self.scratch_l[..n],
+                &mut self.scratch_r[..n],
+            ) {
                 continue;
             }
             for i in 0..n {

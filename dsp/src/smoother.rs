@@ -1,4 +1,4 @@
-//! One-pole parameter smoothing (SPEC §2: "全パラメータを平滑化 (one-pole, ~5ms)").
+//! One-pole parameter smoothing (docs/architecture.md: "every parameter is smoothed (one-pole, ~5 ms)").
 //!
 //! `apply_patch()` only ever moves *targets*; the audio thread walks the
 //! current value toward the target. Continuous linear-domain parameters
@@ -13,7 +13,7 @@
 //! *same* per-sample values, which keeps the result independent of voice count
 //! and therefore bit-deterministic.
 
-/// Default smoothing time constant in seconds (~5 ms per SPEC §2).
+/// Default smoothing time constant in seconds (~5 ms per docs/architecture.md).
 pub const DEFAULT_TAU: f32 = 0.005;
 
 /// A linear per-sample ramp across one block.

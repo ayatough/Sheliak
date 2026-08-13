@@ -281,7 +281,7 @@ pub fn allpass_coef(freq: f32, sample_rate: f32) -> f32 {
 
 /// Free-running LFO for the modulation effects.
 ///
-/// Never reset after `init()` (SPEC §3: FX の LFO は init 起点のフリーラン), so
+/// Never reset after `init()` (docs/architecture.md: effect LFOs free-run from `init()`), so
 /// the chorus/flanger/phaser keep a continuous sweep across notes and patch
 /// edits. Determinism holds because the phase advances by exactly one step per
 /// rendered sample.

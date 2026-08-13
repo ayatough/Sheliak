@@ -1,4 +1,4 @@
-//! Offline verification of the DSP core (SPEC §8 / REQUIREMENTS §9).
+//! Offline verification of the DSP core (docs/development.md).
 //!
 //! 1. determinism — same patch + seed + sample rate ⇒ bit-identical output,
 //!    for both the v0.1 voice path and the full v0.2 noise + 8-effect chain
@@ -13,11 +13,11 @@
 use rustfft::num_complex::Complex32;
 use rustfft::FftPlanner;
 
+use sheliak_dsp::multi::soft_clip_master;
 use sheliak_dsp::noise::Noise;
 use sheliak_dsp::oscillator::{detune_offsets, mip_level_for};
 use sheliak_dsp::params::*;
 use sheliak_dsp::tables::{mip_harmonics, mip_len, NUM_MIPS};
-use sheliak_dsp::multi::soft_clip_master;
 use sheliak_dsp::{MultiEngine, Track};
 
 const SR: f32 = 48_000.0;
@@ -32,7 +32,7 @@ enum Ev {
 }
 
 /// Renders `total` samples, dispatching events at sample-accurate offsets the
-/// same way `web/public/worklet.js` is specified to (SPEC §2/§6): split the
+/// same way `web/public/worklet.js` is specified to (docs/architecture.md): split the
 /// render quantum at the event boundary, never larger than MAX_BLOCK.
 /// Every event carries its track index (v0.3).
 fn render(engine: &mut MultiEngine, events: &[(usize, Ev)], total: usize) -> (Vec<f32>, Vec<f32>) {
@@ -283,7 +283,10 @@ fn aliasing_floor_below_minus_60db() {
 
     let total = SR as usize;
     let mut e = MultiEngine::new(SR);
-    let events = vec![(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, note, 1.0))];
+    let events = vec![
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, note, 1.0)),
+    ];
     let (l, _r) = render(&mut e, &events, total);
 
     // Analyse a window well inside the sustain.
@@ -294,7 +297,9 @@ fn aliasing_floor_below_minus_60db() {
             Complex32::new(l[start + i] * w, 0.0)
         })
         .collect();
-    FftPlanner::<f32>::new().plan_fft_forward(N).process(&mut buf);
+    FftPlanner::<f32>::new()
+        .plan_fft_forward(N)
+        .process(&mut buf);
 
     let mag: Vec<f32> = buf[..N / 2].iter().map(|c| c.norm()).collect();
     let fund = mag[715];
@@ -334,7 +339,10 @@ fn supersaw_has_no_dc_and_does_not_clip() {
 
     let total = SR as usize;
     let mut e = MultiEngine::new(SR);
-    let events = vec![(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 1.0))];
+    let events = vec![
+        (0usize, Ev::Patch(0, Box::new(p))),
+        (0, Ev::On(0, 48.0, 1.0)),
+    ];
     let (l, r) = render(&mut e, &events, total);
 
     // Skip the attack so the measurement is of the sustained tone.
@@ -470,7 +478,8 @@ fn detune_offsets_are_symmetric_and_nonlinear() {
         let o = detune_offsets(n);
         for i in 0..n {
             assert_eq!(
-                o[i], -o[n - 1 - i],
+                o[i],
+                -o[n - 1 - i],
                 "unison {n}: offset {i} is not the mirror of {}",
                 n - 1 - i
             );
@@ -493,8 +502,14 @@ fn detune_offsets_are_symmetric_and_nonlinear() {
     // together than a linear spread would put them.
     let o = detune_offsets(7);
     assert!(o[4] < 2.0 / 6.0, "curve should compress toward the centre");
-    assert!((o[4] - 0.2686).abs() < 0.05, "should track Szabo's measurement");
-    assert!((o[5] - 0.6156).abs() < 0.05, "should track Szabo's measurement");
+    assert!(
+        (o[4] - 0.2686).abs() < 0.05,
+        "should track Szabo's measurement"
+    );
+    assert!(
+        (o[5] - 0.6156).abs() < 0.05,
+        "should track Szabo's measurement"
+    );
 }
 
 #[test]
@@ -609,7 +624,10 @@ fn disabled_noise_is_a_true_no_op() {
     loud_but_off[NOISE_BASE + NOISE_LEVEL] = 4.0;
     loud_but_off[NOISE_BASE + NOISE_COLOR] = 1.0;
 
-    let events_a = vec![(0usize, Ev::Patch(0, Box::new(off))), (0, Ev::On(0, 48.0, 1.0))];
+    let events_a = vec![
+        (0usize, Ev::Patch(0, Box::new(off))),
+        (0, Ev::On(0, 48.0, 1.0)),
+    ];
     let events_b = vec![
         (0usize, Ev::Patch(0, Box::new(loud_but_off))),
         (0, Ev::On(0, 48.0, 1.0)),
@@ -687,7 +705,10 @@ fn empty_fx_chain_is_a_bit_exact_bypass() {
     fill_all_fx_params(&mut with_params);
     // FX_ORDER left at all-zero.
 
-    let events_a = vec![(0usize, Ev::Patch(0, Box::new(plain))), (0, Ev::On(0, 48.0, 1.0))];
+    let events_a = vec![
+        (0usize, Ev::Patch(0, Box::new(plain))),
+        (0, Ev::On(0, 48.0, 1.0)),
+    ];
     let events_b = vec![
         (0usize, Ev::Patch(0, Box::new(with_params))),
         (0, Ev::On(0, 48.0, 1.0)),
@@ -728,13 +749,19 @@ fn mbcomp_below_threshold_is_transparent() {
     let mut a = MultiEngine::new(SR);
     let (al, _ar) = render(
         &mut a,
-        &[(0usize, Ev::Patch(0, Box::new(plain))), (0, Ev::On(0, 48.0, 1.0))],
+        &[
+            (0usize, Ev::Patch(0, Box::new(plain))),
+            (0, Ev::On(0, 48.0, 1.0)),
+        ],
         n,
     );
     let mut b = MultiEngine::new(SR);
     let (bl, _br) = render(
         &mut b,
-        &[(0usize, Ev::Patch(0, Box::new(comp))), (0, Ev::On(0, 48.0, 1.0))],
+        &[
+            (0usize, Ev::Patch(0, Box::new(comp))),
+            (0, Ev::On(0, 48.0, 1.0)),
+        ],
         n,
     );
 
@@ -806,12 +833,15 @@ fn delay_and_reverb_tails_decay_without_runaway() {
         }
     }
     let db = 20.0 * (last / note_peak).log10();
-    assert!(db < -60.0, "tail never fell below -60 dB (reached {db:.1} dB)");
+    assert!(
+        db < -60.0,
+        "tail never fell below -60 dB (reached {db:.1} dB)"
+    );
 }
 
 #[test]
 fn dist_and_reverb_stay_dc_free_and_unclipped() {
-    // SPEC §5 default-ish dist + reverb over a supersaw with a noise layer.
+    // docs/syntax.md default-ish dist + reverb over a supersaw with a noise layer.
     let mut p = base_params();
     p[OSC_A_BASE + OSC_UNISON] = 7.0;
     p[OSC_A_BASE + OSC_DETUNE_CENTS] = 22.0;
@@ -835,7 +865,10 @@ fn dist_and_reverb_stay_dc_free_and_unclipped() {
     let mut e = MultiEngine::new(SR);
     let (l, r) = render(
         &mut e,
-        &[(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 1.0))],
+        &[
+            (0usize, Ev::Patch(0, Box::new(p))),
+            (0, Ev::On(0, 48.0, 1.0)),
+        ],
         total,
     );
 
@@ -874,8 +907,14 @@ fn every_effect_alone_is_stable_and_finite() {
             ],
             SR as usize,
         );
-        assert!(l.iter().all(|v| v.is_finite()), "fx {ty} produced non-finite L");
-        assert!(r.iter().all(|v| v.is_finite()), "fx {ty} produced non-finite R");
+        assert!(
+            l.iter().all(|v| v.is_finite()),
+            "fx {ty} produced non-finite L"
+        );
+        assert!(
+            r.iter().all(|v| v.is_finite()),
+            "fx {ty} produced non-finite R"
+        );
         assert!(peak(&l) < 4.0, "fx {ty} runaway: peak {}", peak(&l));
     }
 }
@@ -905,14 +944,19 @@ fn fx_order_is_respected_and_deduplicated() {
         let mut e = MultiEngine::new(SR);
         render(
             &mut e,
-            &[(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 1.0))],
+            &[
+                (0usize, Ev::Patch(0, Box::new(p))),
+                (0, Ev::On(0, 48.0, 1.0)),
+            ],
             n,
         )
         .0
     };
     let (ra, rb, rc) = (run(a), run(b), run(c));
     assert!(
-        ra.iter().zip(rb.iter()).any(|(x, y)| (x - y).abs() > 1.0e-4),
+        ra.iter()
+            .zip(rb.iter())
+            .any(|(x, y)| (x - y).abs() > 1.0e-4),
         "chain order had no effect"
     );
     assert_bit_identical(&ra, &rc, "duplicate fx types must be ignored");
@@ -1167,7 +1211,10 @@ fn master_guard_is_transparent_below_the_knee() {
     let d = 1.0e-4;
     let below = (soft_clip_master(0.95) - soft_clip_master(0.95 - d)) / d;
     let above = (soft_clip_master(0.95 + d) - soft_clip_master(0.95)) / d;
-    assert!((below - above).abs() < 1.0e-2, "kink at the knee: {below} vs {above}");
+    assert!(
+        (below - above).abs() < 1.0e-2,
+        "kink at the knee: {below} vs {above}"
+    );
 
     // Engine level: a moderate single track goes through the master bus
     // unchanged relative to rendering that same Track standalone.
@@ -1178,7 +1225,10 @@ fn master_guard_is_transparent_below_the_knee() {
     let mut multi = MultiEngine::new(SR);
     let (ml, mr) = render(
         &mut multi,
-        &[(0usize, Ev::Patch(0, Box::new(p))), (0, Ev::On(0, 48.0, 0.9))],
+        &[
+            (0usize, Ev::Patch(0, Box::new(p))),
+            (0, Ev::On(0, 48.0, 0.9)),
+        ],
         n,
     );
 
@@ -1218,7 +1268,12 @@ fn hot_multi_track_stack_cannot_clip() {
 
     assert!(l.iter().all(|v| v.is_finite()) && r.iter().all(|v| v.is_finite()));
     assert!(peak(&l) > 0.9, "stack should actually be hitting the guard");
-    assert!(peak(&l) <= 1.0 && peak(&r) <= 1.0, "clipped: {} {}", peak(&l), peak(&r));
+    assert!(
+        peak(&l) <= 1.0 && peak(&r) <= 1.0,
+        "clipped: {} {}",
+        peak(&l),
+        peak(&r)
+    );
     assert_eq!(e.live_tracks(), 6);
 }
 

@@ -1,6 +1,6 @@
 //! Deterministic, seeded pseudo-randomness.
 //!
-//! Requirement (REQUIREMENTS §7): every random value must come from the patch
+//! Requirement (docs/ja/requirements.md §7): every random value must come from the patch
 //! seed. **No system / global entropy is ever used** — there is not a single
 //! call to `std::time`, `rand`, or any OS facility in this crate.
 //!

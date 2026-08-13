@@ -1,4 +1,4 @@
-//! Single LFO (SPEC §3: wave 0=sine 1=tri 2=saw 3=square, RATE_HZ, PHASE).
+//! Single LFO (docs/architecture.md: wave 0=sine 1=tri 2=saw 3=square, RATE_HZ, PHASE).
 //!
 //! The LFO is **per voice and retriggered at note-on**, starting from the
 //! patch's `PHASE` offset: every note then hears the same modulation shape,
@@ -6,7 +6,7 @@
 //! determinism test). After the retrigger it free-runs at `RATE_HZ`.
 //!
 //! Tempo sync is handled on the TS side, which converts musical values to Hz
-//! before writing `RATE_HZ` (SPEC §3).
+//! before writing `RATE_HZ` (docs/architecture.md).
 //!
 //! Output is bipolar, `-1..1`. It is read once per block (control rate) —
 //! `advance(n)` moves the phase by exactly `n` samples, so splitting a render

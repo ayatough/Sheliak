@@ -1,4 +1,4 @@
-//! Wavetable oscillator with up to 7 unison voices (SPEC §4, REQUIREMENTS §4.1).
+//! Wavetable oscillator with up to 7 unison voices (docs/architecture.md, docs/ja/requirements.md §4.1).
 //!
 //! * `u32` fixed-point phase accumulator (wrapping add), so phase precision
 //!   does not degrade at high frequencies the way an `f32` phase would.
@@ -24,7 +24,10 @@ pub const MIP_BASE_DIV: f32 = 4096.0;
 #[inline]
 pub fn mip_level_for(freq: f32, sample_rate: f32) -> f32 {
     let f0 = sample_rate / MIP_BASE_DIV;
-    (freq / f0).max(1.0e-6).log2().clamp(0.0, (NUM_MIPS - 1) as f32)
+    (freq / f0)
+        .max(1.0e-6)
+        .log2()
+        .clamp(0.0, (NUM_MIPS - 1) as f32)
 }
 
 /// JP-8000 / "supersaw" detune spread.
