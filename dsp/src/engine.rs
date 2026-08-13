@@ -23,6 +23,8 @@
 //! * **Latched at note-on** (table id, unison count, phase randomisation):
 //!   rebuilding a unison stack under a sounding voice would splice in
 //!   oscillators at unrelated phases, so those take effect on the next note.
+//!   Glide is latched here too, and a note event may override the patch value
+//!   for itself alone — see [`Track::note_on_ex`].
 //!
 //! # Determinism
 //!
@@ -40,6 +42,11 @@ use crate::params::*;
 use crate::smoother::{Ramp, Smoother, DEFAULT_TAU};
 use crate::tables::Table;
 use crate::voice::{NoteStart, OscNoteCfg, State, Voice};
+
+/// A note event's `glide_s` saying "use the patch's `voice.glide`". Any
+/// negative value means this (docs/architecture.md); this is the spelling the
+/// worklet sends.
+pub const PATCH_GLIDE: f32 = -1.0;
 
 /// Per-oscillator block snapshot handed to every voice.
 #[derive(Copy, Clone, Debug, Default)]
@@ -351,14 +358,40 @@ impl Track {
 
     // ---------------------------------------------------------------- notes
 
+    /// Starts a note the way the engine always has: the patch's `voice.glide`
+    /// and a full retrigger.
     pub fn note_on(&mut self, note: f32, velocity: f32) {
+        self.note_on_ex(note, velocity, PATCH_GLIDE, false);
+    }
+
+    /// The full note-on of the ABI (docs/workstreams.md §10). `glide_s` is a
+    /// per-note glide time in seconds; [`PATCH_GLIDE`] — any negative or
+    /// non-finite value — means "use the patch's `voice.glide`". `legato`
+    /// bends the newest sounding voice to the new pitch instead of starting a
+    /// note, so the amplitude envelope does not retrigger.
+    ///
+    /// Legato is monophonic per track: it takes over one voice, the newest one
+    /// that is sounding and not yet released. With nothing to bend it falls
+    /// back to an ordinary note-on, so the call is never silent.
+    pub fn note_on_ex(&mut self, note: f32, velocity: f32, glide_s: f32, legato: bool) {
         if !note.is_finite() {
             return;
         }
         let note = note.clamp(-24.0, 144.0);
         self.wake();
         self.age = self.age.wrapping_add(1);
-        let ns = self.make_note_start(note, velocity);
+        let glide = self.glide_seconds(glide_s);
+
+        if legato {
+            if let Some(i) = self.newest_sounding() {
+                let (age, samples) = (self.age, glide * self.sample_rate);
+                self.voices[i].retarget(note, samples, age);
+                self.last_note = Some(note);
+                return;
+            }
+        }
+
+        let ns = self.make_note_start(note, velocity, glide);
         self.last_note = Some(note);
 
         let busy = self
@@ -411,9 +444,33 @@ impl Track {
         })
     }
 
-    fn make_note_start(&self, note: f32, velocity: f32) -> NoteStart {
+    /// Resolves a note event's `glide_s` against the patch. A negative value is
+    /// the documented "use the patch's `voice.glide`" sentinel; a non-finite one
+    /// means the same, which is what a host that calls the export with the old
+    /// three arguments produces (JS turns the missing float into `NaN`).
+    #[inline]
+    fn glide_seconds(&self, glide_s: f32) -> f32 {
+        if glide_s.is_finite() && glide_s >= 0.0 {
+            glide_s
+        } else {
+            self.glide_s
+        }
+    }
+
+    /// Newest voice that is sounding and has not been released — the one a
+    /// legato note-on bends.
+    fn newest_sounding(&self) -> Option<usize> {
+        self.voices
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.state == State::Active && !v.released)
+            .max_by_key(|(_, v)| v.age)
+            .map(|(i, _)| i)
+    }
+
+    fn make_note_start(&self, note: f32, velocity: f32, glide: f32) -> NoteStart {
         let start_cents = match self.last_note {
-            Some(prev) if self.glide_s > 0.0 => (prev - 69.0) * 100.0,
+            Some(prev) if glide > 0.0 => (prev - 69.0) * 100.0,
             _ => (note - 69.0) * 100.0,
         };
         NoteStart {
@@ -422,7 +479,7 @@ impl Track {
             age: self.age,
             seed: self.seed,
             start_cents,
-            glide_samples: self.glide_s * self.sample_rate,
+            glide_samples: glide * self.sample_rate,
             lfo_phase: self.lfo_phase,
             osc: [
                 OscNoteCfg {

@@ -127,6 +127,21 @@ impl MultiEngine {
         }
     }
 
+    /// Note-on with a per-note glide time and legato flag
+    /// ([`Track::note_on_ex`]; docs/workstreams.md §10).
+    pub fn note_on_ex(
+        &mut self,
+        track: usize,
+        note: f32,
+        velocity: f32,
+        glide_s: f32,
+        legato: bool,
+    ) {
+        if let Some(t) = self.tracks.get_mut(track) {
+            t.note_on_ex(note, velocity, glide_s, legato);
+        }
+    }
+
     pub fn note_off(&mut self, track: usize, note: f32) {
         if let Some(t) = self.tracks.get_mut(track) {
             t.note_off(note);

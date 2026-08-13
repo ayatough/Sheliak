@@ -236,7 +236,11 @@ class SheliakProcessor extends AudioWorkletProcessor {
         while (this.evIdx < events.length && events[this.evIdx].offsetSamples <= this.counter) {
           const ev = events[this.evIdx++];
           const track = ev.track | 0;
-          if (ev.kind === 0) this.exports.note_on(track, ev.note, ev.velocity);
+          // note_on(track, note, velocity, glide_s, legato): -1 asks for the
+          // patch's own `voice.glide` and 0 for a normal retrigger, which is
+          // what every event carries until the note layer emits glissandi
+          // (docs/workstreams.md §10).
+          if (ev.kind === 0) this.exports.note_on(track, ev.note, ev.velocity, -1, 0);
           else this.exports.note_off(track, ev.note);
         }
 

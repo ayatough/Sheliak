@@ -9,6 +9,9 @@
 //! 6. FX          — empty chain is a bit-exact bypass, mbcomp is transparent
 //!    below threshold, and delay/reverb tails decay without runaway
 //! 7. unit checks — detune curve symmetry, mipmap band limits
+//! 8. note events — the per-note `glide_s`/`legato` arguments default to the
+//!    old behaviour bit for bit, and a legato note-on bends pitch without
+//!    retriggering the envelope or clicking
 
 use rustfft::num_complex::Complex32;
 use rustfft::FftPlanner;
@@ -27,6 +30,8 @@ const SR: f32 = 48_000.0;
 #[derive(Clone)]
 enum Ev {
     On(usize, f32, f32),
+    /// Note-on with the full ABI: track, note, velocity, `glide_s`, legato.
+    OnEx(usize, f32, f32, f32, bool),
     Off(usize, f32),
     Patch(usize, Box<[f32; PARAM_COUNT]>),
 }
@@ -44,6 +49,7 @@ fn render(engine: &mut MultiEngine, events: &[(usize, Ev)], total: usize) -> (Ve
         while next < events.len() && events[next].0 <= pos {
             match &events[next].1 {
                 Ev::On(t, n, v) => engine.note_on(*t, *n, *v),
+                Ev::OnEx(t, n, v, g, l) => engine.note_on_ex(*t, *n, *v, *g, *l),
                 Ev::Off(t, n) => engine.note_off(*t, *n),
                 Ev::Patch(t, p) => engine.apply_patch(*t, p),
             }
@@ -1371,4 +1377,175 @@ fn tracks_are_independently_seeded_and_isolated() {
     let c = render_track(1.0, 3);
     assert!(a.iter().zip(b.iter()).any(|(x, y)| x != y), "seed ignored");
     assert_bit_identical(&a, &c, "track index must not change the sound");
+}
+
+// ============================== note events: per-note glide and legato (§10)
+
+/// Rough fundamental of a monophonic signal from its zero crossings. Exact
+/// enough for a sine: ±1 crossing over the window, so ±0.5 · SR / len Hz.
+fn zc_hz(x: &[f32]) -> f32 {
+    let mut n = 0usize;
+    for i in 1..x.len() {
+        if (x[i - 1] < 0.0) != (x[i] < 0.0) {
+            n += 1;
+        }
+    }
+    n as f32 * 0.5 * SR / x.len() as f32
+}
+
+/// A sine that decays to a low sustain, so an amplitude-envelope retrigger is
+/// plainly visible in the RMS, and pitch is readable from zero crossings.
+fn glide_patch() -> [f32; PARAM_COUNT] {
+    let mut p = base_params();
+    p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SINE as f32;
+    p[OSC_A_BASE + OSC_PHASE_RANDOM] = 0.0;
+    p[P_MASTER_GAIN] = 1.0;
+    p[ENV_AMP_BASE + ENV_A] = 0.005;
+    p[ENV_AMP_BASE + ENV_D] = 0.15;
+    p[ENV_AMP_BASE + ENV_S] = 0.25;
+    p
+}
+
+const HZ_48: f32 = 130.81; // note 48
+const HZ_60: f32 = 261.63; // note 60
+
+#[test]
+fn the_new_note_on_arguments_default_to_todays_behaviour() {
+    // The claim Track B rests on: the extra arguments are inaudible until
+    // something asks for them. `-1` is what the worklet sends, and `NaN` is
+    // what a host that still calls the export with three arguments produces
+    // (JS turns the missing float into NaN).
+    let events = three_track_events();
+    let with_glide = |g: f32| -> Vec<(usize, Ev)> {
+        events
+            .iter()
+            .map(|(t, e)| {
+                let e = match e {
+                    Ev::On(tr, n, v) => Ev::OnEx(*tr, *n, *v, g, false),
+                    other => other.clone(),
+                };
+                (*t, e)
+            })
+            .collect()
+    };
+
+    let total = SR as usize;
+    let mut a = MultiEngine::new(SR);
+    let (al, ar) = render(&mut a, &events, total);
+    assert!(peak(&al) > 0.05, "reference render produced no signal");
+
+    for (label, g) in [("-1", -1.0f32), ("NaN", f32::NAN)] {
+        let mut b = MultiEngine::new(SR);
+        let (bl, br) = render(&mut b, &with_glide(g), total);
+        assert_bit_identical(&al, &bl, &format!("glide_s = {label}, L"));
+        assert_bit_identical(&ar, &br, &format!("glide_s = {label}, R"));
+    }
+}
+
+#[test]
+fn legato_note_on_bends_pitch_without_retriggering_or_clicking() {
+    let p = glide_patch();
+    let sr = SR as usize;
+    let at = sr / 4; // well into the sustain
+    let env_win = sr / 20; // 50 ms
+    let pitch_win = sr / 5; // 200 ms
+
+    let run = |second: Option<Ev>| {
+        let mut ev: Vec<(usize, Ev)> = vec![
+            (0usize, Ev::Patch(0, Box::new(p))),
+            (0, Ev::On(0, 48.0, 1.0)),
+        ];
+        if let Some(e) = second {
+            ev.push((at, e));
+        }
+        let mut engine = MultiEngine::new(SR);
+        let (l, _r) = render(&mut engine, &ev, sr);
+        (l, engine.active_voices())
+    };
+
+    let (held, _) = run(None);
+    let (legato, voices) = run(Some(Ev::OnEx(0, 60.0, 1.0, 0.0, true)));
+    let (retrig, retrig_voices) = run(Some(Ev::On(0, 60.0, 1.0)));
+
+    // Nothing before the event may move.
+    assert_bit_identical(&held[..at], &legato[..at], "before the legato note-on");
+
+    // It is one voice that changed pitch, not a second one that started.
+    assert_eq!(voices, 1, "legato must not allocate a voice");
+    assert_eq!(
+        retrig_voices, 2,
+        "control: a plain note-on does allocate one"
+    );
+    let before = zc_hz(&legato[at - pitch_win..at]);
+    let after = zc_hz(&legato[at..at + pitch_win]);
+    assert!(
+        (before - HZ_48).abs() < 4.0,
+        "source pitch reads {before} Hz"
+    );
+    assert!(
+        (after - HZ_60).abs() < 4.0,
+        "legato did not reach note 60: {after} Hz"
+    );
+
+    // The amplitude envelope carried on: the same sustain level as the held
+    // note, where a retrigger climbs back toward the peak.
+    let rms_held = rms(&held[at..at + env_win]);
+    let rms_legato = rms(&legato[at..at + env_win]);
+    let rms_retrig = rms(&retrig[at..at + env_win]);
+    assert!(rms_held > 0.01, "held note is silent");
+    assert!(
+        (rms_legato - rms_held).abs() / rms_held < 0.05,
+        "envelope moved: held {rms_held} vs legato {rms_legato}"
+    );
+    assert!(
+        rms_retrig > rms_legato * 1.5,
+        "control: a retrigger should be louder ({rms_retrig} vs {rms_legato})"
+    );
+
+    // ...and it did not click. A 261.6 Hz sine at this level moves ~0.004 per
+    // sample; a phase reset or an envelope jump is an order of magnitude more.
+    let (d, sample) = max_delta(&legato);
+    assert!(d < 0.02, "legato discontinuity {d} at sample {sample}");
+}
+
+#[test]
+fn per_note_glide_overrides_the_patch_in_both_directions() {
+    let sr = SR as usize;
+    let at = sr / 4;
+    let win = sr / 10; // 100 ms
+
+    // The patch glides instantly; the note asks for a quarter-second slide.
+    let mut ev = vec![
+        (0usize, Ev::Patch(0, Box::new(glide_patch()))),
+        (0, Ev::On(0, 48.0, 1.0)),
+        (at, Ev::OnEx(0, 60.0, 1.0, 0.25, true)),
+    ];
+    let mut e = MultiEngine::new(SR);
+    let (sliding, _) = render(&mut e, &ev, sr);
+
+    let during = zc_hz(&sliding[at..at + win]);
+    assert!(
+        during > HZ_48 + 5.0 && during < HZ_60 - 40.0,
+        "a 0.25 s slide should still be under way after 100 ms, not at {during} Hz"
+    );
+    let arrived = zc_hz(&sliding[sr - win..]);
+    assert!(
+        (arrived - HZ_60).abs() < 4.0,
+        "the slide never arrived: {arrived} Hz"
+    );
+    let (d, sample) = max_delta(&sliding);
+    assert!(d < 0.02, "glide discontinuity {d} at sample {sample}");
+
+    // The other direction: a patch with glide, a note that asks for none.
+    let mut p = glide_patch();
+    p[P_GLIDE_S] = 0.25;
+    ev[0] = (0, Ev::Patch(0, Box::new(p)));
+    ev[2] = (at, Ev::OnEx(0, 60.0, 1.0, 0.0, true));
+    let mut e = MultiEngine::new(SR);
+    let (instant, _) = render(&mut e, &ev, sr);
+    let jumped = zc_hz(&instant[at..at + win]);
+    assert!(
+        (jumped - HZ_60).abs() < 4.0,
+        "glide_s = 0 should override the patch glide, but pitch reads {jumped} Hz"
+    );
 }

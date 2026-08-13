@@ -8,11 +8,10 @@ The longer arc is in [roadmap.md](roadmap.md).
 
 # Stream 1 — The note layer
 
-**Status:** Track A (the note layer) is implemented and running — see
-[syntax.md](syntax.md), which now describes it. Track B (the note-event ABI) is
-not: `gliss` is parsed, addressed and scheduled, but the engine still takes the
-three-argument `note_on`, so a slide sounds its destination without gliding
-into it.
+**Status:** both tracks have landed. Track A is the notation — `phrase`
+grids, groups and the detail cascade, described in [syntax.md](syntax.md).
+Track B is the note-event ABI a written `gliss` needs in order to actually
+slide. What is left of this stream is whatever the two turn up in use.
 
 ## Why
 
@@ -91,7 +90,7 @@ code exists.
 canonical text, and an operation that emits a second valid spelling of the same
 structure makes invariant 1 untestable.
 
-### Track B — note events
+### Track B — note events — **landed**
 
 **Owns** `dsp/src/lib.rs`, `dsp/src/voice.rs`, `dsp/src/engine.rs`,
 `web/public/worklet.js`, and the ABI section of `docs/architecture.md`.
@@ -118,6 +117,17 @@ Finished when:
 **Track B can land before Track A starts**, and should. Nothing in it waits on
 the notation, and having it in place means `gliss` is implementable the moment
 A4 exists.
+
+It has landed. Two notes for whoever wires `gliss` up on the TS side:
+
+- **Legato is monophonic per track.** It bends the newest sounding, unreleased
+  voice; the ABI has no room to say *which* note is sliding. A chord-wide
+  `gliss` (§4) therefore needs either one legato event per member with the
+  members separated in time, or an ABI that names the source note — pick that
+  fight when A4 is written, not before.
+- **A legato note-on keeps the sounding voice's velocity**, because velocity
+  scales the per-sample gain and feeds the mod matrix, so moving it mid-note
+  would step both. The slide inherits the expression of the note it left.
 
 ### Crossings
 
