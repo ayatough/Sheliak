@@ -257,7 +257,7 @@ describe('fx chain — per-effect parameters', () => {
   });
 });
 
-describe('fx chain — defaults (SPEC §5)', () => {
+describe('fx chain — defaults (docs/syntax.md)', () => {
   it('fills every default for a bare entry', () => {
     const r = parse(
       [

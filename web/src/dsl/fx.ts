@@ -77,7 +77,7 @@ export interface NoiseIR {
   color: NoiseColor;
 }
 
-/** SPEC §5: only active when the patch has a `noise:` section. */
+/** docs/syntax.md: only active when the patch has a `noise:` section. */
 export function defaultNoise(enabled = false): NoiseIR {
   return { enabled, level: dbToLinear(-12), color: 'white' };
 }
@@ -179,7 +179,7 @@ export const FX_TYPE_IDS: Record<FxType, number> = {
   comp: FX_MBCOMP,
 };
 
-/** DSL spellings accepted for `type:` (SPEC §5 v0.2 notation). */
+/** DSL spellings accepted for `type:` (docs/syntax.md). */
 export const FX_ALIASES: Record<string, FxType> = {
   dist: 'dist',
   distortion: 'dist',
@@ -207,7 +207,7 @@ export const FX_KEYS: Record<FxType, string[]> = {
 
 // ------------------------------------------------------------------ defaults
 
-/** SPEC §5 per-effect defaults. `bpm` resolves delay's musical default (3/16). */
+/** docs/syntax.md per-effect defaults. `bpm` resolves delay's musical default (3/16). */
 export function defaultFxEntry(type: FxType, bpm: number): FxIR {
   switch (type) {
     case 'dist':

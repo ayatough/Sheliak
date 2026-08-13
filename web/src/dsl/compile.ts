@@ -1,7 +1,7 @@
 // Top level: markdown document → per-track patch params + loop IR + diagnostics.
 //
 // v0.3: every ```synth fence is a track, indexed by order of appearance
-// (SPEC §7). Glicol style per track — a fence with an error yields no params so
+// (docs/syntax.md). Glicol style per track — a fence with an error yields no params so
 // the caller keeps that track's last valid patch, while the others reload.
 
 import { extractFences, findFence, type Fence } from './fences.ts';

@@ -1,7 +1,9 @@
 # Wavetable WASM Synth — MVP 要件定義
 
-> Markdownベース作曲システムの第一歩として、シンセの音作り層のみを切り出したMVP。
-> format_version: 0.1
+> **日本語の参考資料です。現状と今後の計画は [docs/roadmap.md](../roadmap.md) が正。**
+>
+> Markdownベース作曲システムの第一歩として、シンセの音作り層のみを切り出したMVPの要件定義。
+> 当時の判断の記録として残しています。
 
 ---
 

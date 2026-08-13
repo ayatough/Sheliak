@@ -1,5 +1,5 @@
 // Parameter block layout — integration contract with dsp/src/params.rs.
-// Do not change values without updating the Rust mirror and docs/SPEC.md.
+// Do not change values without updating the Rust mirror and docs/architecture.md.
 
 export const PARAM_COUNT = 192;
 

@@ -1,4 +1,4 @@
-// `loop` fence → Loop IR (SPEC.md §6 / §7, REQUIREMENTS §3.3).
+// `loop` fence → Loop IR (docs/architecture.md, docs/syntax.md).
 //
 //   ```loop id=demo bars=2 bpm=124
 //   lead: C3 . Eb3 . | G3 ~ ~ . | Bb3 . . . | C4 ~ ~ ~

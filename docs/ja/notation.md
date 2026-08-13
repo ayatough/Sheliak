@@ -1,8 +1,11 @@
 # Sheliak — ノート層仕様 (phrase / loop / 操作セット)
 
-> format_version: 0.1
+> **日本語の参考資料です。正式版は [docs/workstreams.md](../workstreams.md)。**
+> 内容が食い違う場合は英語版が正です。
+>
 > このファイルは **ノート記述層** の仕様。音源側 (Patch IR / WASM ABI / パラメータレイアウト) は
-> `docs/SPEC.md` を参照。現行実装の `loop` フェンス (音符をインラインで持つ形式) は本仕様で置き換える。
+> [architecture.md](architecture.md) を参照。現行実装の `loop` フェンス (音符をインラインで持つ
+> 形式) は本仕様で置き換える。**未実装。**
 
 ---
 

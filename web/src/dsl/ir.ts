@@ -1,4 +1,4 @@
-// Patch IR — the normalized, fully-expanded internal representation (SPEC.md §5).
+// Patch IR — the normalized, fully-expanded internal representation (docs/architecture.md).
 // The worklet never sees this: `irToParams` flattens it into the f32 block that
 // matches `shared/params.ts` exactly.
 
@@ -224,13 +224,13 @@ export function defaultVoice(): VoiceIR {
   return { polyphony: 8, glide: 0 };
 }
 
-/** SPEC §5: master gain is -6dB-ish (0.5) for headroom. */
+/** docs/syntax.md: master gain is -6dB-ish (0.5) for headroom. */
 export const DEFAULT_MASTER_GAIN = 0.5;
 export const DEFAULT_BPM = 120;
 
 // -------------------------------------------------------------------- expand
 
-/** Fill every unspecified field with its default → the "展開済みビュー". */
+/** Fill every unspecified field with its default → the "expanded view". */
 export function expandPatch(input: PatchInput = {}): PatchIR {
   const oscIn = input.osc;
   // `osc: []` is an explicit "no oscillators" (noise-only patch such as a hat);
@@ -348,7 +348,7 @@ function writeEnv(p: Float32Array, base: number, env: AdsrIR): void {
 
 /**
  * Human-readable expansion of the IR, with units spelled out.
- * Rendered as pretty JSON in the UI's "展開済みパラメータ" panel.
+ * Rendered as pretty JSON in the UI's expanded-parameters panel.
  */
 export function expandedView(ir: PatchIR): unknown {
   const sec = (s: number) => (s >= 1 ? `${round(s, 4)}s` : `${round(s * 1000, 3)}ms`);

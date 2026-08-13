@@ -1,4 +1,4 @@
-// Unit-typed scalar parsing (REQUIREMENTS §3.1).
+// Unit-typed scalar parsing (docs/syntax.md).
 //
 //   frequency   320Hz, 4.5kHz
 //   gain        -6dB

@@ -1,8 +1,10 @@
 # Sheliak — Wavetable WASM Synth MVP: Integration Contract
 
-> format_version: 0.1
+> **日本語の参考資料です。正式版は [docs/architecture.md](../architecture.md)。**
+> 内容が食い違う場合は英語版が正です。
+>
 > このファイルは **DSPコア (Rust/WASM)** と **Web層 (TS)** の統合契約。両側の実装はこの仕様に厳密に従うこと。
-> 要件定義は `docs/REQUIREMENTS.md` を参照。
+> 要件定義は [requirements.md](requirements.md) を参照。
 
 ---
 

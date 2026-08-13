@@ -4,7 +4,7 @@
 // transferred to the processor as raw bytes; the worklet compiles it
 // synchronously. Transferring a compiled WebAssembly.Module would be nicer,
 // but Chrome silently drops Module postMessage without cross-origin isolation
-// (COOP/COEP), which we deliberately avoid (REQUIREMENTS §5.1).
+// (COOP/COEP), which we deliberately avoid (docs/architecture.md).
 
 import type { LoopIR } from '../dsl/loop.ts';
 import { MAX_TRACKS } from '../shared/params.ts';

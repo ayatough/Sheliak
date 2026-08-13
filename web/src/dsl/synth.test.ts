@@ -40,7 +40,7 @@ import {
   MOD_AMOUNT,
 } from '../shared/params.ts';
 
-// The full example from REQUIREMENTS §3.2 (body only).
+// The full example from docs/syntax.md (body only).
 const EXAMPLE = `osc:
   - { table: basic/saw, level: 0dB, morph: 0%, unison: 7, detune: 22c, spread: 80% }
   - { table: basic/square, level: -8dB, morph: 30%, tune: -12st }
@@ -64,7 +64,7 @@ function parseExample() {
   return parseSynth(EXAMPLE, { id: 'lead', seed: '42' }, { bodyStartLine: 1, bpm: 124 });
 }
 
-describe('parseSynth — REQUIREMENTS §3.2 example', () => {
+describe('parseSynth — docs/syntax.md example', () => {
   it('parses without errors', () => {
     const r = parseExample();
     expect(r.errors).toEqual([]);
@@ -163,7 +163,7 @@ describe('parseSynth — REQUIREMENTS §3.2 example', () => {
 });
 
 describe('defaults expansion', () => {
-  it('an empty patch expands to the SPEC §5 defaults', () => {
+  it('an empty patch expands to the docs/syntax.md defaults', () => {
     const r = parseSynth('', {}, { bodyStartLine: 1, bpm: 120 });
     expect(r.errors).toEqual([]);
     const p = r.params!;

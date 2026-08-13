@@ -4,7 +4,7 @@
  * `audioWorklet.addModule()`. It is deliberately NOT TypeScript and has no
  * imports: bundlers rewrite module graphs in ways that break worklet scope.
  *
- * Protocol (docs/SPEC.md §6):
+ * Protocol (docs/architecture.md §6):
  *   main → worklet: 'load-wasm' | 'patch' | 'clear-tracks' | 'loop' | 'transport'
  *   worklet → main: 'ready' | 'position' | 'error'
  *

@@ -1,6 +1,6 @@
 // `synth` fence → PatchIR.
 //
-// Field names, units and ranges are validated here (REQUIREMENTS §3.2).
+// Field names, units and ranges are validated here (docs/syntax.md).
 // Nothing throws: everything comes back as { line, col, message }.
 
 import { ErrorSink, type DslError, type Pos } from './errors.ts';
@@ -100,7 +100,7 @@ function readTop(root: YMap, input: PatchInput, bpm: number, sink: ErrorSink): v
   const oscNode = fields['osc'];
   if (oscNode) input.osc = readOscList(oscNode, sink);
 
-  // The presence of `noise:` is what enables the layer (SPEC §5).
+  // The presence of `noise:` is what enables the layer (docs/syntax.md).
   const noiseNode = fields['noise'];
   if (noiseNode) input.noise = readNoise(noiseNode, sink);
 

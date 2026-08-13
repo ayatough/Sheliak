@@ -1,8 +1,13 @@
 name: Deploy to GitHub Pages
 
+# Runs when CI *finishes* on main, not when the push lands, so a commit whose
+# tests are red is never published. With no pull request in the way, that is the
+# only gate there is.
 on:
-  push:
-    branches: [claude/wavetable-wasm-synth-mvp-v8e8uy]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -16,9 +21,15 @@ concurrency:
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Build the commit CI just went green on, not whatever main is now.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Install Rust (wasm32 target)
         uses: dtolnay/rust-toolchain@stable
@@ -28,9 +39,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: dsp
-
-      - name: Test DSP core (native)
-        run: cargo test --manifest-path dsp/Cargo.toml
 
       - name: Build DSP core (wasm)
         run: ./scripts/build-wasm.sh
@@ -43,10 +51,6 @@ jobs:
 
       - name: Install web dependencies
         run: npm ci
-        working-directory: web
-
-      - name: Test web (incl. wasm end-to-end)
-        run: npm test
         working-directory: web
 
       - name: Build web

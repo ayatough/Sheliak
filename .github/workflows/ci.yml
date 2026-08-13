@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  gate:
+    name: test & lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dsp
+
+      - name: check formatting
+        run: cargo fmt --manifest-path dsp/Cargo.toml --all -- --check
+
+      - name: clippy
+        run: cargo clippy --manifest-path dsp/Cargo.toml --all-targets
+
+      # The project's substitute for listening: determinism, aliasing above the
+      # Nyquist limit, DC offset, and clicks at note and patch boundaries. None
+      # of the four is visible in a diff.
+      - name: test DSP core (native target)
+        run: cargo test --manifest-path dsp/Cargo.toml
+
+      - name: build DSP core (wasm)
+        run: ./scripts/build-wasm.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: install web dependencies
+        run: npm ci
+        working-directory: web
+
+      # Includes the end-to-end test, which loads the real dsp.wasm built above.
+      # It is the only gate that catches dsp/src/params.rs and
+      # web/src/shared/params.ts disagreeing with each other.
+      - name: test web
+        run: npm test
+        working-directory: web
+
+      # Type-checks (tsc --noEmit) before bundling.
+      - name: build web
+        run: npm run build
+        working-directory: web
+
+  versions:
+    name: version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The version is written in several files and nothing but somebody's
+      # memory keeps them in step. This is that memory, run in CI.
+      - run: ./scripts/check-versions.sh
