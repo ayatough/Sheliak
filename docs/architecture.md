@@ -10,7 +10,7 @@ For the notation itself see [syntax.md](syntax.md); for building and testing see
 Markdown editor (TypeScript)
         |  fenced code block extraction        web/src/dsl/fences.ts
         v
-DSL parser (TypeScript)                        web/src/dsl/{synth,loop,fx}.ts
+DSL parser (TypeScript)                        web/src/dsl/{synth,fx,phrase,loop}.ts
         |  Patch IR (normalized, fully expanded)
         |  -> Float32Array(PARAM_COUNT)
         v  postMessage
@@ -61,7 +61,8 @@ dsp/                 Rust DSP core
 web/
   public/worklet.js    AudioWorkletProcessor (plain JS, self-contained)
   src/shared/params.ts parameter block layout — contract file
-  src/dsl/             fence extraction, YAML subset, parsing, surgical edits
+  src/dsl/             fence extraction, YAML subset, parsing, canonical
+                       formatting, the editing operations, surgical edits
   src/gui/             step sequencer and parameter panel
   src/audio/           AudioContext, wasm loading, worklet messaging
   src/defaultDoc.ts    the document the editor opens with

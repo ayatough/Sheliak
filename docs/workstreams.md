@@ -69,8 +69,15 @@ gate first — see [AGENTS.md](../AGENTS.md#definition-of-done).
 
 ### Track A — the note layer — done
 
-**Owns** `web/src/dsl/`, `web/src/gui/`, `web/src/defaultDoc.ts`, `docs/syntax.md`.
+**Owns** `web/src/dsl/`, `web/src/gui/`, `web/src/main.ts`, `web/src/style.css`,
+`web/index.html`, `web/src/defaultDoc.ts`, `docs/syntax.md`.
 **Does not touch** `dsp/`, `web/public/worklet.js`, `docs/architecture.md`.
+
+> This list was originally `web/src/gui/` alone, which was wrong: the editor
+> spans `main.ts`, `style.css` and `index.html` too, and Track A had to change
+> all three. No harm came of it — Track B touched none of them — but an
+> ownership boundary drawn one directory too narrow is a boundary that will be
+> crossed silently. It is corrected here rather than in hindsight next time.
 
 Land in this order. A step is finished when its criterion holds, not when the
 code exists.
@@ -136,8 +143,19 @@ It has landed. Two notes for whoever wires `gliss` up on the TS side:
 | `web/src/dsl/compile.ts` | Track A | |
 | `docs/architecture.md` | Track B, ABI section only | Track A leaves it alone |
 | `docs/syntax.md` | Track A | |
+| `README.md` | Track A | The status list and the example fences follow the notation. Unowned the first time round, which is how it nearly went stale |
+| `web/src/integration.test.ts` | Track B | It mirrors `worklet.js`, so it belongs with whoever changes an export — not with whoever owns the directory it sits in |
 | `CHANGELOG.md` | both | Append-only, but still a conflict if edited at the same moment |
 | this file | whoever finishes a track | Move its status line |
+
+**A mirror belongs to the thing it mirrors, not to its directory.**
+`web/src/integration.test.ts` drives the wasm "the same way `worklet.js` does",
+and it sat inside `web/src/`, which Track B was told to leave alone — so the
+worklet moved to five arguments and its mirror kept calling three. Nothing broke,
+because the missing arguments arrive as `0` and every patch here has `glide: 0ms`;
+a patch with a real glide would have made the test and the app disagree in
+silence. When splitting the next stream, look for the files that exist to agree
+with something else and give them to that something.
 
 ## 1. Terms
 

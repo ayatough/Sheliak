@@ -15,13 +15,17 @@ const WASM_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../public/ds
 const SR = 48000;
 const BLOCK = 128;
 
-// v0.3 ABI: params_ptr / apply_patch / note_on / note_off are track-indexed.
+// The ABI in docs/architecture.md: params_ptr / apply_patch / note_on / note_off
+// are track-indexed, and note_on carries a per-note glide and a legato flag.
+// This mirror has to keep matching worklet.js — a JS call with the arguments
+// missing passes 0 for both, which reads as "no glide" rather than "use the
+// patch's", so the drift would be silent for every patch whose glide is zero.
 interface DspExports {
   memory: WebAssembly.Memory;
   init(sampleRate: number): void;
   params_ptr(track: number): number;
   apply_patch(track: number): void;
-  note_on(track: number, note: number, velocity: number): void;
+  note_on(track: number, note: number, velocity: number, glideS: number, legato: number): void;
   note_off(track: number, note: number): void;
   all_notes_off(): void;
   process(nframes: number): void;
@@ -55,7 +59,8 @@ function renderLoop(dsp: DspExports, result: CompileResult, loop: LoopIR, total:
   while (written < total) {
     while (evIdx < loop.events.length && loop.events[evIdx]!.offsetSamples <= counter) {
       const ev = loop.events[evIdx++]!;
-      if (ev.kind === 0) dsp.note_on(ev.track, ev.note, ev.velocity);
+      // -1 / 0, exactly as worklet.js sends them: use the patch's glide, no legato.
+      if (ev.kind === 0) dsp.note_on(ev.track, ev.note, ev.velocity, -1, 0);
       else dsp.note_off(ev.track, ev.note);
     }
     let boundary = loop.lengthSamples;
