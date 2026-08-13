@@ -1,8 +1,9 @@
 # Syntax
 
-The notation as it exists today. A redesign of the note layer is accepted and
-written down in [workstreams.md](workstreams.md); this file describes what
-actually runs.
+The notation as it exists today. The note layer described here — `phrase` grids,
+groups and the detail cascade — is Stream 1 of
+[workstreams.md](workstreams.md), and it runs; the section hierarchy above the
+loop does not exist yet.
 
 ## Units
 
@@ -25,11 +26,12 @@ rewritten when the BPM changes.
 
 ## Fences
 
-A song is a Markdown document. Two info strings are recognized:
+A song is a Markdown document. Three info strings are recognized:
 
 ````markdown
-```synth id=lead seed=42
-```loop id=demo bars=2 bpm=124
+```synth  id=lead seed=42
+```phrase id=verse-lead key=C scale=minor res=1/16 bars=1
+```loop   id=demo bars=2 bpm=124
 ````
 
 Everything else in the document — headings, paragraphs, other code blocks — is
@@ -190,7 +192,158 @@ There is no drum sampler. Percussion is synthesized like anything else:
 
 Both are in `web/src/defaultDoc.ts`.
 
+## `phrase`
+
+A phrase is one track's notes over one to a few bars: an ASCII grid where rows
+are pitches and columns are time, plus an optional block of expression detail.
+
+````markdown
+```phrase id=verse-lead key=C scale=minor res=1/16 bars=1
+grid:
+  #     1...2...3...4...
+  5'   |a---....o---....|
+  b3'  |a---............|
+  1    |b-------....o---|
+
+detail:
+  1.1a  : { roll: +12ms }
+  1.1:1 : { vel: 90% }
+```
+````
+
+| Attribute | Default | |
+|---|---|---|
+| `id` | — | Required, unique in the document; `loop` lines refer to it |
+| `key` | `C` | Tonic pitch class |
+| `scale` | `major` | `major`, `minor`, the five other modes, or `chromatic` |
+| `res` | `1/16` | Grid resolution: `1/16` is 4 cells a beat, `1/8` two, `1/12` three |
+| `bars` | `1` | Meter is 4/4 for now |
+
+Every row is exactly `bars × 4 × cells-per-beat` cells long. The cell run opens
+and closes with `|`; interior `|` are bar lines and **must fall in the same
+column on every row**. A line starting with `#` is a comment — the formatter
+writes the beat ruler as one.
+
+### Cells
+
+| Glyph | |
+|---|---|
+| `.` | Rest |
+| `-` | The previous note continuing |
+| `a`–`z` | An onset. The letter is the group tag; `o` is the conventional default |
+| `\|` | Bar line, visual only |
+
+A note lasts its onset cell plus the following `-` run, and note-off lands one
+sample before the end. A `-` with no onset before it is an error.
+
+### Row labels
+
+The spelling decides the namespace, and **a phrase may not mix namespaces**.
+
+| Kind | Spelling | Examples | Resolves via |
+|---|---|---|---|
+| Scale degree | digit, optionally `b`/`#` first | `1`, `b3`, `#4`, `5'`, `b7,` | `key` and `scale` |
+| Absolute pitch | **uppercase** note letter | `C4`, `Eb2`, `F#5` | itself |
+| Percussion | any other identifier | `kick`, `sd`, `hh` | the kit map |
+
+**Case is significant**: `b3` is a minor third, `B3` is the note B in octave 3.
+
+`1` with no octave mark is the tonic in octave 3 (C3 = MIDI 48); `'` raises an
+octave and `,` lowers one, both repeatable. A plain degree follows the scale, so
+`3` is E in C major and Eb in C minor. An accidental spells an interval instead:
+`b3` is a minor third and `b7` a minor seventh whatever the scale is, which is
+what makes `1 b3 5` a minor triad in either. Under `scale=chromatic`, degrees
+1–12 are the twelve semitones.
+
+The kit map covers `kick`/`bd`, `rim`, `snare`/`sd`, `clap`/`cp`, `lt`, `hh`/`ch`,
+`mt`, `oh`, `ht`, `crash`/`cr`, `ride`/`rd`, `perc`, `shaker`/`sh`. Drums are
+patches, not samples, so the note number only matters to a patch that tracks
+pitch — a kick's sine sweep does, a noise hat does not.
+
+Rows are written highest pitch first; percussion rows keep the order they were
+written in. A duplicate row label is an error.
+
+### Groups
+
+> **Same onset and same glyph = one group. A solo note is a group of one.**
+
+In the example above, group `a` on beat 1 is the chord `{5', b3'}` and group `b`
+is `{1}`, an independent voice starting at the same instant. A group is confined
+to one onset, and **grouping never changes what you hear** — only a detail entry
+that targets the group does. If every note at an onset is one group the glyph is
+`o`, otherwise they are `a`, `b`, `c` … from the top row down.
+
+### `detail`
+
+A flow map keyed by address, applied on top of the grid.
+
+```yaml
+detail:
+  1.1a     : { roll: +12ms }
+  1.1:b3'  : { vel: 60% }
+  *:1      : { vel: 80% }
+  1.3      : { gliss: { to: +5st, cells: 3 } }
+```
+
+| Key | Value | Applies to | |
+|---|---|---|---|
+| `vel` | `0%`–`100%` | a note | Velocity. Default `100%` |
+| `nudge` | `±Nms` | a note | Timing offset |
+| `gate` | `N%` | a note | Sounding length as a fraction of the written length |
+| `roll` | `±Nms` | **a group only** | Offsets members in turn; `+` from the bottom up |
+| `gliss` | `{ to: <degree \| ±Nst>, cells: N, curve: linear \| exp }` | note or group | Glissando |
+
+`cells` defaults to the distance to the next onset in the row, and is the one
+field that takes a bare number: it counts grid columns, which have no unit. A
+degree target slides to that note, an interval target slides by that much — and
+on a group every member moves by the same interval, so the two chords need not
+have the same number of notes. A note with a `gliss` sounds legato: the
+amplitude envelope does not retrigger, or the slide would be two notes.
+
+> The glide itself needs the extended `note_on` of
+> [workstreams.md §10](workstreams.md), which is Track B's work. Until that
+> lands the destination sounds on time but does not slide into place.
+
+A glissando whose notes actually exist — a harp run — is written as real notes
+in the grid instead.
+
+### Addresses
+
+```
+<time>[<group>][:<row>]
+
+time  := '*' | <bar> | <bar> '.' <beat> | <bar> '.' <beat> '.' <tick>
+group := [a-z]
+row   := a row label
+```
+
+| Example | Selects |
+|---|---|
+| `1.1` | Every note on bar 1, beat 1 |
+| `1.1a` | Only group `a` there |
+| `1.1:b3'` | One note |
+| `1.1.3` | Bar 1, beat 1, third tick |
+| `*:b3'` | Every note in row `b3'` |
+| `*` | Everything |
+
+Bars, beats and ticks are 1-based, and **an address names the row label as
+written**, not the resolved pitch. More constraints win: specificity is the time
+depth (`*` = 0, bar = 1, beat = 2, tick = 3) plus one for a group and one for a
+row, ties going to the entry written later. Resolution is per gesture key, so an
+entry that sets only `vel` leaves an inherited `nudge` alone. An address that
+names no note is an error rather than something quietly ignored.
+
 ## `loop`
+
+The arrangement: which phrase plays on which track.
+
+````markdown
+```loop id=groove bars=1 bpm=126
+lead: verse-lead
+bass: verse-bass
+kick: four-floor
+```
+````
 
 | Attribute | Default | |
 |---|---|---|
@@ -198,30 +351,13 @@ Both are in `web/src/defaultDoc.ts`.
 | `bars` | `1` | |
 | `bpm` | `120` | |
 
-```markdown
-```loop id=groove bars=1 bpm=126
-lead: [C4 Eb4 G4] ~ ~ ~ | ~ ~ ~ ~ | [Bb3 D4 F4] ~ ~ ~ | ~ ~ ~ ~
-bass: .  .  C2 .        | .  .  C2 .  | .  .  Eb2 .   | .  .  Bb1 .
-kick: C1 .  .  .        | C1 .  .  .  | C1 .  .  .    | C1 .  .  .
-```
-```
+Each line binds a track id — a `synth` fence's `id`, resolved to a track index
+by fence order — to a phrase id. A phrase repeats to fill the loop, so the loop
+length has to be a multiple of the phrase length; an undefined phrase, an
+unknown track or a length that does not divide is an error. Two phrases may use
+different resolutions on different tracks: they still span the same loop.
 
-Each line is `<track id>: <cells>`, bound to the `synth` fence with that id. An
-unknown id is an error.
-
-| Token | |
-|---|---|
-| `C4`, `Eb2`, `F#5` | A note. `C-1` to `G9`, `#` and `b` |
-| `.` | Rest |
-| `~` | Tie — extends the previous cell |
-| `[C3 Eb3 G3]` | A chord, in one cell |
-| `\|` | Visual separator, ignored for timing |
-
-**The subdivision is inferred per line**, as `cells / (bars * 4)`, so lines in the
-same fence may have different resolutions. A note lasts until the next note or
-rest; note-off lands one sample before the end of its cell.
-
-The loop always loops. Velocity is fixed for now.
+The loop always loops. Sequencing several phrases on one track is Stream 2.
 
 ## Errors
 

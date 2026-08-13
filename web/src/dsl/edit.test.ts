@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   replaceSpan,
+  cellSpan,
+  writeCell,
+  loadPhrase,
+  replaceDetailBlock,
+  replaceGridBlock,
   setSynthField,
   getSynthFieldText,
   setLoopLine,
@@ -231,5 +236,78 @@ describe('unit formatting', () => {
     expect(formatNote(51)).toBe('D#3');
     expect(formatNote(51, true)).toBe('Eb3');
     expect(formatNote(127)).toBe('G9');
+  });
+});
+
+// --------------------------------------------------------- A3: phrase spans
+
+describe('phrase cell spans', () => {
+  const F = '```';
+  const DOC = [
+    '# song', // 1
+    '', // 2
+    `${F}phrase id=p key=C scale=minor res=1/16 bars=1`, // 3
+    'grid:', // 4
+    '  #     1...2...3...4...', // 5
+    "  5'   |o---....o---....|", // 6
+    '  1    |o-------....o---|', // 7
+    '', // 8
+    'detail:', // 9
+    '  1.1 : { vel: 90% }', // 10
+    F, // 11
+    '', // 12
+    'Prose that must survive.', // 13
+  ].join('\n');
+
+  const loaded = loadPhrase(DOC, 'p')!;
+
+  it('finds a phrase by id and keeps its document positions', () => {
+    expect(loaded.phrase.rows.map((r) => r.line)).toEqual([6, 7]);
+    expect(loaded.phrase.gridLine).toBe(4);
+    expect(loaded.phrase.detailLine).toBe(9);
+  });
+
+  it('gives every cell a one-character span, shared column by column', () => {
+    expect(cellSpan(loaded.phrase, 0, 0)).toEqual({ line: 6, col: 9, endCol: 10 });
+    expect(cellSpan(loaded.phrase, 1, 0)).toEqual({ line: 7, col: 9, endCol: 10 });
+    expect(cellSpan(loaded.phrase, 1, 15)).toEqual({ line: 7, col: 24, endCol: 25 });
+    expect(cellSpan(loaded.phrase, 2, 0)).toBeNull();
+  });
+
+  it('writes one character and leaves every other byte identical', () => {
+    const r = writeCell(DOC, loaded.phrase, 0, 4, 'o');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.doc).toHaveLength(DOC.length);
+    const differing = [...DOC].filter((c, i) => c !== r.doc[i]);
+    expect(differing).toEqual(['.']);
+    expect(r.doc.split('\n')[5]).toBe("  5'   |o---o...o---....|");
+    expect(r.doc.endsWith('Prose that must survive.')).toBe(true);
+  });
+
+  it('rewrites the grid block when the geometry moves', () => {
+    const r = replaceGridBlock(DOC, loaded.phrase, ['grid:', '  1 |o---............|']);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.doc.split('\n').slice(3, 6)).toEqual(['grid:', '  1 |o---............|', '']);
+    expect(r.doc).toContain('Prose that must survive.');
+  });
+
+  it('replaces, appends and removes the detail block', () => {
+    const replaced = replaceDetailBlock(DOC, loaded.phrase, ['  1.1 : { vel: 40% }']);
+    expect(replaced.ok && replaced.doc.split('\n')[9]).toBe('  1.1 : { vel: 40% }');
+
+    const removed = replaceDetailBlock(DOC, loaded.phrase, []);
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    expect(removed.doc).not.toContain('detail:');
+    expect(removed.doc.split('\n')[7]).toBe(F);
+
+    const bare = removed.doc;
+    const again = loadPhrase(bare, 'p')!;
+    const added = replaceDetailBlock(bare, again.phrase, ['  1.1 : { gate: 50% }']);
+    expect(added.ok).toBe(true);
+    if (!added.ok) return;
+    expect(added.doc.split('\n').slice(7, 10)).toEqual(['', 'detail:', '  1.1 : { gate: 50% }']);
   });
 });

@@ -3,6 +3,8 @@
 import { describe, it, expect } from 'vitest';
 import { compile } from './compile.ts';
 import { parseLoop } from './loop.ts';
+import { parsePhrase } from './phrase.ts';
+import { formatPhrase } from './format.ts';
 import { parseSynth } from './synth.ts';
 import { DEFAULT_DOC } from '../defaultDoc.ts';
 import { OSC_A_BASE, OSC_B_BASE, OSC_ENABLED, NOISE_BASE, NOISE_ENABLED, MAX_TRACKS } from '../shared/params.ts';
@@ -10,14 +12,32 @@ import { OSC_A_BASE, OSC_B_BASE, OSC_ENABLED, NOISE_BASE, NOISE_ENABLED, MAX_TRA
 const SR = 48000;
 const F = '```';
 
-/** Build a document out of (id, body) synth fences plus an optional loop. */
-function doc(fences: [string, string][], loop?: string, loopAttrs = 'bars=1 bpm=120'): string {
+/**
+ * Build a document out of (id, body) synth fences, the phrases the loop refers
+ * to, and an optional loop fence.
+ */
+function doc(
+  fences: [string, string][],
+  loop?: string,
+  loopAttrs = 'bars=1 bpm=120',
+  phrases: [string, string][] = [],
+): string {
   const parts = fences.map(([id, body]) => `${F}synth id=${id}\n${body}\n${F}`);
+  for (const [id, grid] of phrases) {
+    parts.push(`${F}phrase id=${id} res=1/16 bars=1\ngrid:\n${grid}\n${F}`);
+  }
   if (loop !== undefined) parts.push(`${F}loop ${loopAttrs}\n${loop}\n${F}`);
   return parts.join('\n\n');
 }
 
 const SAW = 'osc:\n  - { table: basic/saw }';
+/** Phrases used by the loop-binding tests, in the absolute-pitch namespace. */
+const PHRASES: [string, string][] = [
+  ['down', '  C4 |o...............|'],
+  ['up', '  C2 |........o.......|'],
+  ['pulse', '  C1 |o...o...o...o...|'],
+  ['off', '  C2 |....o...........|'],
+];
 
 // ----------------------------------------------------------- fence → track
 
@@ -84,7 +104,7 @@ describe('multi-fence compile', () => {
 
   it('resolves musical units against the loop bpm for every track', () => {
     const body = 'lfo:\n  1: { wave: tri, rate: 1/4 }';
-    const r = compile(doc([['a', body], ['b', body]], 'a: C3 . . .', 'bars=1 bpm=126'), SR);
+    const r = compile(doc([['a', body], ['b', body]], 'a: down', 'bars=1 bpm=126', PHRASES), SR);
     expect(r.errors).toEqual([]);
     for (const t of r.tracks) expect(t.ir.lfo1.rateHz).toBeCloseTo(126 / 60, 9);
   });
@@ -92,30 +112,41 @@ describe('multi-fence compile', () => {
 
 // --------------------------------------------------------------- loop lines
 
-describe('multi-line loop', () => {
+describe('the loop as an arrangement', () => {
   it('binds each line to its synth fence and tags events with the track', () => {
     const r = compile(
-      doc([['lead', SAW], ['bass', SAW], ['kick', SAW]], ['lead: C4 . . .', 'bass: . . C2 .', 'kick: C1 . . .'].join('\n')),
+      doc(
+        [['lead', SAW], ['bass', SAW], ['kick', SAW]],
+        ['lead: down', 'bass: up', 'kick: pulse'].join('\n'),
+        'bars=1 bpm=120',
+        PHRASES,
+      ),
       SR,
     );
     expect(r.errors).toEqual([]);
     const ons = r.loop!.events.filter((e) => e.kind === 0);
-    expect(ons.map((e) => [e.track, e.note])).toEqual([
-      [0, 60], // lead C4 at cell 0
-      [2, 24], // kick C1 at cell 0
-      [1, 36], // bass C2 at cell 2
-    ]);
+    expect(ons.map((e) => [e.track, e.note, e.offsetSamples])).toEqual([
+      [0, 60, 0], // lead C4 at cell 0
+      [2, 24, 0], // kick C1 at cell 0
+      [1, 36, 48000], // bass C2 at cell 8 = beat 3
+      [2, 24, 24000],
+      [2, 24, 48000],
+      [2, 24, 72000],
+    ].sort((a, b) => (a[2] as number) - (b[2] as number) || (a[0] as number) - (b[0] as number)));
   });
 
   it('lets a synth have no loop line (silent track)', () => {
-    const r = compile(doc([['lead', SAW], ['pad', SAW]], 'lead: C4 . . .'), SR);
+    const r = compile(doc([['lead', SAW], ['pad', SAW]], 'lead: down', 'bars=1 bpm=120', PHRASES), SR);
     expect(r.errors).toEqual([]);
     expect(r.trackCount).toBe(2);
     expect(r.loop!.events.every((e) => e.track === 0)).toBe(true);
   });
 
   it('rejects a line whose id has no synth fence', () => {
-    const r = compile(doc([['lead', SAW]], ['lead: C4 . . .', 'ghost: C2 . . .'].join('\n')), SR);
+    const r = compile(
+      doc([['lead', SAW]], ['lead: down', 'ghost: up'].join('\n'), 'bars=1 bpm=120', PHRASES),
+      SR,
+    );
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0]!.message).toMatch(/unknown track "ghost"/);
     expect(r.errors[0]!.message).toMatch(/known: lead/);
@@ -123,38 +154,69 @@ describe('multi-line loop', () => {
   });
 
   it('reports the unknown id at its line and column', () => {
-    const md = ['# doc', '', `${F}synth id=lead`, SAW, F, '', `${F}loop bars=1 bpm=120`, 'lead: C4 . . .', 'ghost: C2 . . .', F].join(
-      '\n',
-    );
-    // SAW spans two lines, so `ghost:` is the 10th line of the document.
-    expect(md.split('\n')[9]).toBe('ghost: C2 . . .');
+    const md = [
+      '# doc', // 1
+      '', // 2
+      `${F}synth id=lead`, // 3
+      SAW, // 4-5
+      F, // 6
+      '', // 7
+      `${F}phrase id=down res=1/16 bars=1`, // 8
+      'grid:', // 9
+      '  C4 |o...............|', // 10
+      F, // 11
+      '', // 12
+      `${F}loop bars=1 bpm=120`, // 13
+      'lead: down', // 14
+      'ghost: down', // 15
+      F,
+    ].join('\n');
+    expect(md.split('\n')[14]).toBe('ghost: down');
     const r = compile(md, SR);
-    expect(r.errors[0]!.line).toBe(10);
+    expect(r.errors[0]!.line).toBe(15);
     expect(r.errors[0]!.col).toBe(1);
   });
 
-  it('infers cells-per-beat independently per line', () => {
-    const sixteen = '. C4 . C4 . C4 . C4 . C4 . C4 . C4 . C4'; // 16 cells = 16ths
-    const eight = 'C2 . C2 . C2 . C2 .'; // 8 cells = 8ths
-    const r = compile(doc([['lead', SAW], ['bass', SAW]], [`lead: ${sixteen}`, `bass: ${eight}`].join('\n')), SR);
+  it('lets phrases on different tracks use different resolutions', () => {
+    const md = [
+      `${F}synth id=lead`,
+      SAW,
+      F,
+      `${F}synth id=bass`,
+      SAW,
+      F,
+      `${F}phrase id=fast res=1/16 bars=1`,
+      'grid:',
+      '  C4 |.o.o.o.o.o.o.o.o|',
+      F,
+      `${F}phrase id=slow res=1/8 bars=1`,
+      'grid:',
+      '  C2 |o.o.o.o.|',
+      F,
+      `${F}loop bars=1 bpm=120`,
+      'lead: fast',
+      'bass: slow',
+      F,
+    ].join('\n');
+    const r = compile(md, SR);
     expect(r.errors).toEqual([]);
     expect(r.loopMeta!.lines).toEqual([
-      { trackId: 'lead', track: 0, cells: 16, cellsPerBeat: 4 },
-      { trackId: 'bass', track: 1, cells: 8, cellsPerBeat: 2 },
+      { trackId: 'lead', track: 0, phraseId: 'fast', repeats: 1, cellsPerBeat: 4 },
+      { trackId: 'bass', track: 1, phraseId: 'slow', repeats: 1, cellsPerBeat: 2 },
     ]);
 
-    // Both lines span the same loop, so the grids line up: at 120bpm/48kHz a
-    // beat is 24000 samples — the 8th-note bass hits every 12000.
+    // Both phrases span the same loop: at 120bpm/48kHz a beat is 24000 samples,
+    // so the 8th-note bass hits every 12000 and the lead's first 16th is 6000.
     expect(r.loop!.lengthSamples).toBe(96000);
     const bassOns = r.loop!.events.filter((e) => e.track === 1 && e.kind === 0);
     expect(bassOns.map((e) => e.offsetSamples)).toEqual([0, 24000, 48000, 72000]);
     const leadOns = r.loop!.events.filter((e) => e.track === 0 && e.kind === 0);
-    expect(leadOns[0]!.offsetSamples).toBe(6000); // second 16th
+    expect(leadOns[0]!.offsetSamples).toBe(6000);
   });
 
   it('merges every line into one event list sorted by offset', () => {
     const r = compile(
-      doc([['a', SAW], ['b', SAW]], ['a: C4 . C4 . C4 . C4 .', 'b: . C2 . C2 . C2 . C2'].join('\n')),
+      doc([['a', SAW], ['b', SAW]], ['a: pulse', 'b: off'].join('\n'), 'bars=1 bpm=120', PHRASES),
       SR,
     );
     expect(r.errors).toEqual([]);
@@ -166,12 +228,18 @@ describe('multi-line loop', () => {
   });
 
   it('rejects two loop lines for the same track', () => {
-    const r = compile(doc([['lead', SAW]], ['lead: C4 . . .', 'lead: C3 . . .'].join('\n')), SR);
+    const r = compile(
+      doc([['lead', SAW]], ['lead: down', 'lead: up'].join('\n'), 'bars=1 bpm=120', PHRASES),
+      SR,
+    );
     expect(r.errors[0]!.message).toMatch(/duplicate loop line for track "lead"/);
   });
 
   it('numbers lines in order when parsed standalone (no trackIds)', () => {
-    const r = parseLoop(['a: C4 . . .', 'b: C2 . . .'].join('\n'), { bars: '1', bpm: '120' }, { sampleRate: SR });
+    const phrases = {
+      down: parsePhrase('grid:\n  C4 |o...............|', { id: 'down' }).phrase!,
+    };
+    const r = parseLoop(['a: down', 'b: down'].join('\n'), { bars: '1', bpm: '120' }, { sampleRate: SR, phrases });
     expect(r.errors).toEqual([]);
     expect(r.meta!.lines.map((l) => l.track)).toEqual([0, 1]);
   });
@@ -216,14 +284,21 @@ describe('the default document', () => {
     expect(r.bpm).toBe(126);
   });
 
-  it('has a loop line per track on a 16th grid', () => {
+  it('binds every track to a phrase on a 16th grid', () => {
     expect(r.loopMeta!.bars).toBe(1);
-    expect(r.loopMeta!.lines.map((l) => [l.trackId, l.track, l.cells, l.cellsPerBeat])).toEqual([
-      ['lead', 0, 16, 4],
-      ['bass', 1, 16, 4],
-      ['kick', 2, 16, 4],
-      ['hat', 3, 16, 4],
+    expect(r.loopMeta!.lines).toEqual([
+      { trackId: 'lead', track: 0, phraseId: 'verse-lead', repeats: 1, cellsPerBeat: 4 },
+      { trackId: 'bass', track: 1, phraseId: 'verse-bass', repeats: 1, cellsPerBeat: 4 },
+      { trackId: 'kick', track: 2, phraseId: 'four-floor', repeats: 1, cellsPerBeat: 4 },
+      { trackId: 'hat', track: 3, phraseId: 'offbeats', repeats: 1, cellsPerBeat: 4 },
     ]);
+  });
+
+  it('opens with canonical phrase text', () => {
+    for (const phrase of Object.values(r.phrases)) {
+      const fence = r.fences.find((f) => f.lang === 'phrase' && f.attrs['id'] === phrase.id)!;
+      expect(fence.body).toBe(formatPhrase(phrase));
+    }
   });
 
   it('puts the kick four-on-the-floor', () => {
@@ -231,12 +306,27 @@ describe('the default document', () => {
     const kicks = r.loop!.events.filter((e) => e.track === 2 && e.kind === 0);
     expect(kicks).toHaveLength(4);
     kicks.forEach((e, i) => expect(e.offsetSamples).toBe(Math.round(i * beat)));
-    expect(kicks.every((e) => e.note === 24)).toBe(true); // C1
+    expect(kicks.every((e) => e.note === 24)).toBe(true); // the kit's kick, C1
   });
 
-  it('keeps the lead chords and the noise-only hat', () => {
+  it('keeps the lead chords, strummed by the roll gesture', () => {
     const leadOns = r.loop!.events.filter((e) => e.track === 0 && e.kind === 0);
     expect(leadOns).toHaveLength(6); // two triads
+    // C minor over the first two beats: C4, Eb4, G4.
+    const first = leadOns.filter((e) => e.offsetSamples < (60 / 126) * SR);
+    expect(first.map((e) => e.note)).toEqual([60, 63, 67]);
+    // `roll: +9ms` spreads them from the bottom up.
+    expect(first.map((e) => e.offsetSamples)).toEqual([0, Math.round(0.009 * SR), Math.round(0.018 * SR)]);
+  });
+
+  it('accents the hat where the detail block says so', () => {
+    const hats = r.loop!.events.filter((e) => e.track === 3 && e.kind === 0);
+    expect(hats).toHaveLength(8);
+    expect(hats.filter((e) => Math.abs(e.velocity - 0.85) < 1e-6)).toHaveLength(2); // beat 2
+    expect(hats.filter((e) => Math.abs(e.velocity - 0.55) < 1e-6)).toHaveLength(6);
+  });
+
+  it('keeps the noise-only hat patch', () => {
     const hat = r.tracks.find((t) => t.id === 'hat')!;
     expect(hat.ir.noise.enabled).toBe(true);
     expect(hat.ir.osc.every((o) => !o.enabled)).toBe(true);

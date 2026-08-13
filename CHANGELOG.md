@@ -52,7 +52,38 @@ first tag will close this section.
 - **A published build.** GitHub Pages deploys the app on every push to `main`,
   after CI has passed.
 
+- **The note layer: `phrase` grids, groups and a detail cascade.** Notes now live
+  in ```` ```phrase ```` fences — an ASCII grid whose rows are pitches (scale
+  degrees, absolute pitches or kit names) and whose columns are cells of time —
+  and the ```` ```loop ```` fence became the arrangement, binding a track to a
+  phrase by id. A phrase repeats to fill the loop. Expression is addressed by
+  coordinate in an optional `detail:` block: `vel`, `nudge`, `gate`, `roll` and
+  `gliss`, resolved through a cascade where the most specific entry wins per
+  gesture and an address naming no note is an error. Notes sharing an onset and
+  a glyph are one group, which is what `roll` strums; grouping never changes
+  what you hear on its own.
+- **One structure, one spelling.** The formatter derives row order, group tags,
+  the beat ruler and the label alignment rather than preserving them, so
+  `format(format(x)) == format(x)` — checked as a property over generated
+  phrases. Fifteen operations (`web/src/dsl/ops.ts`) are the whole of what the
+  GUI and an agent can do to a phrase, each of them total, canonical and local:
+  placing a note rewrites one character, a detail entry one line, and the prose
+  around the fence survives byte-for-byte. A property test over generated
+  documents and operation sequences checks that applying an operation to the
+  text and to the parsed model agree, including when both refuse.
+
 ### Changed
+- **Notes moved out of the `loop` fence.** `lead: C4 . . .` no longer parses;
+  the same music is written as a `phrase` grid and the loop line names it. The
+  default document was rewritten accordingly, and the step sequencer now
+  projects a phrase grid — one row per pitch — where a tap places or clears a
+  note, a vertical drag moves it to another row and a horizontal one changes how
+  long it holds. Every gesture goes through the operation set.
+- **`LoopEvent` carries `glideS` and `legato`** so a `gliss` can say how long it
+  slides. Every other note passes `-1` and `0`, which is "use the patch's
+  `voice.glide`" — today's audio is unchanged. The worklet does not read them
+  yet: the extended `note_on` is Track B's (docs/workstreams.md §10), so a
+  glissando currently sounds its destination on time without sliding into it.
 - **The interface is in English.** Button labels, status lines, editor hints and
   the document the editor opens with were Japanese while the code around them
   was English. The repository convention now covers the app itself, not only its
@@ -61,6 +92,9 @@ first tag will close this section.
   untouched, only its prose and comments.
 
 ### Documentation
+- **[docs/syntax.md](docs/syntax.md) describes the note layer that runs**: the
+  `phrase` fence, row namespaces and the kit map, groups, the detail gestures
+  and the address cascade, and `loop` as the arrangement.
 - **MIT licence.**
 - **[docs/workstreams.md](docs/workstreams.md): the note layer, redesigned.** The
   current `loop` fence carries every track's notes inline, which cannot show the
@@ -72,7 +106,8 @@ first tag will close this section.
   proven to commute. Not implemented yet. The stream is split into two tracks
   with file ownership, landing order and per-step acceptance criteria written
   down, so a second agent can take one without reading the conversation the
-  design came out of.
+  design came out of. Track A — the note layer — is implemented; Track B, the
+  note-event ABI, is not.
 - **English is the source of truth.** The README and `docs/` are English;
   `docs/ja/` holds Japanese translations and the original design notes.
 - **[AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md) and this

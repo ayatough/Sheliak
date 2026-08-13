@@ -1,246 +1,143 @@
-// Step-sequencer model: a pure projection of one loop line.
+// Step-sequencer model: a pure projection of one `phrase` fence.
 //
-// parse → edit → render is a closed loop over TEXT. The grid never becomes a
-// second source of truth: every gesture regenerates that single line and the
-// document is re-parsed from scratch.
+// parse → operate → render is a closed loop over TEXT. The grid never becomes a
+// second source of truth: a gesture turns into one of the operations in
+// `dsl/ops.ts`, the operation patches the document, and the document is
+// re-parsed from scratch. Nothing in here holds state the markdown does not.
 
-import { tokenizeCells, noteToMidi, type Cell } from '../dsl/loop.ts';
-import { ErrorSink } from '../dsl/errors.ts';
-import { formatNote } from '../dsl/format.ts';
+import { cellCoords, formatAddress, type Phrase, type PhraseNote, type PhraseRow } from '../dsl/phrase.ts';
+import { canonicalTags } from '../dsl/phrase.ts';
+import type { Op } from '../dsl/ops.ts';
 
-export type CellKind = 'rest' | 'note' | 'tie';
+export type CellKind = 'rest' | 'onset' | 'hold';
 
-export interface GridCell {
+export interface SeqCell {
   kind: CellKind;
-  /** MIDI notes; length > 1 is a chord. Empty for rest/tie. */
-  notes: number[];
-  /** Original source token, reused verbatim while the notes are unchanged. */
-  raw: string;
+  /** Canonical group tag of the note sounding here; empty for a rest. */
+  tag: string;
+  /** Index into `SeqGrid.notes`, or -1. */
+  note: number;
 }
 
-export interface GridLine {
+export interface SeqRow {
+  label: string;
+  midi: number;
+  cells: SeqCell[];
+}
+
+export interface SeqGrid {
   trackId: string;
-  cells: GridCell[];
-  /** Inferred from the cell count: cells / (bars * 4). */
-  cellsPerBeat: number;
+  phraseId: string;
   bars: number;
+  cellsPerBeat: number;
+  totalCells: number;
+  rows: SeqRow[];
+  notes: PhraseNote[];
 }
 
-export const DEFAULT_NOTE = noteToMidi('C3') ?? 48;
+/** Read a phrase as a grid of rows and cells, in canonical (pitch) order. */
+export function projectPhrase(phrase: Phrase, trackId: string): SeqGrid {
+  const tags = canonicalTags(phrase.notes);
+  const rows: SeqRow[] = phrase.rows.map((row: PhraseRow) => ({
+    label: row.label,
+    midi: row.midi,
+    cells: Array.from({ length: phrase.totalCells }, () => ({ kind: 'rest', tag: '', note: -1 }) as SeqCell),
+  }));
 
-// ------------------------------------------------------------------- parsing
+  phrase.notes.forEach((note, i) => {
+    const row = rows[note.row];
+    if (!row) return;
+    for (let k = 0; k < note.length && note.onset + k < phrase.totalCells; k++) {
+      row.cells[note.onset + k] = {
+        kind: k === 0 ? 'onset' : 'hold',
+        tag: tags[i] as string,
+        note: i,
+      };
+    }
+  });
 
-/** Parse `lead: C3 . Eb3 .` into a grid model. Returns null when unusable. */
-export function parseGridLine(text: string, bars: number): GridLine | null {
-  const colon = text.indexOf(':');
-  if (colon < 0) return null;
-  const trackId = text.slice(0, colon).trim();
-  const sink = new ErrorSink();
-  const cells = tokenizeCells(text.slice(colon + 1), 1, 1, sink);
-  if (cells.length === 0) return null;
-
-  const beats = Math.max(1, bars * 4);
-  const cellsPerBeat = cells.length / beats;
   return {
     trackId,
-    bars,
-    cellsPerBeat: Number.isInteger(cellsPerBeat) && cellsPerBeat >= 1 ? cellsPerBeat : 0,
-    cells: cells.map(toGridCell),
+    phraseId: phrase.id,
+    bars: phrase.bars,
+    cellsPerBeat: phrase.cellsPerBeat,
+    totalCells: phrase.totalCells,
+    rows,
+    notes: phrase.notes,
   };
 }
 
-function toGridCell(cell: Cell): GridCell {
-  if (cell.tie) return { kind: 'tie', notes: [], raw: '~' };
-  if (cell.notes && cell.notes.length > 0) return { kind: 'note', notes: [...cell.notes], raw: cell.raw };
-  return { kind: 'rest', notes: [], raw: '.' };
+/** The note sounding at a cell, or null. */
+export function noteAt(grid: SeqGrid, row: number, cell: number): PhraseNote | null {
+  const at = grid.rows[row]?.cells[cell];
+  if (!at || at.note < 0) return null;
+  return grid.notes[at.note] ?? null;
 }
 
-// ----------------------------------------------------------------- rendering
-
-/** Cell → token, preferring the original spelling when the notes are intact. */
-export function cellText(cell: GridCell): string {
-  if (cell.kind === 'rest') return '.';
-  if (cell.kind === 'tie') return '~';
-  if (cell.raw && sameNotes(parseRaw(cell.raw), cell.notes)) return cell.raw;
-  const flat = cell.raw.includes('b');
-  const names = cell.notes.map((n) => formatNote(n, flat));
-  return names.length > 1 ? `[${names.join(' ')}]` : (names[0] ?? '.');
+/** A full-specificity address for one note: bar.beat.tick plus its row. */
+export function addressOf(phrase: Phrase, note: PhraseNote): string {
+  const at = cellCoords(phrase, note.onset);
+  return formatAddress({
+    bar: at.bar,
+    beat: at.beat,
+    tick: at.tick,
+    group: null,
+    row: (phrase.rows[note.row] as PhraseRow).label,
+  });
 }
 
-function parseRaw(raw: string): number[] {
-  const inner = raw.startsWith('[') ? raw.slice(1, -1) : raw;
-  const out: number[] = [];
-  for (const tok of inner.split(/\s+/).filter(Boolean)) {
-    const n = noteToMidi(tok);
-    if (n === null) return [];
-    out.push(n);
-  }
-  return out;
+// -------------------------------------------------------------------- gestures
+//
+// Every gesture is a function from a cell to an operation. Returning null means
+// "nothing to do" — the caller leaves the document alone rather than writing an
+// identical one.
+
+/** Tap: an empty cell gains a note, a sounding one loses it. */
+export function tapOp(phrase: Phrase, grid: SeqGrid, row: number, cell: number, length = 1): Op | null {
+  const note = noteAt(grid, row, cell);
+  if (note) return { kind: 'note.remove', address: addressOf(phrase, note) };
+  const label = grid.rows[row]?.label;
+  if (label === undefined) return null;
+  return { kind: 'note.add', row: label, onset: cell, length };
 }
 
-function sameNotes(a: number[], b: number[]): boolean {
-  return a.length === b.length && a.every((v, i) => v === b[i]);
+/** Vertical drag: move the note `steps` rows up (negative = down the list). */
+export function movePitchOp(phrase: Phrase, grid: SeqGrid, row: number, cell: number, steps: number): Op | null {
+  const note = noteAt(grid, row, cell);
+  if (!note || steps === 0) return null;
+  const target = grid.rows[clamp(row - steps, 0, grid.rows.length - 1)];
+  if (!target || target.label === grid.rows[row]?.label) return null;
+  return { kind: 'note.movePitch', address: addressOf(phrase, note), row: target.label };
 }
 
-/**
- * Regenerate the whole line, grouping cells per beat with `|` separators.
- * `pad` right-pads the `id:` prefix so stacked rows line up.
- */
-export function renderGridLine(line: GridLine, pad = 0): string {
-  const groups: string[] = [];
-  const per = line.cellsPerBeat > 0 ? line.cellsPerBeat : line.cells.length;
-  for (let i = 0; i < line.cells.length; i += per) {
-    groups.push(
-      line.cells
-        .slice(i, i + per)
-        .map((c) => cellText(c))
-        .join(' '),
-    );
-  }
-  const prefix = `${line.trackId}:`.padEnd(Math.max(pad, line.trackId.length + 1));
-  return `${prefix} ${groups.join(' | ')}`;
+/** Horizontal drag on a note's tail: change how many cells it holds. */
+export function resizeOp(phrase: Phrase, grid: SeqGrid, row: number, cell: number, cells: number): Op | null {
+  const note = noteAt(grid, row, cell);
+  if (!note) return null;
+  const length = clamp(cells, 1, grid.totalCells - note.onset);
+  if (length === note.length) return null;
+  return { kind: 'note.resize', address: addressOf(phrase, note), length };
 }
 
-/** A fresh all-rest line, used when a track has no loop line yet. */
-export function emptyGridLine(trackId: string, bars: number, cellsPerBeat = 4): GridLine {
-  const count = Math.max(1, bars * 4 * cellsPerBeat);
-  return {
-    trackId,
-    bars,
-    cellsPerBeat,
-    cells: Array.from({ length: count }, () => ({ kind: 'rest', notes: [], raw: '.' }) as GridCell),
-  };
+/** Two notes at one onset become a chord; a chord member can leave it. */
+export function groupOp(phrase: Phrase, grid: SeqGrid, row: number, cell: number): Op | null {
+  const note = noteAt(grid, row, cell);
+  if (!note) return null;
+  const address = addressOf(phrase, note);
+  const together = phrase.notes.filter((n) => n.onset === note.onset);
+  if (together.length < 2) return null;
+  const shared = together.filter((n) => n.tag === note.tag);
+  if (shared.length > 1) return { kind: 'group.detach', address };
+  return { kind: 'group.merge', addresses: together.map((n) => addressOf(phrase, n)) };
 }
 
-// -------------------------------------------------------------------- edits
-// All edits return a NEW line; the caller renders it and patches the document.
-
-function clone(line: GridLine): GridLine {
-  return { ...line, cells: line.cells.map((c) => ({ ...c, notes: [...c.notes] })) };
+/** Set one gesture on the note under the cursor. */
+export function velocityOp(phrase: Phrase, grid: SeqGrid, row: number, cell: number, vel: number): Op | null {
+  const note = noteAt(grid, row, cell);
+  if (!note) return null;
+  return { kind: 'detail.set', address: addressOf(phrase, note), key: 'vel', value: clamp(vel, 0, 1) };
 }
 
-/** The most recent note (or chord) at or before `index`. */
-export function noteBefore(line: GridLine, index: number): number[] | null {
-  for (let i = Math.min(index, line.cells.length) - 1; i >= 0; i--) {
-    const c = line.cells[i];
-    if (c && c.kind === 'note') return c.notes;
-  }
-  return null;
-}
-
-/** First note anywhere on the line — the natural pitch for a one-pitch track. */
-export function firstNote(line: GridLine): number[] | null {
-  for (const c of line.cells) if (c.kind === 'note') return c.notes;
-  return null;
-}
-
-/** Clear a cell to a rest, taking the tie chain that follows it with it. */
-export function clearCell(line: GridLine, index: number): GridLine {
-  const out = clone(line);
-  const cell = out.cells[index];
-  if (!cell) return out;
-  cell.kind = 'rest';
-  cell.notes = [];
-  cell.raw = '.';
-  for (let i = index + 1; i < out.cells.length; i++) {
-    const next = out.cells[i];
-    if (!next || next.kind !== 'tie') break;
-    next.kind = 'rest';
-    next.notes = [];
-    next.raw = '.';
-  }
-  return out;
-}
-
-export function placeNote(line: GridLine, index: number, notes: number[]): GridLine {
-  const out = clone(line);
-  const cell = out.cells[index];
-  if (!cell) return out;
-  cell.kind = 'note';
-  cell.notes = [...notes];
-  cell.raw = '';
-  return out;
-}
-
-/**
- * Tap behaviour: a rest becomes a note (last used pitch → line's first note →
- * C3), anything else clears. Single-pitch tracks therefore just toggle.
- */
-export function toggleCell(line: GridLine, index: number, lastUsed?: number[] | null): GridLine {
-  const cell = line.cells[index];
-  if (!cell) return line;
-  if (cell.kind === 'rest') {
-    const notes = lastUsed?.length ? lastUsed : (noteBefore(line, index) ?? firstNote(line) ?? [DEFAULT_NOTE]);
-    return placeNote(line, index, notes);
-  }
-  return clearCell(line, index);
-}
-
-/** Vertical drag: transpose a cell (chords move as a block). */
-export function transposeCell(line: GridLine, index: number, semitones: number): GridLine {
-  const cell = line.cells[index];
-  if (!cell || cell.kind !== 'note' || semitones === 0) return line;
-  const moved = cell.notes.map((n) => n + semitones);
-  if (moved.some((n) => n < 0 || n > 127)) return line;
-  const out = clone(line);
-  const target = out.cells[index] as GridCell;
-  target.notes = moved;
-  // Keep the accidental style of the original spelling.
-  target.raw = target.raw.includes('b') ? 'b' : '';
-  return out;
-}
-
-/** Tie mode: extend the previous note through this cell. */
-export function setTieCell(line: GridLine, index: number): GridLine {
-  if (index <= 0) return line;
-  if (!noteBefore(line, index)) return line; // nothing to extend
-  const out = clone(line);
-  const cell = out.cells[index];
-  if (!cell) return out;
-  cell.kind = 'tie';
-  cell.notes = [];
-  cell.raw = '~';
-  return out;
-}
-
-export type ResampleResult = { ok: true; line: GridLine } | { ok: false; reason: string };
-
-/**
- * Change a line's resolution (e.g. 1/8 ⇔ 1/16).
- * Up: each cell is padded with a tie (notes keep their duration) or a rest.
- * Down: only whole groups collapse, and only when no onset would be lost.
- */
-export function resampleLine(line: GridLine, targetCellsPerBeat: number): ResampleResult {
-  const from = line.cellsPerBeat;
-  if (from <= 0) return { ok: false, reason: 'line resolution is unknown' };
-  if (targetCellsPerBeat === from) return { ok: true, line };
-
-  if (targetCellsPerBeat > from) {
-    const factor = targetCellsPerBeat / from;
-    if (!Number.isInteger(factor)) return { ok: false, reason: 'resolutions must be multiples of each other' };
-    const cells: GridCell[] = [];
-    for (const cell of line.cells) {
-      cells.push({ ...cell, notes: [...cell.notes] });
-      for (let k = 1; k < factor; k++) {
-        // Sustain notes/ties, keep rests silent — durations stay identical.
-        cells.push(
-          cell.kind === 'rest'
-            ? { kind: 'rest', notes: [], raw: '.' }
-            : { kind: 'tie', notes: [], raw: '~' },
-        );
-      }
-    }
-    return { ok: true, line: { ...line, cells, cellsPerBeat: targetCellsPerBeat } };
-  }
-
-  const factor = from / targetCellsPerBeat;
-  if (!Number.isInteger(factor)) return { ok: false, reason: 'resolutions must be multiples of each other' };
-  for (let i = 0; i < line.cells.length; i++) {
-    if (i % factor === 0) continue;
-    if ((line.cells[i] as GridCell).kind === 'note') {
-      return { ok: false, reason: `a note on step ${i + 1} would be lost — clear the off-grid notes first` };
-    }
-  }
-  const cells = line.cells.filter((_, i) => i % factor === 0).map((c) => ({ ...c, notes: [...c.notes] }));
-  return { ok: true, line: { ...line, cells, cellsPerBeat: targetCellsPerBeat } };
+export function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
 }

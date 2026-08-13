@@ -208,6 +208,15 @@ function parseBlockSeq(state: State, indent: number): YSeq {
   return seq;
 }
 
+/**
+ * Parse one value in isolation — a flow map, a flow sequence or a scalar.
+ * `phrase.ts` uses it for the `{ ... }` half of a detail entry, whose key is an
+ * address rather than a YAML key.
+ */
+export function parseInlineValue(text: string, pos: Pos, errors: DslError[]): YNode {
+  return parseInline(text, pos, errors);
+}
+
 /** Parse the value part of a line: flow map, flow seq, or plain scalar. */
 function parseInline(text: string, pos: Pos, errors: DslError[]): YNode {
   const head = text[0];

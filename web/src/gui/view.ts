@@ -1,23 +1,24 @@
 // Thin DOM binding for the sequencer grid and the parameter panel.
 //
-// All decisions live in sequencer.ts / schema.ts / panel.ts / edit.ts; this file
-// only turns them into elements and pointer handlers. Every gesture ends in a
-// text patch handed to `host.setDoc`, which re-renders everything from the
-// re-parsed document — the GUI never holds state the markdown does not.
+// All decisions live in sequencer.ts / ops.ts / schema.ts / panel.ts / edit.ts;
+// this file only turns them into elements and pointer handlers. Every gesture
+// ends in an operation handed to `ops.applyText`, whose patched document goes
+// to `host.setDoc` and comes back re-parsed — the GUI never holds state the
+// markdown does not.
 
 import type { CompileResult, CompiledTrack } from '../dsl/compile.ts';
-import { setLoopLine, appendLoopLine, setLoopAttr, loopLines } from '../dsl/edit.ts';
-import { formatNote } from '../dsl/format.ts';
+import { setLoopAttr } from '../dsl/edit.ts';
+import { applyText, type Op } from '../dsl/ops.ts';
+import type { Phrase } from '../dsl/phrase.ts';
 import {
-  parseGridLine,
-  renderGridLine,
-  emptyGridLine,
-  cellText,
-  toggleCell,
-  transposeCell,
-  setTieCell,
-  resampleLine,
-  type GridLine,
+  projectPhrase,
+  noteAt,
+  tapOp,
+  movePitchOp,
+  resizeOp,
+  groupOp,
+  clamp,
+  type SeqGrid,
 } from './sequencer.ts';
 import { buildPanel, type FieldSpec, type PanelSection } from './schema.ts';
 import { toSlider, fromSlider, displayValue, writeField, fieldStatus } from './panel.ts';
@@ -35,11 +36,11 @@ export interface GuiElements {
   params: HTMLElement;
   bars: HTMLInputElement;
   bpm: HTMLInputElement;
-  tieMode: HTMLButtonElement;
+  chordMode: HTMLButtonElement;
 }
 
-/** Pixels of vertical travel per semitone when dragging a cell. */
-const PX_PER_SEMITONE = 11;
+/** Pixels of vertical travel per row when dragging a note to another pitch. */
+const PX_PER_ROW = 22;
 const DRAG_THRESHOLD = 6;
 /** Slider writeback rate while dragging. */
 const WRITE_INTERVAL_MS = 33;
@@ -47,21 +48,19 @@ const WRITE_INTERVAL_MS = 33;
 export class GuiView {
   private result: CompileResult | null = null;
   private selectedTrack = 0;
-  private tieMode = false;
+  private chordMode = false;
   /** Set while a control is being manipulated, to defer rebuilds. */
   private dragging = false;
   private pendingResult: CompileResult | null = null;
-  /** Last note the user placed per track, so taps repeat their pitch. */
-  private lastNote = new Map<number, number[]>();
 
   constructor(
     private readonly el: GuiElements,
     private readonly host: GuiHost,
   ) {
-    this.el.tieMode.addEventListener('click', () => {
-      this.tieMode = !this.tieMode;
-      this.el.tieMode.classList.toggle('on', this.tieMode);
-      this.host.hint(this.tieMode ? 'tie mode: tap a cell to extend the note before it' : '');
+    this.el.chordMode.addEventListener('click', () => {
+      this.chordMode = !this.chordMode;
+      this.el.chordMode.classList.toggle('on', this.chordMode);
+      this.host.hint(this.chordMode ? 'chord mode: tap a note to join or leave the group at its onset' : '');
     });
     this.el.bars.addEventListener('change', () => this.setLoopAttr('bars', this.el.bars.value));
     this.el.bpm.addEventListener('change', () => this.setLoopAttr('bpm', this.el.bpm.value));
@@ -101,77 +100,92 @@ export class GuiView {
     const seq = this.el.seq;
     seq.textContent = '';
 
-    const bars = result.loopMeta?.bars ?? 1;
-    const refs = loopLines(this.host.getDoc());
+    const bound = new Map((result.loopMeta?.lines ?? []).map((l) => [l.track, l]));
 
     for (let track = 0; track < result.trackCount; track++) {
       const id = this.trackId(track);
-      const ref = refs.find((r) => r.trackId === id);
-      const row = document.createElement('div');
-      row.className = 'seq-row';
+      const line = bound.get(track);
+      const phrase = line ? result.phrases[line.phraseId] : undefined;
 
-      const label = document.createElement('div');
-      label.className = 'seq-label';
-      label.textContent = id;
-      row.appendChild(label);
-
-      if (!ref) {
-        // Declared synth with no loop line yet.
-        label.classList.add('muted');
-        const add = document.createElement('button');
-        add.type = 'button';
-        add.className = 'seq-add';
-        add.textContent = `+ add a loop line for ${id}`;
-        add.addEventListener('click', () => this.addLine(id, bars));
-        row.appendChild(add);
-        seq.appendChild(row);
+      if (!line) {
+        seq.appendChild(this.noteRow(id, 'no loop line — add `' + id + ': <phrase id>` to the loop fence'));
         continue;
       }
-
-      const line = parseGridLine(`${id}:${ref.cellsText}`, bars);
-      if (!line || line.cellsPerBeat === 0) {
-        label.classList.add('muted');
-        const warn = document.createElement('div');
-        warn.className = 'seq-label muted';
-        warn.textContent = 'this line does not fit the grid — edit it as text';
-        row.appendChild(warn);
-        seq.appendChild(row);
+      if (!phrase) {
+        seq.appendChild(this.noteRow(id, `phrase "${line.phraseId}" does not parse — fix it as text`));
         continue;
       }
-
-      row.appendChild(this.buildCells(track, line));
-      row.appendChild(this.buildResolution(line));
-      seq.appendChild(row);
+      seq.appendChild(this.buildPhrase(id, phrase));
     }
   }
 
-  private buildCells(track: number, line: GridLine): HTMLElement {
+  /** A muted stand-in for a track with nothing playable to show. */
+  private noteRow(id: string, message: string): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'seq-row';
+    const label = document.createElement('div');
+    label.className = 'seq-label muted';
+    label.textContent = id;
+    const text = document.createElement('div');
+    text.className = 'seq-label muted';
+    text.textContent = message;
+    row.append(label, text);
+    return row;
+  }
+
+  private buildPhrase(trackId: string, phrase: Phrase): HTMLElement {
+    const grid = projectPhrase(phrase, trackId);
+    const box = document.createElement('div');
+    box.className = 'seq-phrase';
+
+    const head = document.createElement('div');
+    head.className = 'seq-row';
+    const who = document.createElement('div');
+    who.className = 'seq-label';
+    who.textContent = trackId;
+    const what = document.createElement('div');
+    what.className = 'seq-label muted';
+    // Key and scale mean nothing to a kit, so a percussion phrase omits them.
+    const tuning = phrase.namespace === 'percussion' ? '' : `${phrase.key} ${phrase.scale}  `;
+    what.textContent = `${phrase.id}  ${tuning}${phrase.res}`;
+    head.append(who, what);
+    box.appendChild(head);
+
+    grid.rows.forEach((row, r) => {
+      const line = document.createElement('div');
+      line.className = 'seq-row';
+      const label = document.createElement('div');
+      label.className = 'seq-label';
+      label.textContent = row.label;
+      line.appendChild(label);
+      line.appendChild(this.buildCells(phrase, grid, r));
+      box.appendChild(line);
+    });
+
+    return box;
+  }
+
+  private buildCells(phrase: Phrase, grid: SeqGrid, r: number): HTMLElement {
     const wrap = document.createElement('div');
     wrap.className = 'seq-cells';
-    wrap.style.setProperty('--cells', String(line.cells.length));
-    wrap.dataset['track'] = String(track);
+    wrap.style.setProperty('--cells', String(grid.totalCells));
 
-    line.cells.forEach((cell, index) => {
+    const row = grid.rows[r];
+    if (!row) return wrap;
+
+    row.cells.forEach((cell, index) => {
       const el = document.createElement('div');
       el.className = `cell ${cell.kind}`;
-      if (cell.notes.length > 1) el.classList.add('chord');
-      if (index % line.cellsPerBeat === 0) el.classList.add('beat');
-      el.textContent = '';
-      if (cell.kind === 'note') {
-        if (cell.notes.length > 1) {
-          for (const n of cell.notes) {
-            const s = document.createElement('span');
-            s.className = 'stack';
-            s.textContent = formatNote(n, cell.raw.includes('b'));
-            el.appendChild(s);
-          }
-        } else {
-          el.textContent = cellText(cell);
-        }
-      } else if (cell.kind === 'tie') {
-        el.textContent = '~';
+      if (index % grid.cellsPerBeat === 0) el.classList.add('beat');
+      if (cell.kind === 'onset') {
+        // A tag other than `o` means the note shares its onset with another
+        // group — worth seeing, since that is what `roll` acts on.
+        if (cell.tag !== 'o') el.classList.add('chord');
+        el.textContent = cell.tag === 'o' ? '' : cell.tag;
+      } else if (cell.kind === 'hold') {
+        el.textContent = '';
       }
-      this.bindCell(el, track, line, index);
+      this.bindCell(el, phrase, grid, r, index);
       wrap.appendChild(el);
     });
 
@@ -181,44 +195,39 @@ export class GuiView {
     return wrap;
   }
 
-  /** Tap = toggle (or tie), vertical drag on a note = transpose. */
-  private bindCell(el: HTMLElement, track: number, line: GridLine, index: number): void {
+  /**
+   * Tap toggles a note (or joins a group in chord mode); a vertical drag moves
+   * it to another row, a horizontal one changes how long it holds.
+   */
+  private bindCell(el: HTMLElement, phrase: Phrase, grid: SeqGrid, row: number, cell: number): void {
     el.addEventListener('pointerdown', (ev: PointerEvent) => {
       ev.preventDefault();
-      const cell = line.cells[index];
-      if (!cell) return;
+      const startX = ev.clientX;
       const startY = ev.clientY;
-      const canTranspose = cell.kind === 'note';
+      const width = Math.max(el.getBoundingClientRect().width, 1);
+      const note = noteAt(grid, row, cell);
       let moved = false;
-      let semis = 0;
       el.setPointerCapture(ev.pointerId);
       this.dragging = true;
       el.classList.add('dragging');
 
+      let pending: Op | null = null;
+
       const onMove = (m: PointerEvent) => {
-        if (!canTranspose) return;
+        if (!note) return;
+        const dx = m.clientX - startX;
         const dy = startY - m.clientY;
-        if (!moved && Math.abs(dy) < DRAG_THRESHOLD) return;
+        if (!moved && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
         moved = true;
-        const next = Math.round(dy / PX_PER_SEMITONE);
-        if (next === semis) return;
-        semis = next;
-        // Live feedback without touching the document yet.
-        const preview = transposeCell(line, index, semis).cells[index];
-        if (preview) {
-          el.textContent = '';
-          if (preview.notes.length > 1) {
-            for (const n of preview.notes) {
-              const s = document.createElement('span');
-              s.className = 'stack';
-              s.textContent = formatNote(n);
-              el.appendChild(s);
-            }
-          } else {
-            el.textContent = cellText(preview);
-          }
+        if (Math.abs(dy) >= Math.abs(dx)) {
+          const steps = Math.round(dy / PX_PER_ROW);
+          pending = movePitchOp(phrase, grid, row, cell, steps);
+          this.host.hint(steps === 0 ? '' : `move ${steps > 0 ? 'up' : 'down'} ${Math.abs(steps)} row`);
+        } else {
+          const cells = clamp(note.length + Math.round(dx / width), 1, grid.totalCells - note.onset);
+          pending = resizeOp(phrase, grid, row, cell, cells);
+          this.host.hint(`${cells} cell${cells === 1 ? '' : 's'}`);
         }
-        this.host.hint(semis === 0 ? '' : `transpose ${semis > 0 ? '+' : ''}${semis}st`);
       };
 
       const onUp = () => {
@@ -227,22 +236,14 @@ export class GuiView {
         el.removeEventListener('pointercancel', onUp);
         el.classList.remove('dragging');
         this.host.hint('');
-
-        let next: GridLine;
-        if (moved && semis !== 0) {
-          next = transposeCell(line, index, semis);
-          const notes = next.cells[index]?.notes;
-          if (notes?.length) this.lastNote.set(track, notes);
-        } else if (this.tieMode) {
-          next = setTieCell(line, index);
-          if (next === line) this.host.hint('only a cell with a note before it can be tied');
-        } else {
-          next = toggleCell(line, index, this.lastNote.get(track));
-          const notes = next.cells[index]?.notes;
-          if (notes?.length) this.lastNote.set(track, notes);
-        }
         this.dragging = false;
-        if (next !== line) this.commitLine(next);
+
+        const op = moved
+          ? pending
+          : this.chordMode
+            ? groupOp(phrase, grid, row, cell)
+            : tapOp(phrase, grid, row, cell);
+        if (op) this.commit(phrase.id, op);
         else this.endDrag();
       };
 
@@ -252,60 +253,13 @@ export class GuiView {
     });
   }
 
-  private buildResolution(line: GridLine): HTMLElement {
-    const sel = document.createElement('select');
-    sel.className = 'res-select';
-    for (const [label, value] of [
-      ['1/8', 2],
-      ['1/16', 4],
-    ] as const) {
-      const opt = document.createElement('option');
-      opt.value = String(value);
-      opt.textContent = label;
-      if (line.cellsPerBeat === value) opt.selected = true;
-      sel.appendChild(opt);
-    }
-    if (line.cellsPerBeat !== 2 && line.cellsPerBeat !== 4) {
-      const opt = document.createElement('option');
-      opt.value = String(line.cellsPerBeat);
-      opt.textContent = `1/${line.cellsPerBeat * 4}`;
-      opt.selected = true;
-      sel.appendChild(opt);
-    }
-    sel.addEventListener('change', () => {
-      const r = resampleLine(line, Number(sel.value));
-      if (!r.ok) {
-        this.host.hint(r.reason);
-        // Put the select back where it was; the text is unchanged.
-        if (this.result) this.render(this.result);
-        return;
-      }
-      this.commitLine(r.line);
-    });
-    return sel;
-  }
-
-  private commitLine(line: GridLine): void {
+  private commit(phraseId: string, op: Op): void {
     this.dragging = false;
     this.pendingResult = null;
-    const r = setLoopLine(this.host.getDoc(), line.trackId, renderGridLine(line, this.labelPad()));
+    const r = applyText(this.host.getDoc(), phraseId, op);
     if (!r.ok) {
       this.host.hint(r.reason);
-      return;
-    }
-    this.host.setDoc(r.doc);
-  }
-
-  private labelPad(): number {
-    const ids = loopLines(this.host.getDoc()).map((l) => l.trackId.length);
-    return Math.max(0, ...ids) + 2;
-  }
-
-  private addLine(trackId: string, bars: number): void {
-    const line = emptyGridLine(trackId, bars);
-    const r = appendLoopLine(this.host.getDoc(), renderGridLine(line, this.labelPad()));
-    if (!r.ok) {
-      this.host.hint(r.reason);
+      if (this.result) this.render(this.result);
       return;
     }
     this.host.setDoc(r.doc);

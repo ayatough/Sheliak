@@ -3,6 +3,7 @@
 import './style.css';
 import { AudioEngine, type EngineState } from './audio/engine.ts';
 import { compile, type CompileResult } from './dsl/compile.ts';
+import { phraseExpandedLines } from './dsl/phrase.ts';
 import { GuiView } from './gui/view.ts';
 import { DEFAULT_DOC } from './defaultDoc.ts';
 
@@ -65,7 +66,7 @@ const gui = new GuiView(
     params: $<HTMLElement>('params'),
     bars: $<HTMLInputElement>('loop-bars'),
     bpm: $<HTMLInputElement>('loop-bpm'),
-    tieMode: $<HTMLButtonElement>('tie-mode'),
+    chordMode: $<HTMLButtonElement>('chord-mode'),
   },
   {
     getDoc: () => editor.value,
@@ -144,18 +145,33 @@ function formatLoop(result: CompileResult): string {
     head =
       `# ${meta.id || 'loop'}  bars=${meta.bars}  bpm=${meta.bpm}  sampleRate=${currentSampleRate()}\n` +
       meta.lines
-        .map((l) => `#   [${l.track}] ${l.trackId}: ${l.cells} cells (${l.cellsPerBeat}/beat)\n`)
+        .map(
+          (l) =>
+            `#   [${l.track}] ${l.trackId}: ${l.phraseId} ×${l.repeats} (1/${l.cellsPerBeat * 4} grid)\n`,
+        )
         .join('');
   }
+
+  // The expanded view for phrases (docs/workstreams.md §5): what each note ends
+  // up sounding like, and which detail entry decided it.
+  const expanded = Object.values(result.phrases)
+    .map((phrase) => [`# phrase ${phrase.id}`, ...phraseExpandedLines(phrase).map((l) => `#   ${l}`)].join('\n'))
+    .join('\n');
+
   const lines = loop.events.map((e) => {
     const who = names.get(e.track) ?? `track${e.track}`;
     return (
       `${String(e.offsetSamples).padStart(8)}  ${e.kind === 0 ? 'on ' : 'off'}  ` +
       `${who.padEnd(6)} note=${e.note}` +
-      (e.kind === 0 ? `  vel=${e.velocity}` : '')
+      (e.kind === 0 ? `  vel=${round3(e.velocity)}` : '') +
+      (e.legato ? `  glide=${round3(e.glideS)}s legato` : '')
     );
   });
-  return `${head}lengthSamples = ${loop.lengthSamples}\n${lines.join('\n')}`;
+  return `${head}${expanded ? `${expanded}\n` : ''}lengthSamples = ${loop.lengthSamples}\n${lines.join('\n')}`;
+}
+
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
 }
 
 /** One collapsible expanded-parameter panel per track, labelled by id. */

@@ -1,16 +1,28 @@
-// `loop` fence → Loop IR (docs/architecture.md, docs/syntax.md).
+// `loop` fence → Loop IR (docs/workstreams.md §6, docs/syntax.md).
 //
-//   ```loop id=demo bars=2 bpm=124
-//   lead: C3 . Eb3 . | G3 ~ ~ . | Bb3 . . . | C4 ~ ~ ~
+//   ```loop id=groove bars=1 bpm=126
+//   lead: verse-lead
+//   bass: verse-bass
+//   kick: four-floor
 //   ```
 //
-//   `.` rest, `~` tie (extends the previous cell), `|` visual bar/beat marker
-//   (ignored for timing), `[C3 Eb3 G3]` a chord inside one cell.
-//
-// Cells-per-beat is inferred: totalCells / (bars * 4).
+// The loop is the arrangement: each line binds a track — a `synth` fence's id,
+// resolved to a track index by fence order — to a `phrase` fence's id. The
+// notes themselves live in the phrase (`phrase.ts`); this file turns them into
+// sample-accurate events, which is where the detail block's gestures stop being
+// text and become timing, velocity and glide.
 
 import { ErrorSink, type DslError, type Pos } from './errors.ts';
 import { samplesPerBeat } from './units.ts';
+import { keyToPitchClass, resolveRowLabel } from './pitch.ts';
+import {
+  groupMembers,
+  resolveGestures,
+  DEFAULT_VELOCITY,
+  type Phrase,
+  type PhraseNote,
+  type PhraseRow,
+} from './phrase.ts';
 
 export interface LoopEvent {
   offsetSamples: number;
@@ -20,6 +32,14 @@ export interface LoopEvent {
   kind: 0 | 1;
   note: number;
   velocity: number;
+  /**
+   * Glide time in seconds for this note (§10). `-1` means "use the patch's
+   * `voice.glide`", which is every note that is not the destination of a
+   * glissando — so today's audio is unchanged.
+   */
+  glideS: number;
+  /** 1 suppresses the amplitude-envelope retrigger, so a slide is one note. */
+  legato: 0 | 1;
 }
 
 export interface LoopIR {
@@ -27,11 +47,14 @@ export interface LoopIR {
   events: LoopEvent[];
 }
 
-/** One `id: <cells>` line. Subdivision is inferred per line. */
+/** One `trackId: phraseId` line. */
 export interface LoopLineMeta {
   trackId: string;
   track: number;
-  cells: number;
+  phraseId: string;
+  /** How many times the phrase repeats to fill the loop. */
+  repeats: number;
+  /** Cells per beat of the bound phrase, for the sequencer. */
   cellsPerBeat: number;
 }
 
@@ -51,6 +74,8 @@ export interface LoopParseOptions {
    * keeps `parseLoop` usable standalone.
    */
   trackIds?: Record<string, number>;
+  /** Every `phrase` fence in the document, by id. */
+  phrases?: Record<string, Phrase>;
 }
 
 export interface LoopParseResult {
@@ -59,20 +84,12 @@ export interface LoopParseResult {
   errors: DslError[];
 }
 
-/** MVP: single fixed velocity. */
-export const DEFAULT_VELOCITY = 1.0;
-
 const DEFAULT_BARS = 1;
 const DEFAULT_BPM = 120;
+/** `glide_s < 0` keeps the patch's own `voice.glide` (§10). */
+export const PATCH_GLIDE = -1;
 
-export interface Cell {
-  /** MIDI notes; empty = rest, null = tie (extend previous). */
-  notes: number[] | null;
-  tie: boolean;
-  pos: Pos;
-  /** The original source token, so regeneration can keep its spelling. */
-  raw: string;
-}
+export { DEFAULT_VELOCITY };
 
 export function parseLoop(
   body: string,
@@ -96,15 +113,12 @@ export function parseLoop(
   }
 
   if (trackLines.length === 0) {
-    sink.push(fencePos, 'loop needs at least one track line, e.g. "lead: C3 . Eb3 ."');
+    sink.push(fencePos, 'loop needs at least one track line, e.g. "lead: verse-lead"');
     return { loop: null, meta: null, errors: sink.errors };
   }
 
-  // Every line spans the same musical length, so the loop length comes from the
-  // bar count — lines only differ in how finely they subdivide it.
   const spb = samplesPerBeat(bpm, opts.sampleRate);
-  const beats = bars * 4;
-  const lengthSamples = Math.round(beats * spb);
+  const lengthSamples = Math.round(bars * 4 * spb);
 
   const events: LoopEvent[] = [];
   const lineMetas: LoopLineMeta[] = [];
@@ -113,15 +127,14 @@ export function parseLoop(
   for (const line of trackLines) {
     const colon = line.text.indexOf(':');
     if (colon < 0) {
-      sink.push({ line: line.n, col: 1 }, 'expected "trackId: <cells>"');
+      sink.push({ line: line.n, col: 1 }, 'expected "trackId: phraseId"');
       continue;
     }
     const trackIdCol = line.text.length - line.text.trimStart().length + 1;
     const trackId = line.text.slice(0, colon).trim();
-    const cellsSrc = line.text.slice(colon + 1);
-    const cellsCol = colon + 2;
+    const phraseId = line.text.slice(colon + 1).trim();
+    const phraseCol = colon + 2 + (line.text.slice(colon + 1).length - line.text.slice(colon + 1).trimStart().length);
 
-    // v0.3: a line binds to the synth fence with the same id.
     let track: number;
     if (opts.trackIds) {
       const resolved = opts.trackIds[trackId];
@@ -136,7 +149,6 @@ export function parseLoop(
       }
       track = resolved;
     } else {
-      // Standalone parse (tests/tools): number the lines in order.
       track = lineMetas.length;
     }
 
@@ -146,154 +158,193 @@ export function parseLoop(
     }
     seenIds.add(trackId);
 
-    const cells = tokenizeCells(cellsSrc, line.n, cellsCol, sink);
-    if (cells.length === 0) {
-      sink.push({ line: line.n, col: cellsCol }, 'track has no cells');
+    if (phraseId === '') {
+      sink.push({ line: line.n, col: phraseCol }, `track "${trackId}" names no phrase`);
       continue;
     }
-
-    // Cells per beat is inferred per line: 16 cells over 1 bar = 16th notes.
-    const cellsPerBeat = cells.length / beats;
-    if (!Number.isInteger(cellsPerBeat) || cellsPerBeat < 1) {
+    if (/\s/.test(phraseId)) {
       sink.push(
-        { line: line.n, col: cellsCol },
-        `cell count ${cells.length} is not divisible by bars*4 (${beats}) — cells per beat would be ${round(cellsPerBeat)}`,
+        { line: line.n, col: phraseCol },
+        `"${phraseId}" is not a phrase id — a loop line binds one track to one phrase`,
       );
       continue;
     }
 
-    lineMetas.push({ trackId, track, cells: cells.length, cellsPerBeat });
-    emitLineEvents(cells, track, spb / cellsPerBeat, events, sink);
+    const phrase = opts.phrases?.[phraseId];
+    if (!phrase) {
+      const known = Object.keys(opts.phrases ?? {});
+      sink.push(
+        { line: line.n, col: phraseCol },
+        `undefined phrase "${phraseId}"` + (known.length ? ` (known: ${known.join(', ')})` : ''),
+      );
+      continue;
+    }
+
+    const repeats = bars / phrase.bars;
+    if (!Number.isInteger(repeats) || repeats < 1) {
+      sink.push(
+        { line: line.n, col: phraseCol },
+        `loop is ${bars} bar${bars === 1 ? '' : 's'} but phrase "${phraseId}" is ${phrase.bars} — the loop length must be a multiple of the phrase length`,
+      );
+      continue;
+    }
+
+    lineMetas.push({ trackId, track, phraseId, repeats, cellsPerBeat: phrase.cellsPerBeat });
+    emitPhrase(phrase, track, repeats, spb, opts.sampleRate, lengthSamples, events, sink, {
+      line: line.n,
+      col: phraseCol,
+    });
   }
 
   const meta: LoopMeta = { id, bars, bpm, lines: lineMetas };
   if (!sink.ok) return { loop: null, meta, errors: sink.errors };
 
-  // noteOff before noteOn when they land on the same sample.
-  events.sort(
-    (a, b) => a.offsetSamples - b.offsetSamples || b.kind - a.kind || a.track - b.track || a.note - b.note,
-  );
-
-  return { loop: { lengthSamples, events }, meta, errors: [] };
+  return { loop: { lengthSamples, events: sortEvents(events) }, meta, errors: [] };
 }
 
-/** Turn one line's cells into note events (ties extend, rests close a run). */
-function emitLineEvents(
-  cells: Cell[],
+/** noteOff before noteOn on the same sample; emission order breaks the rest. */
+function sortEvents(events: LoopEvent[]): LoopEvent[] {
+  return events
+    .map((event, index) => ({ event, index }))
+    .sort((a, b) =>
+      a.event.offsetSamples - b.event.offsetSamples ||
+      b.event.kind - a.event.kind ||
+      a.index - b.index)
+    .map((e) => e.event);
+}
+
+// ------------------------------------------------------------ phrase → events
+
+function emitPhrase(
+  phrase: Phrase,
   track: number,
-  cellSamples: number,
+  repeats: number,
+  samplesPerBeatValue: number,
+  sampleRate: number,
+  lengthSamples: number,
   out: LoopEvent[],
   sink: ErrorSink,
+  pos: Pos,
 ): void {
-  let runNotes: number[] | null = null;
-  let runStart = 0;
+  const cellSamples = samplesPerBeatValue / phrase.cellsPerBeat;
+  const tonic = keyToPitchClass(phrase.key) ?? 0;
 
-  const closeRun = (endCell: number) => {
-    if (!runNotes) return;
-    const off = Math.max(Math.round(endCell * cellSamples) - 1, Math.round(runStart * cellSamples));
-    for (const note of runNotes) {
-      out.push({ offsetSamples: off, track, kind: 1, note, velocity: 0 });
-    }
-    runNotes = null;
-  };
+  for (let repeat = 0; repeat < repeats; repeat++) {
+    const base = repeat * phrase.totalCells * cellSamples;
 
-  for (let i = 0; i < cells.length; i++) {
-    const cell = cells[i] as Cell;
-    if (cell.tie) {
-      if (!runNotes) sink.push(cell.pos, 'tie "~" has no preceding note');
-      continue;
-    }
-    // rest or new note: the previous run ends here
-    closeRun(i);
-    if (cell.notes && cell.notes.length > 0) {
-      runStart = i;
-      runNotes = cell.notes;
-      const on = Math.round(i * cellSamples);
-      for (const note of cell.notes) {
-        out.push({ offsetSamples: on, track, kind: 0, note, velocity: DEFAULT_VELOCITY });
+    for (const note of phrase.notes) {
+      const row = phrase.rows[note.row] as PhraseRow;
+      const gestures = resolveGestures(phrase, note);
+      const velocity = clamp01(gestures.vel ?? DEFAULT_VELOCITY);
+      const gate = gestures.gate ?? 1;
+      const nudge = (gestures.nudge ?? 0) + rollOffset(phrase, note, gestures.roll);
+
+      const start = base + note.onset * cellSamples + nudge * sampleRate;
+      const sounding = note.length * cellSamples * gate;
+      const on = clampSample(Math.round(start), lengthSamples);
+      const off = clampSample(Math.max(Math.round(start + sounding) - 1, on), lengthSamples);
+
+      if (!gestures.gliss) {
+        out.push(event(on, track, 0, row.midi, velocity, PATCH_GLIDE, 0));
+        out.push(event(off, track, 1, row.midi, 0, PATCH_GLIDE, 0));
+        continue;
       }
+
+      // A glissando is two note_ons on one voice: the note itself, then its
+      // destination with a glide time and the legato flag, so the amplitude
+      // envelope does not retrigger and the slide is heard as one note (§10).
+      const target = glissTarget(phrase, note, tonic, sink, pos);
+      if (target === null) continue;
+      const slideCells = gestures.gliss.cells ?? cellsToNextOnset(phrase, note);
+      const glide = (slideCells * cellSamples) / sampleRate;
+
+      out.push(event(on, track, 0, row.midi, velocity, PATCH_GLIDE, 0));
+      out.push(event(on, track, 0, target, velocity, glide, 1));
+      out.push(event(off, track, 1, target, 0, PATCH_GLIDE, 0));
+      // Until the engine takes the legato flag (Track B), the first note_on is
+      // a voice of its own; releasing it here keeps a slide from droning.
+      out.push(event(off, track, 1, row.midi, 0, PATCH_GLIDE, 0));
     }
   }
-  closeRun(cells.length);
 }
 
-// ------------------------------------------------------------------ tokenizer
+function event(
+  offsetSamples: number,
+  track: number,
+  kind: 0 | 1,
+  note: number,
+  velocity: number,
+  glideS: number,
+  legato: 0 | 1,
+): LoopEvent {
+  return { offsetSamples, track, kind, note, velocity, glideS, legato };
+}
 
-export function tokenizeCells(src: string, line: number, colBase: number, sink: ErrorSink): Cell[] {
-  const cells: Cell[] = [];
-  let i = 0;
-  while (i < src.length) {
-    const ch = src[i] as string;
-    if (/\s/.test(ch) || ch === '|') {
-      i++;
-      continue;
-    }
-    const pos: Pos = { line, col: colBase + i };
+/**
+ * `roll` offsets the members of a group in turn: `+` from the bottom up, `-`
+ * from the top down. The written time is when the first of them sounds.
+ */
+function rollOffset(phrase: Phrase, note: PhraseNote, roll: number | undefined): number {
+  if (roll === undefined || roll === 0) return 0;
+  const members = groupMembers(phrase, note);
+  if (members.length < 2) return 0;
+  const fromTop = members.findIndex((n) => n.row === note.row);
+  const step = roll > 0 ? members.length - 1 - fromTop : fromTop;
+  return step * Math.abs(roll);
+}
 
-    if (ch === '[') {
-      const end = src.indexOf(']', i);
-      if (end < 0) {
-        sink.push(pos, 'unterminated chord "["');
-        break;
-      }
-      const inner = src.slice(i + 1, end).trim();
-      const notes: number[] = [];
-      for (const tok of inner.split(/\s+/).filter((t) => t !== '')) {
-        const n = noteToMidi(tok);
-        if (n === null) {
-          sink.push({ line, col: colBase + i + 1 + inner.indexOf(tok) }, `invalid note "${tok}"`);
-        } else {
-          notes.push(n);
-        }
-      }
-      if (notes.length === 0) sink.push(pos, 'empty chord "[]"');
-      cells.push({ notes, tie: false, pos, raw: src.slice(i, end + 1) });
-      i = end + 1;
-      continue;
-    }
+/**
+ * Where a glissando lands. An interval target moves the note by that much; a
+ * row target slides to that pitch — and applied to a group, every member moves
+ * by the interval the group's top note would travel, so the two chords need not
+ * have the same number of notes (§4).
+ */
+function glissTarget(
+  phrase: Phrase,
+  note: PhraseNote,
+  tonic: number,
+  sink: ErrorSink,
+  pos: Pos,
+): number | null {
+  const gliss = resolveGestures(phrase, note).gliss;
+  if (!gliss) return null;
+  const row = phrase.rows[note.row] as PhraseRow;
 
-    let j = i;
-    while (j < src.length && !/\s/.test(src[j] as string) && src[j] !== '|' && src[j] !== '[') j++;
-    const tok = src.slice(i, j);
-    i = j;
+  if (gliss.to.kind === 'interval') return clampMidi(row.midi + gliss.to.semitones);
 
-    if (tok === '.') {
-      cells.push({ notes: [], tie: false, pos, raw: tok });
-      continue;
-    }
-    if (tok === '~') {
-      cells.push({ notes: null, tie: true, pos, raw: tok });
-      continue;
-    }
-    const n = noteToMidi(tok);
-    if (n === null) {
-      sink.push(pos, `invalid note "${tok}" (expected a note like C3, Eb3, F#4, or "." / "~")`);
-      cells.push({ notes: [], tie: false, pos, raw: tok });
-      continue;
-    }
-    cells.push({ notes: [n], tie: false, pos, raw: tok });
+  const resolved = resolveRowLabel(gliss.to.label, { tonic, scale: phrase.scale });
+  if (!resolved.ok) {
+    sink.push(pos, `gliss target: ${resolved.reason}`);
+    return null;
   }
-  return cells;
+  const lead = groupMembers(phrase, note)[0] as PhraseNote;
+  const leadMidi = (phrase.rows[lead.row] as PhraseRow).midi;
+  return clampMidi(row.midi + (resolved.midi - leadMidi));
 }
 
-const PITCH_CLASS: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
-const NOTE_RE = /^([A-Ga-g])([#b]*)(-1|\d)$/;
-
-/** Note name → MIDI number (C4 = 60). Returns null when malformed/out of range. */
-export function noteToMidi(name: string): number | null {
-  const m = NOTE_RE.exec(name);
-  if (!m) return null;
-  const pc = PITCH_CLASS[(m[1] as string).toLowerCase()];
-  if (pc === undefined) return null;
-  let accidental = 0;
-  for (const c of m[2] as string) accidental += c === '#' ? 1 : -1;
-  const octave = parseInt(m[3] as string, 10);
-  const midi = (octave + 1) * 12 + pc + accidental;
-  if (midi < 0 || midi > 127) return null;
-  return midi;
+/** `cells` defaults to the distance to the next onset in the same row. */
+function cellsToNextOnset(phrase: Phrase, note: PhraseNote): number {
+  let next = phrase.totalCells;
+  for (const other of phrase.notes) {
+    if (other.row !== note.row) continue;
+    if (other.onset > note.onset && other.onset < next) next = other.onset;
+  }
+  return Math.max(1, next - note.onset);
 }
 
 // -------------------------------------------------------------------- helpers
+
+function clampSample(v: number, lengthSamples: number): number {
+  return Math.max(0, Math.min(v, Math.max(lengthSamples - 1, 0)));
+}
+
+function clampMidi(v: number): number {
+  return Math.max(0, Math.min(127, v));
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
 
 function readPositive(raw: string | undefined, fallback: number, field: string, pos: Pos, sink: ErrorSink): number {
   if (raw === undefined) return fallback;
@@ -303,8 +354,4 @@ function readPositive(raw: string | undefined, fallback: number, field: string, 
     return fallback;
   }
   return v;
-}
-
-function round(v: number): number {
-  return Math.round(v * 1000) / 1000;
 }

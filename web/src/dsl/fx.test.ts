@@ -407,8 +407,13 @@ const FX_DOC = [
   '  - { type: comp,   ratio: 3 }',
   '```',
   '',
+  '```phrase id=hold res=1/4 bars=1',
+  'grid:',
+  '  C3 |o...|',
+  '```',
+  '',
   '```loop id=demo bars=1 bpm=124',
-  'pad: C3 . . .',
+  'pad: hold',
   '```',
 ].join('\n');
 

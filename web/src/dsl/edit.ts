@@ -12,6 +12,7 @@
 
 import { extractFences, findFence, type Fence } from './fences.ts';
 import { parseYamlite, isMap, isSeq, isScalar, type YMap, type YNode, type YScalar } from './yamlite.ts';
+import { parsePhrase, type DetailEntry, type Phrase } from './phrase.ts';
 import type { Pos } from './errors.ts';
 
 export interface TextSpan {
@@ -228,6 +229,11 @@ export function appendLoopLine(doc: string, lineText: string): EditResult {
 export function setLoopAttr(doc: string, key: string, value: string): EditResult {
   const fence = findFence(extractFences(doc), 'loop');
   if (!fence) return { ok: false, reason: 'no loop fence in the document' };
+  return setFenceAttr(doc, fence, key, value);
+}
+
+/** Set an attribute on any fence's info string, leaving the others alone. */
+export function setFenceAttr(doc: string, fence: Fence, key: string, value: string): EditResult {
   const lines = doc.split('\n');
   const idx = fence.fenceLine - 1;
   const line = lines[idx];
@@ -236,4 +242,115 @@ export function setLoopAttr(doc: string, key: string, value: string): EditResult
   const re = new RegExp(`(\\b${key}=)(\\S+)`);
   lines[idx] = re.test(line) ? line.replace(re, `$1${value}`) : `${line.replace(/\s+$/, '')} ${key}=${value}`;
   return { ok: true, doc: lines.join('\n') };
+}
+
+// ------------------------------------------------------------ phrase editing
+//
+// A grid cell is one character wide and every row shares its columns, so the
+// span of a cell is arithmetic rather than a search: writing a note changes
+// exactly one byte and the rest of the document — including the other rows,
+// their alignment and any prose around the fence — is untouched.
+
+/** Every `phrase` fence in the document, in order of appearance. */
+export function phraseFences(doc: string): Fence[] {
+  return extractFences(doc).filter((f) => f.lang === 'phrase');
+}
+
+export interface LoadedPhrase {
+  fence: Fence;
+  phrase: Phrase;
+}
+
+/** Locate and parse one phrase by id. Null when it is missing or broken. */
+export function loadPhrase(doc: string, id: string): LoadedPhrase | null {
+  const fence = phraseFences(doc).find((f) => (f.attrs['id'] ?? '') === id);
+  if (!fence) return null;
+  const { phrase } = parsePhrase(fence.body, fence.attrs, { bodyStartLine: fence.bodyStartLine });
+  return phrase ? { fence, phrase } : null;
+}
+
+/** The one-character span of a cell, in document coordinates. */
+export function cellSpan(phrase: Phrase, row: number, cell: number): TextSpan | null {
+  const line = phrase.rows[row];
+  const col = phrase.cellCols[cell];
+  if (!line || col === undefined) return null;
+  return { line: line.line, col, endCol: col + 1 };
+}
+
+/** Write one cell glyph. One character in, one character out. */
+export function writeCell(doc: string, phrase: Phrase, row: number, cell: number, glyph: string): EditResult {
+  if (glyph.length !== 1) return { ok: false, reason: `"${glyph}" is not a single cell glyph` };
+  const span = cellSpan(phrase, row, cell);
+  if (!span) return { ok: false, reason: `no cell at row ${row}, column ${cell}` };
+  return replaceSpan(doc, span, glyph);
+}
+
+/** Replace the inclusive line range `[from, to]` with `lines`. */
+export function replaceLines(doc: string, from: number, to: number, lines: string[]): EditResult {
+  const all = doc.split('\n');
+  if (from < 1 || to < from - 1 || to > all.length) {
+    return { ok: false, reason: `line range ${from}..${to} is out of range` };
+  }
+  all.splice(from - 1, to - from + 1, ...lines);
+  return { ok: true, doc: all.join('\n') };
+}
+
+/** The `grid:` key through the last row line. */
+export function gridBlockRange(phrase: Phrase): { from: number; to: number } | null {
+  const rows = phrase.rows;
+  if (rows.length === 0) return null;
+  const last = Math.max(...rows.map((r) => r.line));
+  const from = phrase.gridLine ?? Math.min(...rows.map((r) => r.line));
+  return { from, to: last };
+}
+
+/** The `detail:` key through the last entry line, or null when there is none. */
+export function detailBlockRange(phrase: Phrase): { from: number; to: number } | null {
+  if (phrase.detailLine === null) return null;
+  const last = phrase.detail.length > 0 ? Math.max(...phrase.detail.map((e) => e.line)) : phrase.detailLine;
+  return { from: phrase.detailLine, to: last };
+}
+
+/**
+ * Rewrite the grid block. Only reached when the geometry itself moved — a row
+ * added, removed or re-sorted — because every other edit is a cell write.
+ */
+export function replaceGridBlock(doc: string, phrase: Phrase, lines: string[]): EditResult {
+  const range = gridBlockRange(phrase);
+  if (!range) return { ok: false, reason: 'phrase has no grid block' };
+  return replaceLines(doc, range.from, range.to, lines);
+}
+
+/**
+ * Rewrite the detail block: replaced in place when it exists, appended after
+ * the grid when it does not, removed entirely when `entries` is empty.
+ */
+export function replaceDetailBlock(doc: string, phrase: Phrase, entries: string[]): EditResult {
+  const range = detailBlockRange(phrase);
+  if (range) {
+    if (entries.length === 0) {
+      // Take the blank line that separated it from the grid with it.
+      const lines = doc.split('\n');
+      const before = lines[range.from - 2];
+      const from = before !== undefined && before.trim() === '' ? range.from - 1 : range.from;
+      return replaceLines(doc, from, range.to, []);
+    }
+    return replaceLines(doc, range.from, range.to, ['detail:', ...entries]);
+  }
+  if (entries.length === 0) return { ok: true, doc };
+
+  const grid = gridBlockRange(phrase);
+  if (!grid) return { ok: false, reason: 'phrase has no grid block' };
+  return replaceLines(doc, grid.to + 1, grid.to, ['', 'detail:', ...entries]);
+}
+
+/** Replace one detail entry line. */
+export function replaceDetailLine(doc: string, entry: DetailEntry, text: string): EditResult {
+  return replaceLines(doc, entry.line, entry.line, [text]);
+}
+
+/** Replace the whole fence body — the fallback when the text is not canonical. */
+export function replacePhraseBody(doc: string, fence: Fence, body: string): EditResult {
+  const bodyLines = fence.body.split('\n');
+  return replaceLines(doc, fence.bodyStartLine, fence.bodyStartLine + bodyLines.length - 1, body.split('\n'));
 }

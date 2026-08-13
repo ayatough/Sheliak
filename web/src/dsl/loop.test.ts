@@ -1,194 +1,225 @@
+// A5: the `loop` fence as the arrangement layer (docs/workstreams.md §6).
+
 import { describe, it, expect } from 'vitest';
-import { parseLoop, noteToMidi, DEFAULT_VELOCITY } from './loop.ts';
+import { parseLoop, PATCH_GLIDE, DEFAULT_VELOCITY, type LoopEvent } from './loop.ts';
+import { parsePhrase, type Phrase } from './phrase.ts';
 import { compile } from './compile.ts';
 
 const SR = 48000;
-const DEMO = 'lead: C3 . Eb3 . | G3 ~ ~ . | Bb3 . . . | C4 ~ ~ ~';
+const BEAT = 24000; // 120bpm at 48kHz
+const CELL = BEAT / 4; // 1/16 grid
 
-describe('noteToMidi', () => {
-  it('anchors C4 at 60', () => {
-    expect(noteToMidi('C4')).toBe(60);
-    expect(noteToMidi('C3')).toBe(48);
-    expect(noteToMidi('A4')).toBe(69);
+function phrase(body: string, attrs: Record<string, string> = {}): Phrase {
+  const r = parsePhrase(body, { id: 'p', ...attrs });
+  expect(r.errors).toEqual([]);
+  return r.phrase as Phrase;
+}
+
+const FOUR_FLOOR = phrase(['grid:', '  kick |o...o...o...o...|'].join('\n'));
+const OFFBEATS = phrase(['grid:', '  hh |.o.o.o.o.o.o.o.o|'].join('\n'));
+
+function ons(events: LoopEvent[], track?: number): LoopEvent[] {
+  return events.filter((e) => e.kind === 0 && (track === undefined || e.track === track));
+}
+
+describe('phrase references', () => {
+  const r = parseLoop('kick: four\nhat: off', { id: 'g', bars: '1', bpm: '120' }, {
+    sampleRate: SR,
+    phrases: { four: FOUR_FLOOR, off: OFFBEATS },
   });
 
-  it('handles sharps and flats', () => {
-    expect(noteToMidi('Eb3')).toBe(51);
-    expect(noteToMidi('D#3')).toBe(51);
-    expect(noteToMidi('Bb3')).toBe(58);
-    expect(noteToMidi('F#4')).toBe(66);
+  it('resolves ids and reports what is bound', () => {
+    expect(r.errors).toEqual([]);
+    expect(r.meta!.lines).toEqual([
+      { trackId: 'kick', track: 0, phraseId: 'four', repeats: 1, cellsPerBeat: 4 },
+      { trackId: 'hat', track: 1, phraseId: 'off', repeats: 1, cellsPerBeat: 4 },
+    ]);
+    expect(r.loop!.lengthSamples).toBe(4 * BEAT);
   });
 
-  it('covers C-1..G9', () => {
-    expect(noteToMidi('C-1')).toBe(0);
-    expect(noteToMidi('G9')).toBe(127);
-    expect(noteToMidi('A9')).toBeNull(); // out of MIDI range
+  it('places the kick on the beat and the hat between', () => {
+    expect(ons(r.loop!.events, 0).map((e) => e.offsetSamples)).toEqual([0, BEAT, 2 * BEAT, 3 * BEAT]);
+    expect(ons(r.loop!.events, 1)[0]!.offsetSamples).toBe(CELL);
+    expect(ons(r.loop!.events, 0).every((e) => e.note === 24)).toBe(true);
   });
 
-  it('rejects junk', () => {
-    expect(noteToMidi('H3')).toBeNull();
-    expect(noteToMidi('C')).toBeNull();
-    expect(noteToMidi('')).toBeNull();
+  it('closes a note one sample before its written length ends', () => {
+    const offs = r.loop!.events.filter((e) => e.kind === 1 && e.track === 0);
+    expect(offs[0]!.offsetSamples).toBe(CELL - 1);
+  });
+
+  it('leaves glide and legato alone, so today’s audio is unchanged', () => {
+    expect(r.loop!.events.every((e) => e.glideS === PATCH_GLIDE && e.legato === 0)).toBe(true);
+    expect(ons(r.loop!.events)[0]!.velocity).toBe(DEFAULT_VELOCITY);
+  });
+
+  it('repeats a phrase to fill a longer loop', () => {
+    const two = parseLoop('kick: four', { bars: '2', bpm: '120' }, { sampleRate: SR, phrases: { four: FOUR_FLOOR } });
+    expect(two.errors).toEqual([]);
+    expect(two.meta!.lines[0]!.repeats).toBe(2);
+    expect(ons(two.loop!.events).map((e) => e.offsetSamples)).toEqual([0, 1, 2, 3, 4, 5, 6, 7].map((i) => i * BEAT));
+  });
+
+  it('scales with the sample rate', () => {
+    const r44 = parseLoop('kick: four', { bars: '1', bpm: '124' }, { sampleRate: 44100, phrases: { four: FOUR_FLOOR } });
+    expect(r44.loop!.lengthSamples).toBe(Math.round((4 * 60 * 44100) / 124));
   });
 });
 
-describe('parseLoop — demo loop at 124bpm / 48000Hz', () => {
-  const r = parseLoop(DEMO, { id: 'demo', bars: '2', bpm: '124' }, { bodyStartLine: 1, sampleRate: SR });
+describe('gestures become timing and velocity', () => {
+  const detailed = phrase(
+    [
+      'grid:',
+      "  5' |o-------........|",
+      '  1  |o-------....o---|',
+      '',
+      'detail:',
+      '  1.1o : { roll: +10ms, vel: 50% }',
+      '  1.4  : { gate: 50%, nudge: -5ms }',
+    ].join('\n'),
+    { key: 'C', scale: 'minor' },
+  );
+  const r = parseLoop('lead: p', { bars: '1', bpm: '120' }, { sampleRate: SR, phrases: { p: detailed } });
 
-  // 60/124 * 48000 = 23225.806… samples per beat; 16 cells over 8 beats
-  // → 2 cells per beat → 11612.903… samples per cell.
-  it('infers cells per beat', () => {
+  it('applies vel', () => {
     expect(r.errors).toEqual([]);
-    expect(r.meta).toMatchObject({ bars: 2, bpm: 124 });
-    expect(r.meta!.lines).toEqual([{ trackId: 'lead', track: 0, cells: 16, cellsPerBeat: 2 }]);
+    expect(ons(r.loop!.events)[0]!.velocity).toBeCloseTo(0.5, 6);
   });
 
-  it('computes the loop length in samples', () => {
-    expect(r.loop!.lengthSamples).toBe(185806);
-  });
-
-  it('emits sample-accurate note events (ties, rests, noteOff at cell end - 1)', () => {
-    expect(r.loop!.events).toEqual([
-      { offsetSamples: 0, track: 0, kind: 0, note: 48, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: 11612, track: 0, kind: 1, note: 48, velocity: 0 },
-      { offsetSamples: 23226, track: 0, kind: 0, note: 51, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: 34838, track: 0, kind: 1, note: 51, velocity: 0 },
-      { offsetSamples: 46452, track: 0, kind: 0, note: 55, velocity: DEFAULT_VELOCITY },
-      // G3 is tied across three cells → off at cell 7 end - 1
-      { offsetSamples: 81289, track: 0, kind: 1, note: 55, velocity: 0 },
-      { offsetSamples: 92903, track: 0, kind: 0, note: 58, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: 104515, track: 0, kind: 1, note: 58, velocity: 0 },
-      { offsetSamples: 139355, track: 0, kind: 0, note: 60, velocity: DEFAULT_VELOCITY },
-      // C4 is tied to the end of the loop
-      { offsetSamples: 185805, track: 0, kind: 1, note: 60, velocity: 0 },
+  it('rolls a group from the bottom up', () => {
+    const chord = ons(r.loop!.events).filter((e) => e.offsetSamples < BEAT);
+    // The bottom note keeps the written time; the one above is 10ms later.
+    expect(chord.map((e) => [e.note, e.offsetSamples])).toEqual([
+      [48, 0],
+      [67, Math.round(0.01 * SR)],
     ]);
   });
 
-  it('keeps offsets sorted and inside the loop', () => {
-    const ev = r.loop!.events;
-    for (let i = 1; i < ev.length; i++) {
-      expect(ev[i]!.offsetSamples).toBeGreaterThanOrEqual(ev[i - 1]!.offsetSamples);
-    }
-    expect(ev[ev.length - 1]!.offsetSamples).toBeLessThan(r.loop!.lengthSamples);
-  });
-
-  it('scales with the sample rate (no hardcoding)', () => {
-    const r44 = parseLoop(DEMO, { bars: '2', bpm: '124' }, { sampleRate: 44100 });
-    expect(r44.loop!.lengthSamples).toBe(Math.round((8 * 60 * 44100) / 124));
+  it('applies nudge and gate', () => {
+    const late = ons(r.loop!.events).find((e) => e.offsetSamples > 2 * BEAT)!;
+    expect(late.offsetSamples).toBe(12 * CELL - Math.round(0.005 * SR));
+    const off = r.loop!.events.find((e) => e.kind === 1 && e.offsetSamples > late.offsetSamples)!;
+    // Four cells written, sounding for half of that.
+    expect(off.offsetSamples).toBe(late.offsetSamples + 2 * CELL - 1);
   });
 });
 
-describe('parseLoop — cells and chords', () => {
-  it('treats | as visual only', () => {
-    const withBars = parseLoop('x: C3 . . . | . . . .', { bars: '1' }, { sampleRate: SR });
-    const without = parseLoop('x: C3 . . . . . . .', { bars: '1' }, { sampleRate: SR });
-    expect(withBars.errors).toEqual([]);
-    expect(withBars.meta!.lines[0]!.cells).toBe(8);
-    expect(withBars.loop!.events).toEqual(without.loop!.events);
-  });
+describe('gliss (§10)', () => {
+  const slide = phrase(
+    ['grid:', '  1 |o-------........|', '', 'detail:', '  1.1 : { gliss: { to: +5st, cells: 2 } }'].join('\n'),
+  );
+  const r = parseLoop('lead: p', { bars: '1', bpm: '120' }, { sampleRate: SR, phrases: { p: slide } });
 
-  it('parses chords as one cell', () => {
-    const r = parseLoop('x: [C3 Eb3 G3] . . .', { bars: '1' }, { sampleRate: SR });
+  it('sounds the note, then its destination with a glide time and legato', () => {
     expect(r.errors).toEqual([]);
-    expect(r.meta!.lines[0]!.cells).toBe(4);
-    const ons = r.loop!.events.filter((e) => e.kind === 0);
-    expect(ons.map((e) => e.note)).toEqual([48, 51, 55]);
-    expect(ons.every((e) => e.offsetSamples === 0)).toBe(true);
-    // All three notes stop at the end of the first cell.
-    const offs = r.loop!.events.filter((e) => e.kind === 1);
-    expect(new Set(offs.map((e) => e.offsetSamples)).size).toBe(1);
-  });
-
-  it('extends a chord with a tie', () => {
-    const r = parseLoop('x: [C3 G3] ~ . .', { bars: '1' }, { sampleRate: SR });
-    const spc = (60 / 120) * SR; // 120bpm default
-    const cell = spc / 1; // 4 cells over 4 beats
-    const offs = r.loop!.events.filter((e) => e.kind === 1);
-    expect(offs.every((e) => e.offsetSamples === Math.round(2 * cell) - 1)).toBe(true);
-  });
-
-  it('rests end the previous note', () => {
-    const r = parseLoop('x: C3 . . .', { bars: '1' }, { sampleRate: SR });
-    const cell = (60 / 120) * SR;
-    expect(r.loop!.events).toEqual([
-      { offsetSamples: 0, track: 0, kind: 0, note: 48, velocity: DEFAULT_VELOCITY },
-      { offsetSamples: Math.round(cell) - 1, track: 0, kind: 1, note: 48, velocity: 0 },
+    const starts = ons(r.loop!.events);
+    expect(starts.map((e) => [e.note, e.legato])).toEqual([
+      [48, 0],
+      [53, 1],
     ]);
+    expect(starts[0]!.glideS).toBe(PATCH_GLIDE);
+    expect(starts[1]!.glideS).toBeCloseTo((2 * CELL) / SR, 9);
+  });
+
+  it('releases both, so a slide cannot drone on the old ABI', () => {
+    const offs = r.loop!.events.filter((e) => e.kind === 1);
+    expect(offs.map((e) => e.note).sort()).toEqual([48, 53]);
+  });
+
+  it('defaults the slide to the distance to the next onset', () => {
+    const p = phrase(
+      ['grid:', '  1 |o---o-----------|', '', 'detail:', '  1.1 : { gliss: { to: +2st } }'].join('\n'),
+    );
+    const rr = parseLoop('lead: p', { bars: '1', bpm: '120' }, { sampleRate: SR, phrases: { p } });
+    const target = ons(rr.loop!.events).find((e) => e.legato === 1)!;
+    expect(target.glideS).toBeCloseTo((4 * CELL) / SR, 9);
   });
 });
 
-describe('parseLoop — errors', () => {
-  it('errors when the cell count does not divide into bars*4', () => {
-    const r = parseLoop('x: C3 . .', { bars: '1' }, { bodyStartLine: 7, sampleRate: SR });
+describe('loop errors (§9)', () => {
+  const parse = (body: string, attrs: Record<string, string>, phrases: Record<string, Phrase>) =>
+    parseLoop(body, attrs, { bodyStartLine: 5, sampleRate: SR, phrases });
+
+  it('reports an undefined phrase id', () => {
+    const r = parse('kick: nope', { bars: '1' }, { four: FOUR_FLOOR });
     expect(r.loop).toBeNull();
-    expect(r.errors[0]!.line).toBe(7);
-    expect(r.errors[0]!.message).toMatch(/not divisible/);
+    expect(r.errors[0]!.message).toMatch(/undefined phrase "nope" \(known: four\)/);
+    expect(r.errors[0]!.line).toBe(5);
   });
 
-  it('errors on a leading tie', () => {
-    const r = parseLoop('x: ~ C3 . .', { bars: '1' }, { bodyStartLine: 4, sampleRate: SR });
-    expect(r.loop).toBeNull();
-    expect(r.errors[0]!.message).toMatch(/tie/);
-    expect(r.errors[0]!.line).toBe(4);
+  it('reports an unknown track id', () => {
+    const r = parseLoop('ghost: four', { bars: '1' }, {
+      sampleRate: SR,
+      phrases: { four: FOUR_FLOOR },
+      trackIds: { kick: 0 },
+    });
+    expect(r.errors[0]!.message).toMatch(/unknown track "ghost"/);
   });
 
-  it('errors on an invalid note with a column', () => {
-    const r = parseLoop('x: C3 H9 . .', { bars: '1' }, { bodyStartLine: 1, sampleRate: SR });
-    expect(r.errors[0]!.message).toMatch(/invalid note "H9"/);
-    expect(r.errors[0]!.col).toBe(7);
+  it('reports a loop length that is not a multiple of the phrase length', () => {
+    const twoBar = phrase(['grid:', `  kick |${'o...'.repeat(8)}|`].join('\n'), { bars: '2' });
+    const r = parse('kick: long', { bars: '1' }, { long: twoBar });
+    expect(r.errors[0]!.message).toMatch(/must be a multiple of the phrase length/);
   });
 
-  it('errors on a missing track line', () => {
-    const r = parseLoop('\n\n', { bars: '1' }, { bodyStartLine: 3, sampleRate: SR });
-    expect(r.errors[0]!.message).toMatch(/at least one track line/);
+  it('reports two lines for one track', () => {
+    const r = parse('kick: four\nkick: four', { bars: '1' }, { four: FOUR_FLOOR });
+    expect(r.errors[0]!.message).toMatch(/duplicate loop line/);
+  });
+
+  it('rejects note cells left over from the old notation', () => {
+    const r = parse('kick: C1 . . .', { bars: '1' }, { four: FOUR_FLOOR });
+    expect(r.errors[0]!.message).toMatch(/is not a phrase id/);
   });
 });
 
-describe('compile — whole document', () => {
+describe('compile — a whole document', () => {
+  const F = '```';
   const DOC = [
     '# doc', // 1
     '', // 2
-    '```synth id=lead seed=7', // 3
+    `${F}synth id=lead seed=7`, // 3
     'osc:', // 4
     '  - { table: basic/saw, unison: 7, detune: 22c }', // 5
     'lfo:', // 6
     '  1: { wave: tri, rate: 1/4 }', // 7
-    '```', // 8
+    F, // 8
     '', // 9
-    '```loop id=demo bars=2 bpm=124', // 10
-    `${DEMO}`, // 11
-    '```', // 12
+    `${F}phrase id=verse key=C scale=minor res=1/16 bars=1`, // 10
+    'grid:', // 11
+    "  5' |o---....o---....|", // 12
+    '  1  |o-------....o---|', // 13
+    F, // 14
+    '', // 15
+    `${F}loop id=demo bars=1 bpm=124`, // 16
+    'lead: verse', // 17
+    F, // 18
   ].join('\n');
 
-  it('compiles both fences and shares the bpm with the patch', () => {
+  it('compiles the synth, the phrase and the loop together', () => {
     const r = compile(DOC, SR);
     expect(r.errors).toEqual([]);
     expect(r.bpm).toBe(124);
-    expect(r.patch!.ir.seed).toBe(7);
-    // LFO rate `1/4` resolved with the loop's bpm.
+    expect(Object.keys(r.phrases)).toEqual(['verse']);
     expect(r.patch!.ir.lfo1.rateHz).toBeCloseTo(124 / 60, 9);
-    expect(r.loop!.lengthSamples).toBe(185806);
-    expect(r.loopMeta!.lines[0]!.cellsPerBeat).toBe(2);
+    expect(r.loopMeta!.lines[0]!.phraseId).toBe('verse');
+    // Two notes at cell 0, then the second onset of each row.
+    expect(ons(r.loop!.events).map((e) => e.note)).toEqual([67, 48, 67, 48]);
   });
 
-  it('still returns the loop when the patch fails (Glicol style)', () => {
-    const broken = DOC.replace('detune: 22c', 'detune: 22');
+  it('reports a phrase error at its line and keeps the rest of the document', () => {
+    const broken = DOC.replace("  5' |o---....o---....|", "  5' |o---....o---...|");
     const r = compile(broken, SR);
-    expect(r.patch).toBeUndefined();
-    expect(r.loop).toBeDefined();
-    expect(r.errors).toHaveLength(1);
-    expect(r.errors[0]!.line).toBe(5);
+    expect(r.errors.some((e) => e.line === 12 && /15 cells, expected 16/.test(e.message))).toBe(true);
+    // The patch still compiled, so its track keeps playing (Glicol style).
+    expect(r.patch).toBeDefined();
+    expect(r.loop).toBeUndefined();
   });
 
-  it('reports a document with no fences', () => {
-    const r = compile('just prose', SR);
-    expect(r.errors[0]!.message).toMatch(/no ```synth/);
-  });
-
-  it('produces an expanded view for the UI', () => {
-    const r = compile(DOC, SR);
-    const json = JSON.stringify(r.patch!.expanded);
-    expect(json).toContain('basic/saw');
-    expect(json).toContain('22c');
+  it('rejects two phrases with one id', () => {
+    const twice = DOC.replace(`${F}loop id=demo bars=1 bpm=124\nlead: verse\n${F}`,
+      `${F}phrase id=verse res=1/16 bars=1\ngrid:\n  1 |o---............|\n${F}`);
+    const r = compile(twice, SR);
+    expect(r.errors.some((e) => /duplicate phrase id "verse"/.test(e.message))).toBe(true);
   });
 });

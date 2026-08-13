@@ -44,15 +44,28 @@ fx:
   - { type: reverb, size: 65%, damp: 55%, mix: 16% }
 ```
 
+```phrase id=verse-lead key=C scale=minor res=1/16 bars=1
+grid:
+  #     1...2...3...4...
+  5'   |o-------........|
+  b3'  |o-------........|
+  1'   |o-------........|
+
+detail:
+  1.1o : { roll: +9ms }
+```
+
 ```loop id=groove bars=1 bpm=126
-lead: [C4 Eb4 G4] ~ ~ ~ | ~ ~ ~ ~ | [Bb3 D4 F4] ~ ~ ~ | ~ ~ ~ ~
-kick: C1 . . .          | C1 . . . | C1 . . .         | C1 . . .
+lead: verse-lead
+kick: four-floor
 ```
 ````
 
 Every value carries a unit, because confusing milliseconds with seconds is the
 kind of mistake a notation should make impossible. A bare number is a parse
-error.
+error. In a phrase grid a row is a pitch and a column is a cell of time, so a
+line has a shape you can read; the `detail:` block addresses expression by
+coordinate rather than crowding the grid.
 
 ## How it works
 
@@ -130,13 +143,13 @@ Sheliak is at `v0.1.0`. **Nothing has been released yet** — there is no tag, a
 `main` is what exists. It is `0.x` and pre-release: the notation will keep
 changing.
 
-- **Working:** the `synth` and `loop` fences, hot reload, eight tracks, the
-  wavetable engine, filter, envelopes, LFO, modulation matrix, noise, the
+- **Working:** the `synth`, `phrase` and `loop` fences, hot reload, eight tracks,
+  the wavetable engine, filter, envelopes, LFO, modulation matrix, noise, the
   eight-effect master chain, the two-way-synced step sequencer and parameter
   panel, offline verification, and a GitHub Pages deployment
-- **Next:** the note layer redesign — a `phrase` grid that shows the shape of a
-  line, reusable phrases, and expression addressed by coordinate. The design is
-  accepted and written down in [docs/workstreams.md](docs/workstreams.md)
+- **Next:** the note-event ABI (Track B of
+  [docs/workstreams.md](docs/workstreams.md)) — `note_on` gains a glide time and
+  a legato flag, which is what makes a written `gliss` actually slide
 - **After that:** frontmatter as a song header, headings as arrangement sections,
   and hierarchical automation. See the [roadmap](docs/roadmap.md)
 

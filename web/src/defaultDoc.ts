@@ -1,8 +1,10 @@
 // The document the editor starts with. Kept out of main.ts so the fence
 // backticks stay readable.
 //
-// Each ```synth fence is one track, in order of appearance; the loop fence's
-// lines bind to them by id.
+// Each ```synth fence is one track, in order of appearance. The notes live in
+// ```phrase fences — a grid of pitches over time, plus a detail block for
+// expression — and the ```loop fence is the arrangement: which phrase plays on
+// which track.
 
 const F = '```';
 
@@ -10,8 +12,8 @@ export const DEFAULT_DOC = `# Sheliak — a four-track groove
 
 Edit the text and it recompiles 150 ms later, without stopping playback.
 The order the synth fences appear in is the track index (0..7); each loop line
-binds to the fence with the same id. A fence that fails to parse keeps playing
-its last valid patch, and only that fence freezes.
+binds a track to a phrase by id. A fence that fails to parse keeps playing its
+last valid patch, and only that fence freezes.
 
 ${F}synth id=lead seed=42
 osc:
@@ -87,10 +89,56 @@ env:
 voice: { polyphony: 3, glide: 0ms }
 ${F}
 
+Rows are scale degrees here: \`1\` is the tonic, \`b3\` a minor third, \`'\` an
+octave up and \`,\` an octave down. A letter starts a note and \`-\` holds it;
+notes sharing an onset and a letter are one group, which is what \`roll\` strums.
+
+${F}phrase id=verse-lead key=C scale=minor res=1/16 bars=1
+grid:
+  #     1...2...3...4...
+  5'   |o-------........|
+  4'   |........o-------|
+  b3'  |o-------........|
+  2'   |........o-------|
+  1'   |o-------........|
+  b7   |........o-------|
+
+detail:
+  1.1o : { roll: +9ms }
+  1.3  : { vel: 85% }
+${F}
+
+${F}phrase id=verse-bass key=C scale=minor res=1/16 bars=1
+grid:
+  #      1...2...3...4...
+  b3,   |..........o.....|
+  1,    |..o...o.........|
+  b7,,  |..............o.|
+
+detail:
+  * : { gate: 90% }
+${F}
+
+${F}phrase id=four-floor res=1/16 bars=1
+grid:
+  #      1...2...3...4...
+  kick  |o...o...o...o...|
+${F}
+
+${F}phrase id=offbeats res=1/16 bars=1
+grid:
+  #    1...2...3...4...
+  hh  |.o.o.o.o.o.o.o.o|
+
+detail:
+  *   : { vel: 55% }
+  1.2 : { vel: 85% }
+${F}
+
 ${F}loop id=groove bars=1 bpm=126
-lead: [C4 Eb4 G4] ~ ~ ~ | ~ ~ ~ ~ | [Bb3 D4 F4] ~ ~ ~ | ~ ~ ~ ~
-bass: .  .  C2 .        | .  .  C2 .  | .  .  Eb2 .    | .  .  Bb1 .
-kick: C1 .  .  .        | C1 .  .  .  | C1 .  .  .     | C1 .  .  .
-hat:  .  F#4 . F#4      | . F#4 . F#4 | . F#4 . F#4    | . F#4 . F#4
+lead: verse-lead
+bass: verse-bass
+kick: four-floor
+hat:  offbeats
 ${F}
 `;

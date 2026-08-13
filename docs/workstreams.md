@@ -8,8 +8,11 @@ The longer arc is in [roadmap.md](roadmap.md).
 
 # Stream 1 — The note layer
 
-**Status:** specified, not implemented. Nothing here runs yet; see
-[syntax.md](syntax.md) for the notation that does.
+**Status:** Track A (the note layer) is implemented and running — see
+[syntax.md](syntax.md), which now describes it. Track B (the note-event ABI) is
+not: `gliss` is parsed, addressed and scheduled, but the engine still takes the
+three-argument `note_on`, so a slide sounds its destination without gliding
+into it.
 
 ## Why
 
@@ -65,7 +68,7 @@ If you were handed a track letter, the table below is your brief and the rest of
 this document is your specification. Both tracks push to `main` and run the full
 gate first — see [AGENTS.md](../AGENTS.md#definition-of-done).
 
-### Track A — the note layer
+### Track A — the note layer — done
 
 **Owns** `web/src/dsl/`, `web/src/gui/`, `web/src/defaultDoc.ts`, `docs/syntax.md`.
 **Does not touch** `dsp/`, `web/public/worklet.js`, `docs/architecture.md`.

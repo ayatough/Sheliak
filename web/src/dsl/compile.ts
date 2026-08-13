@@ -7,6 +7,7 @@
 import { extractFences, findFence, type Fence } from './fences.ts';
 import { parseSynth } from './synth.ts';
 import { parseLoop, type LoopIR, type LoopMeta } from './loop.ts';
+import { parsePhrase, type Phrase } from './phrase.ts';
 import { expandedView, DEFAULT_BPM, type PatchIR } from './ir.ts';
 import { sortErrors, type DslError } from './errors.ts';
 import { MAX_TRACKS } from '../shared/params.ts';
@@ -36,6 +37,8 @@ export interface CompileResult {
   trackCount: number;
   /** Convenience alias for tracks[0], kept for single-track callers. */
   patch?: CompiledPatch;
+  /** Every `phrase` fence that parsed, by id. */
+  phrases: Record<string, Phrase>;
   loop?: LoopIR;
   loopMeta?: LoopMeta;
   /** BPM in effect (from the loop fence, else the default). */
@@ -98,7 +101,24 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     }
   });
 
-  const result: CompileResult = { tracks, trackCount: used.length, bpm, errors, fences };
+  // Phrases are parsed before the loop, which only holds references to them.
+  const phrases: Record<string, Phrase> = {};
+  for (const fence of fences.filter((f) => f.lang === 'phrase')) {
+    const id = fence.attrs['id'] ?? '';
+    if (id !== '' && phrases[id]) {
+      errors.push({
+        line: fence.fenceLine,
+        col: 1,
+        message: `duplicate phrase id "${id}" — each phrase needs a unique id`,
+      });
+      continue;
+    }
+    const r = parsePhrase(fence.body, fence.attrs, { bodyStartLine: fence.bodyStartLine });
+    errors.push(...r.errors);
+    if (r.phrase && id !== '') phrases[id] = r.phrase;
+  }
+
+  const result: CompileResult = { tracks, trackCount: used.length, phrases, bpm, errors, fences };
   if (tracks[0]) result.patch = tracks[0];
 
   if (used.length === 0 && !loopFence) {
@@ -114,6 +134,7 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
       bodyStartLine: loopFence.bodyStartLine,
       sampleRate,
       trackIds,
+      phrases,
     });
     errors.push(...r.errors);
     if (r.loop) result.loop = r.loop;
