@@ -54,6 +54,78 @@ The replacement splits the layer in two.
 - **One notation.** There is no short form for monophonic lines: a percussion
   track's grid is a single row, so unifying costs nothing in length.
 
+## Splitting the work
+
+**Two agents can work on this stream at once, and no more than two.** Everything
+on the notation side hangs off the parser and the canonical form, so a second
+agent there is blocked until they land and then merges against a moving target.
+The DSP side shares no file with them at all.
+
+If you were handed a track letter, the table below is your brief and the rest of
+this document is your specification. Both tracks push to `main` and run the full
+gate first — see [AGENTS.md](../AGENTS.md#definition-of-done).
+
+### Track A — the note layer
+
+**Owns** `web/src/dsl/`, `web/src/gui/`, `web/src/defaultDoc.ts`, `docs/syntax.md`.
+**Does not touch** `dsp/`, `web/public/worklet.js`, `docs/architecture.md`.
+
+Land in this order. A step is finished when its criterion holds, not when the
+code exists.
+
+| # | Step | Finished when |
+|---|---|---|
+| A1 | `web/src/dsl/phrase.ts` — grid and detail parser | The fence in §2 parses into rows, onsets, lengths and groups; every grid and address error in §9 is reported with a line and column; a canonical document re-renders to itself byte for byte |
+| A2 | `format.ts` — grid canonicalization | `format(format(x)) == format(x)` over generated input (§8 invariant 2); row order, group tags (§3), the ruler comment and label alignment all follow §3; one structure has exactly one spelling |
+| A3 | `edit.ts` — fixed-width cell spans | Replacing one cell changes exactly one character and leaves every other byte identical; a detail entry can be inserted, replaced and removed surgically |
+| A4 | `ops.ts` — the operation set (§7) | All fifteen operations implemented and total; the commutativity property test passes over generated documents and operation sequences (§8 invariant 1); `note.movePitch` and `note.moveTime` rewrite the detail addresses that name the note they moved (§7 rule 4) |
+| A5 | `loop.ts` — phrase references | A `loop` fence resolves phrase ids to Loop IR; the `loop` errors in §9 are reported; the track index still comes from `synth` fence order, and multi-track playback is unchanged |
+| A6 | `gui/sequencer.ts`, `gui/view.ts` — grid projection | The sequencer renders a phrase grid, every gesture goes through `ops.ts`, and no GUI state exists that the document does not |
+| A7 | `defaultDoc.ts`, `docs/syntax.md` | The default document uses `phrase` fences and still renders — the wasm end-to-end test is the check — and `syntax.md` describes what runs rather than what is planned |
+
+**A1 and A2 are the foundation.** Nothing above them is worth writing until
+`format(format(x)) == format(x)` passes: every later step assumes it can produce
+canonical text, and an operation that emits a second valid spelling of the same
+structure makes invariant 1 untestable.
+
+### Track B — note events
+
+**Owns** `dsp/src/lib.rs`, `dsp/src/voice.rs`, `dsp/src/engine.rs`,
+`web/public/worklet.js`, and the ABI section of `docs/architecture.md`.
+**Does not touch** `web/src/`.
+
+Track B owns the worklet as well as the Rust, because the worklet is `note_on`'s
+only caller: splitting the two across agents lands a broken `main`.
+
+Finished when:
+
+- `note_on(track, note, velocity, glide_s, legato)` is exported, with
+  `glide_s < 0` meaning "use the patch's `voice.glide`" and `legato != 0`
+  suppressing the amplitude-envelope retrigger (§10)
+- the worklet passes `-1` and `0`, so **today's audio is bit-identical**: the
+  determinism check in `dsp/tests/verify.rs` and the wasm end-to-end test in
+  `web/src/integration.test.ts` produce the same samples as before the change.
+  This is the criterion that matters — the change is only safe if it is inaudible
+  until something asks for it
+- a new offline check: a legato `note_on` during a sounding note changes pitch
+  without restarting the envelope and without a click, in the shape of the
+  existing click test
+- the ABI block in `docs/architecture.md` matches the exports
+
+**Track B can land before Track A starts**, and should. Nothing in it waits on
+the notation, and having it in place means `gliss` is implementable the moment
+A4 exists.
+
+### Crossings
+
+| File | Owner | |
+|---|---|---|
+| `web/src/dsl/compile.ts` | Track A | |
+| `docs/architecture.md` | Track B, ABI section only | Track A leaves it alone |
+| `docs/syntax.md` | Track A | |
+| `CHANGELOG.md` | both | Append-only, but still a conflict if edited at the same moment |
+| this file | whoever finishes a track | Move its status line |
+
 ## 1. Terms
 
 | Term | Meaning |

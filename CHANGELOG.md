@@ -69,7 +69,10 @@ first tag will close this section.
   rows against time columns) from arrangement (`loop`, which binds a phrase to a
   track), addresses expression by coordinate with a cascade, and constrains
   editing to a finite operation set so that text edits and model edits can be
-  proven to commute. Not implemented yet.
+  proven to commute. Not implemented yet. The stream is split into two tracks
+  with file ownership, landing order and per-step acceptance criteria written
+  down, so a second agent can take one without reading the conversation the
+  design came out of.
 - **English is the source of truth.** The README and `docs/` are English;
   `docs/ja/` holds Japanese translations and the original design notes.
 - **[AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md) and this

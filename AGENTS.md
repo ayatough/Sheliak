@@ -124,8 +124,16 @@ dependency-free. Keep it that way.
 
 ## Running several agents at once
 
-Work splits cleanly along the DSP/web boundary, and inside the web layer along
-`dsl/` versus `gui/`. These streams rarely collide:
+The current batch of work is already split, with the file ownership written down:
+see [docs/workstreams.md](docs/workstreams.md#splitting-the-work). **If you were
+handed a track letter, that is your brief** — Track A is the note layer in
+`web/src/dsl/` and `web/src/gui/`, Track B is the note-event ABI in `dsp/` and the
+worklet, and they share no file. Two is the ceiling for that stream: everything
+on the notation side hangs off one parser, so a third agent has nothing to do
+that is not blocked.
+
+In general, work splits cleanly along the DSP/web boundary, and inside the web
+layer along `dsl/` versus `gui/`. These streams rarely collide:
 
 | Stream | Files | Notes |
 |---|---|---|
@@ -143,6 +151,8 @@ Work splits cleanly along the DSP/web boundary, and inside the web layer along
 - `web/src/defaultDoc.ts` — every DSL feature wants a line in it
 - `CHANGELOG.md` — append-only, but still a merge conflict if edited simultaneously
 - `dsp/src/engine.rs` — the seam every per-voice module passes through
+- `web/public/worklet.js` — it calls the ABI, so whoever changes an export owns
+  the worklet in the same change. Splitting those two lands a broken `main`
 
 **Splitting work.** Give each agent a whole vertical slice — DSL parsing plus IR
 plus parameter mapping plus a line in the default document — rather than one layer
