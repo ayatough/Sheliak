@@ -7,6 +7,7 @@ AudioWorklet で駆動してブラウザで音を鳴らす。
 
 - 要件定義: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
 - 統合仕様 (Patch IR / WASM ABI / パラメータレイアウト): [docs/SPEC.md](docs/SPEC.md)
+- ノート層仕様 (phrase / loop / 操作セット): [docs/SPEC-NOTES.md](docs/SPEC-NOTES.md)
 
 ## ビルドと実行
 
