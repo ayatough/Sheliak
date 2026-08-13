@@ -6,11 +6,12 @@
 
 const F = '```';
 
-export const DEFAULT_DOC = `# Sheliak — 4トラックのグルーヴ
+export const DEFAULT_DOC = `# Sheliak — a four-track groove
 
-テキストを編集すると 150ms 後に再コンパイルされ、再生を止めずに反映されます。
-synth フェンスの出現順がトラック (0..7)。loop の各行は同名の id に紐付きます。
-エラーのあるフェンスだけが直前の有効なパッチのまま鳴り続けます。
+Edit the text and it recompiles 150 ms later, without stopping playback.
+The order the synth fences appear in is the track index (0..7); each loop line
+binds to the fence with the same id. A fence that fails to parse keeps playing
+its last valid patch, and only that fence freezes.
 
 ${F}synth id=lead seed=42
 osc:
@@ -58,7 +59,7 @@ ${F}synth id=kick seed=1
 osc:
   - { table: basic/sine, level: 0dB }
 
-# env.filter を pitch に送って一瞬で3オクターブ落とす = キックのアタック
+# env.filter routed to pitch drops three octaves in 55 ms = a kick's attack
 filter: { type: lp12, cutoff: 6kHz, res: 0.1, drive: 0.35, key_track: 0% }
 
 env:
@@ -72,7 +73,7 @@ voice: { polyphony: 2, glide: 0ms }
 ${F}
 
 ${F}synth id=hat seed=3
-# osc: [] = オシレータなし。ノイズだけのパッチ
+# osc: [] = no oscillator at all. A noise-only patch, which is how hats are made
 osc: []
 
 noise: { level: -6dB, color: white }

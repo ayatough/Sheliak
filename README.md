@@ -173,4 +173,4 @@ notation is the expensive part to get wrong.
 
 ## License
 
-Not yet declared.
+MIT. See [LICENSE](LICENSE).

@@ -35,8 +35,9 @@ is the whole of the state. See [README](README.md) for the user view,
    patch seed (`dsp/src/rng.rs`); nothing reads a clock or a global RNG.
    `dsp/tests/verify.rs` enforces this — do not weaken it.
 6. **English everywhere in the repository**: comments, identifiers, commit
-   messages, docs. `docs/ja/` holds Japanese translations and is never the source
-   of truth.
+   messages, docs, and the app's own interface — labels, status lines and
+   `web/src/defaultDoc.ts`. `docs/ja/` holds Japanese translations and is never
+   the source of truth.
 7. **Do not weaken a test to make it pass.** If a quality gate fails, either the
    change is wrong or the expectation genuinely moved — and if it moved, say so
    in the commit message.

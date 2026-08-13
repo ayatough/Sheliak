@@ -85,12 +85,10 @@ produce work that fails CI.
 ## Conventions
 
 - **English everywhere in the repository**: code comments, identifiers, commit
-  messages, documentation. Japanese translations live under `docs/ja/` and are a
-  convenience, never the source of truth.
-  **The application's own UI strings are the one exception, and an open
-  question** — the editor and `web/src/defaultDoc.ts` are currently Japanese.
-  That is a decision about who the app is for rather than about the repository,
-  so it has not been made by this convention. Until it is, leave them.
+  messages, documentation, and the application's own interface — button labels,
+  status lines, hints, and the document the editor opens with. Japanese
+  translations live under `docs/ja/` and are a convenience, never the source of
+  truth.
 - Comments explain *why*, not *what*. The surrounding code already says what.
 - Every new DSL field needs three things: a parser test, a row in
   [syntax.md](syntax.md), and an appearance in `web/src/defaultDoc.ts` — the

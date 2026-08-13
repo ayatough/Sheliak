@@ -170,14 +170,14 @@ function renderTracks(result: CompileResult): void {
     const view = trackViews.get(t);
     const id = view?.id ?? `track${t}`;
     const stale = failed.has(t) ? '<span class="stale">⚠ last valid</span>' : '';
-    const body = view ? escapeHtml(view.json) : '(まだコンパイルされていません)';
+    const body = view ? escapeHtml(view.json) : '(not compiled yet)';
     parts.push(
       `<details class="expanded"><summary><span class="badge">${t}</span>${escapeHtml(id)}${stale}</summary>` +
         `<pre>${body}</pre></details>`,
     );
   }
   if (parts.length === 0) {
-    parts.push('<details class="expanded"><summary>展開済みパラメータ</summary><pre>(synth フェンスがありません)</pre></details>');
+    parts.push('<details class="expanded"><summary>expanded parameters</summary><pre>(no synth fence)</pre></details>');
   }
   tracksEl.innerHTML = parts.join('');
 }
@@ -198,7 +198,7 @@ function renderErrors(result: CompileResult): void {
         `<li><span class="loc">${e.line}:${e.col}</span>${escapeHtml(e.message)}</li>`,
     )
     .join('');
-  const hint = keepsPlaying ? '<div class="hint">直前の有効なパッチで再生を継続中 (playing last valid patch)</div>' : '';
+  const hint = keepsPlaying ? '<div class="hint">still playing the last valid patch</div>' : '';
   errorsEl.innerHTML = `${hint}<ul>${items}</ul>`;
 }
 

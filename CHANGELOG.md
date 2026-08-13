@@ -52,7 +52,16 @@ first tag will close this section.
 - **A published build.** GitHub Pages deploys the app on every push to `main`,
   after CI has passed.
 
+### Changed
+- **The interface is in English.** Button labels, status lines, editor hints and
+  the document the editor opens with were Japanese while the code around them
+  was English. The repository convention now covers the app itself, not only its
+  source, so there is one language in the project rather than a boundary
+  somewhere inside it. No musical content changed: the default song's fences are
+  untouched, only its prose and comments.
+
 ### Documentation
+- **MIT licence.**
 - **[docs/workstreams.md](docs/workstreams.md): the note layer, redesigned.** The
   current `loop` fence carries every track's notes inline, which cannot show the
   shape of a line, cannot reuse a phrase, and has nowhere to put velocity or

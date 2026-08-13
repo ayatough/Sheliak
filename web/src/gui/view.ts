@@ -121,7 +121,7 @@ export class GuiView {
         const add = document.createElement('button');
         add.type = 'button';
         add.className = 'seq-add';
-        add.textContent = `＋ ${id} のループ行を追加`;
+        add.textContent = `+ add a loop line for ${id}`;
         add.addEventListener('click', () => this.addLine(id, bars));
         row.appendChild(add);
         seq.appendChild(row);
@@ -133,7 +133,7 @@ export class GuiView {
         label.classList.add('muted');
         const warn = document.createElement('div');
         warn.className = 'seq-label muted';
-        warn.textContent = 'この行はグリッドに合いません (テキストで修正)';
+        warn.textContent = 'this line does not fit the grid — edit it as text';
         row.appendChild(warn);
         seq.appendChild(row);
         continue;
@@ -235,7 +235,7 @@ export class GuiView {
           if (notes?.length) this.lastNote.set(track, notes);
         } else if (this.tieMode) {
           next = setTieCell(line, index);
-          if (next === line) this.host.hint('タイにできるのは前にノートがあるセルだけです');
+          if (next === line) this.host.hint('only a cell with a note before it can be tied');
         } else {
           next = toggleCell(line, index, this.lastNote.get(track));
           const notes = next.cells[index]?.notes;
@@ -372,7 +372,7 @@ export class GuiView {
     if (!track) {
       const p = document.createElement('div');
       p.className = 'gui-hint';
-      p.textContent = 'このフェンスにはエラーがあります。テキストを直すと編集できます。';
+      p.textContent = 'this fence has errors — fix the text to edit it here';
       params.appendChild(p);
       return;
     }
