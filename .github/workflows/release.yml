@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # So the tarball can be built and downloaded without cutting a release —
+  # which is the only way to check the packaging before it is permanent.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish the tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: install web dependencies
+        run: npm ci
+        working-directory: web
+
+      # The same script a contributor runs, so a tarball built here and one
+      # built by hand differ only in the version they are told.
+      - name: build the release tarball
+        run: ./scripts/build-release.sh "${GITHUB_REF_NAME#v}"
+        if: startsWith(github.ref, 'refs/tags/')
+
+      - name: build the release tarball (dry run)
+        run: ./scripts/build-release.sh
+        if: "!startsWith(github.ref, 'refs/tags/')"
+
+      # A tarball nobody has run is a guess. This is the same path the installer
+      # produces: extract it somewhere unrelated to the repository and use it.
+      - name: run the CLI out of the tarball
+        run: |
+          set -eux
+          workdir=$(mktemp -d)
+          tar -xzf dist-release/*.tar.gz -C "$workdir"
+          cli=$(echo "$workdir"/sheliak-*/sheliak.mjs)
+          cd "$workdir"
+          node "$cli" --version
+          node "$cli" new song.md
+          node "$cli" check song.md
+          node "$cli" fmt song.md --check
+          node "$cli" render song.md -o song.wav
+          test -s song.wav
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sheliak-tarball
+          path: dist-release/*
+
+      - name: publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md).
+
+          \`\`\`
+          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh | sh
+          \`\`\`
+
+          Node.js 20 or newer is required." \
+            dist-release/*.tar.gz \
+            dist-release/*.tar.gz.sha256

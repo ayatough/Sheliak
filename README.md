@@ -141,76 +141,30 @@ on `main`. See [docs/development.md](docs/development.md) for the full guide.
 
 ## The CLI
 
-`sheliak` starts a song and reads one back without opening anything. No clone
-and no Rust toolchain — Node.js 20 or newer is the only requirement:
+`sheliak` starts a song, reads one back, renders it and plays it. One command,
+no clone, no Rust toolchain — Node.js 20 or newer is the only requirement:
 
 ```bash
-npx github:ayatough/Sheliak new song.md      # the smallest song that makes a sound
-npx github:ayatough/Sheliak check song.md    # every error, by line and column
+curl -fsSL https://raw.githubusercontent.com/ayatough/Sheliak/main/scripts/install.sh | sh
 ```
 
-`fmt` rewrites every phrase grid canonically. The beat ruler, the row order, the
-group tags, the bar lines and the label alignment are all *derived* rather than
-typed, so a grid cannot silently disagree with the ruler above it — which it can
-today, because both are written by hand:
+That puts `sheliak` in `~/.local/bin`, with the DSP core and the app beside it,
+so every command below works out of the box. **It needs a release to fetch, and
+there is not one yet** — until the first tag, use `npx github:ayatough/Sheliak`
+(which can run `new`, `check` and `fmt`, but not `render` or `serve`, because
+those need the built engine) or a working copy.
 
-```diff
--  # ruler is a lie
--  5    |a---a---|
-+  #    1234 1234
-+  5   |o---|o---|
-```
-
-Prose, `synth` fences, comments and every alignment outside a phrase survive
-byte-for-byte. `--check` writes nothing and exits non-zero if anything would
-change, the way `cargo fmt --check` gates a repository.
-
-`render` writes the loop to a WAV, with the same wasm and the same
-sample-accurate scheduling the browser uses — so the file is what you heard, and
-two machines given the same document and seed write the same bytes:
-
-```bash
-sheliak render song.md -o song.wav --loops 4 --tail 2s
-# wrote song.wav — 8.00s · 4 tracks · 126bpm · peak -3.2 dBFS
-```
-
-It refuses a document that does not compile rather than writing one with a track
-silently missing from it. `--tail` is off by default, so one loop is exactly
-loop-length and still loops seamlessly; a reverb that should ring out wants it.
-This is the one command that needs the DSP core built (`./scripts/build-wasm.sh`),
-because that comes out of cargo and no npm install can produce it.
-
-`serve` is the one that removes the copy-paste. It opens the app on your file:
-save it in your own editor and the sound reloads without stopping the transport,
-and the step sequencer and parameter panel write their edits back to the same
-file. The document, not the browser tab, is where the song lives.
-
-```bash
-sheliak serve song.md          # http://localhost:4321
-```
-
-Like `render` it needs the DSP core built, and unlike `new` and `check` it runs
-the app out of a working copy, so it needs the repository.
-
-For `sheliak` as a command that stays, link it from a working copy:
-
-```bash
-git clone https://github.com/ayatough/Sheliak && cd Sheliak
-npm install && npm link      # `sheliak` on your PATH, built as it installs
-```
-
-`npm install -g <git url>` is the one way in that does **not** work, and it is
-worth saying why: npm does not install a package's dependencies before running
-its `prepare` when the install is global, and the CLI is bundled by `prepare`.
-Publishing to npm is what fixes that — the registry tarball ships the bundle
-already built — and that is a job for the first release, which has not happened.
+One artifact covers every platform: the CLI is a JavaScript bundle, `dsp.wasm`
+is wasm, and the app is static files. Nothing in it is platform-specific, which
+is why there is no target matrix to be only-as-tested-as-one-machine.
 
 It is a Node program rather than a second binary beside the DSP core, because
 the notation is parsed in TypeScript and the Rust side does not know the DSL — a
 second parser would be a second copy of the contract to keep in step. The cost
-of that is this: there is no single self-contained executable to `curl` yet, so
-the machine running `sheliak` needs Node the way the machine running the app
-needs a browser.
+of that is the Node requirement: the archive carries the engine and the app, but
+not a runtime, so the machine running `sheliak` needs Node the way the machine
+running the app needs a browser. A truly self-contained executable would mean
+either embedding a runtime (~100 MB a copy) or moving the parser to Rust.
 
 `new` writes one `synth` fence, one `phrase` and the `loop` that binds them —
 short enough to read in full, so that everything left out is visibly taking a

@@ -152,6 +152,22 @@ first tag will close this section.
   a phrase survive byte-for-byte, and `--check` writes nothing and exits non-zero
   if anything would change. A document with a phrase that does not parse is left
   alone entirely rather than half-formatted.
+- **An installer: `curl … | sh`, no clone and no Rust toolchain.** A release
+  publishes one tarball for every platform — the CLI bundle, the built app and
+  `dsp.wasm` — because nothing in it is platform-specific, so there is no target
+  matrix each only as tested as the machine that built it. `scripts/install.sh`
+  verifies the published checksum, extracts to `~/.local/share/sheliak` and puts
+  a wrapper in `~/.local/bin`; it refuses before downloading anything when Node
+  is missing or older than 20. `release.yml` builds the archive with the same
+  script a contributor runs, extracts it somewhere unrelated to the repository
+  and runs the CLI out of it before publishing anything, and `workflow_dispatch`
+  does all of that without publishing, so the packaging can be checked before a
+  tag makes it permanent.
+- **`sheliak serve` runs without a repository.** It serves the *built* app over
+  a plain Node HTTP server instead of starting Vite, and pushes file changes
+  over server-sent events instead of Vite's HMR socket. That is what lets a
+  release carry everything `serve` needs, and it leaves the CLI with no runtime
+  dependency at all. Working on the app itself is what `npm run dev` is for.
 
 ### Changed
 - **One mistake is reported once.** A miscounted phrase row used to produce

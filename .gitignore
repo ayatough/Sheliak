@@ -6,3 +6,4 @@
 .DS_Store
 /web/dist-cli/
 /node_modules/
+/dist-release/

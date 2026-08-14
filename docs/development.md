@@ -35,7 +35,24 @@ cd web && npm run build:cli  # bundle the CLI -> web/dist-cli/sheliak.mjs
 cargo test --manifest-path dsp/Cargo.toml     # offline DSP verification
 ./scripts/build-wasm.sh                       # rebuild the wasm after a Rust change
 ./scripts/check-versions.sh                   # every version agrees
+./scripts/build-release.sh                    # the release tarball, into dist-release/
 ```
+
+### Releasing
+
+`scripts/build-release.sh` assembles one tarball for every platform — the CLI
+bundle, the built app, and `dsp.wasm` inside it — because nothing in it is
+platform-specific. `release.yml` runs that same script on a `v*` tag, extracts
+the result somewhere unrelated to the repository, runs the CLI out of it, and
+only then publishes the archive and its checksum. `workflow_dispatch` builds and
+uploads the tarball as a run artifact without publishing anything, which is the
+only way to check the packaging before a tag makes it permanent.
+
+`scripts/install.sh` is what the README's `curl | sh` runs: latest tag from the
+releases API, checksum verified, extracted to `~/.local/share/sheliak`, with a
+wrapper in `~/.local/bin`. It refuses before downloading anything when Node is
+missing or older than 20 — a tarball on disk that cannot run is worse than a
+refusal that names the requirement.
 
 The CLI lives in `web/src/cli/` and is bundled by `vite.cli.config.ts`, because
 it imports the DSL parser — the same `compile()` the browser runs, so a document
@@ -100,6 +117,8 @@ web/
   src/audio/offline.ts the same scheduling without an AudioContext, for the
                        end-to-end test and `sheliak render`
   src/cli/             the `sheliak` command, over the same parser
+  src/cli/serve.ts     a static server for the built app, plus the document
+                       endpoint and its event stream
   src/docFile.ts       the document when it is a file, under `sheliak serve`
 scripts/             build helpers
 docs/                architecture, syntax, roadmap, workstreams; ja/ translations
