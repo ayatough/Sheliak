@@ -59,6 +59,16 @@ npm install && npm link
 `prepare` の前に依存を入れないためで、CLI は `prepare` でバンドルされます。npm への
 publish（＝ビルド済みの tarball を配る）が本来の解決で、それは最初のリリースの仕事です。
 
+`render` はループを WAV に書き出します。ブラウザと同じ wasm・同じサンプル精度の
+スケジューリングを使うので、鳴っていたものがそのままファイルになります:
+
+```bash
+sheliak render song.md -o song.wav --loops 4 --tail 2s
+```
+
+このコマンドだけは DSP コアのビルド（`./scripts/build-wasm.sh`）が必要です。cargo の
+成果物なので、npm install では作れません。
+
 作業コピー内では `./scripts/sheliak` が編集中のソースを使い、古ければ自動で再ビルドします。
 
 `new` は `synth` フェンス1つ・`phrase` 1つ・両者を結ぶ `loop` だけを書きます。既存の

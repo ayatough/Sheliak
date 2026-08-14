@@ -94,7 +94,9 @@ web/
   src/dsl/             fence extraction, YAML subset, parsing, surgical edits
   src/gui/             step sequencer and parameter panel
   src/audio/           AudioContext, wasm loading, worklet messaging
-  src/cli/             `sheliak new` and `sheliak check`, over the same parser
+  src/audio/offline.ts the same scheduling without an AudioContext, for the
+                       end-to-end test and `sheliak render`
+  src/cli/             the `sheliak` command, over the same parser
 scripts/             build helpers
 docs/                architecture, syntax, roadmap, workstreams; ja/ translations
 ```

@@ -11,8 +11,11 @@
 // the contract to keep in step — the mistake `params.rs` / `params.ts` already
 // costs enough to avoid repeating.
 
+import { basename } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { check, failed, formatJson, formatText, type CheckOptions } from './check.ts';
 import { create } from './scaffold.ts';
+import { describeRender, render, type RenderOptions } from './render.ts';
 import { version } from '../../package.json';
 
 type Format = 'text' | 'json';
@@ -31,6 +34,8 @@ export function run(argv: string[]): Outcome {
       return cmdNew(argv.slice(1));
     case 'check':
       return cmdCheck(argv.slice(1));
+    case 'render':
+      return cmdRender(argv.slice(1));
     case '--version':
     case '-V':
       return { out: `sheliak ${version}`, err: '', code: 0 };
@@ -95,13 +100,84 @@ function cmdCheck(args: string[]): Outcome {
   return { out, err: '', code: failed(report, opts) ? 1 : 0 };
 }
 
+function cmdRender(args: string[]): Outcome {
+  let input: string | undefined;
+  let out: string | undefined;
+  const opts: RenderOptions = { out: '', loops: 1, tailSeconds: 0, sampleRate: 48000 };
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    switch (arg) {
+      case '-o':
+      case '--out':
+        out = args[++i];
+        if (out === undefined) return usage('-o requires an output path');
+        break;
+      case '--loops': {
+        const n = Number(args[++i]);
+        if (!Number.isInteger(n) || n < 1) return usage('--loops requires a whole number of repeats, 1 or more');
+        opts.loops = n;
+        break;
+      }
+      case '--tail': {
+        const seconds = parseDuration(args[++i]);
+        if (seconds === undefined) return usage('--tail requires a duration with a unit, e.g. 2s or 500ms');
+        opts.tailSeconds = seconds;
+        break;
+      }
+      case '--sample-rate': {
+        const n = Number(args[++i]);
+        if (!Number.isFinite(n) || n <= 0) return usage('--sample-rate requires a rate in Hz, e.g. 44100');
+        opts.sampleRate = n;
+        break;
+      }
+      case '--wasm':
+        opts.wasm = args[++i];
+        if (opts.wasm === undefined) return usage('--wasm requires a path to dsp.wasm');
+        break;
+      default:
+        if (input === undefined && !arg.startsWith('-')) input = arg;
+        else return usage(`unknown argument: ${arg}`);
+    }
+  }
+  if (input === undefined) return usage('a file to render is required');
+  // Beside the caller, not beside the song: `render songs/a.md` writing into
+  // `songs/` would be a surprise, and `-o` is right there for saying otherwise.
+  opts.out = out ?? `${basename(input).replace(/\.md$/i, '')}.wav`;
+
+  let source: string;
+  try {
+    source = readFileSync(input, 'utf8');
+  } catch {
+    return { out: '', err: `error: cannot read ${input}`, code: 1 };
+  }
+  try {
+    return { out: describeRender(render(source, opts)), err: '', code: 0 };
+  } catch (e) {
+    return { out: '', err: `error: ${e instanceof Error ? e.message : String(e)}`, code: 1 };
+  }
+}
+
+/**
+ * `2s`, `500ms`. A bare number is rejected here for the same reason it is
+ * rejected in the notation: seconds and milliseconds are three orders of
+ * magnitude apart and look identical without a unit.
+ */
+export function parseDuration(text: string | undefined): number | undefined {
+  if (text === undefined) return undefined;
+  const m = /^(\d+(?:\.\d+)?)(ms|s)$/.exec(text.trim());
+  if (!m) return undefined;
+  const value = Number(m[1]);
+  return m[2] === 'ms' ? value / 1000 : value;
+}
+
 /**
  * Message for an unrecognised subcommand, with a suggestion when one is close.
  * `sheliak lint` instead of `sheliak check` should read as "that is not the
  * name", not as "your file is wrong".
  */
 function unknownCommand(given: string): string {
-  const commands = ['new', 'check', 'help'];
+  const commands = ['new', 'check', 'render', 'help'];
   const close = commands
     .map((c) => ({ d: editDistance(given, c), c }))
     .filter((x) => x.d <= 2)
@@ -134,6 +210,8 @@ export function helpText(): string {
 Usage:
   sheliak new <file.md> [--empty]
   sheliak check <file.md>... [--strict] [--format text|json]
+  sheliak render <file.md> [-o <out.wav>] [--loops <n>] [--tail <2s>]
+                 [--sample-rate <hz>] [--wasm <dsp.wasm>]
 
   new     write the smallest song that makes a sound — one synth fence, one
           phrase and the loop that binds them — or, with --empty, a blank file
@@ -143,9 +221,20 @@ Usage:
           a track with no loop line and a phrase nothing binds, both of which
           are silent. Exits non-zero on any error, so a song can be gated in
           CI — the reading a repository of text songs should get for free
+  render  render the loop to a 16-bit WAV with the same wasm and the same
+          sample-accurate scheduling the browser uses, so the file is what you
+          heard. Refuses a document that does not compile rather than writing
+          one with a track missing from it. Needs the DSP core built
+          (./scripts/build-wasm.sh)
 
-  --strict  also exit non-zero on the warnings, for a project that wants no
-            unbound track to reach main
-  --format  json emits the same run as records, for a caller that is going to
-            act on them rather than read them`;
+  --strict       also exit non-zero on the warnings, for a project that wants
+                 no unbound track to reach main
+  --format       json emits the same run as records, for a caller that is
+                 going to act on them rather than read them
+  --loops        how many times the loop repeats (default 1)
+  --tail         decay rendered after the last note is released, e.g. 2s. The
+                 default is none, so one loop is exactly loop-length and still
+                 loops seamlessly; a reverb that should ring out wants this
+  --sample-rate  default 48000. Musical time resolves against it, so a render
+                 at another rate is a different set of sample offsets`;
 }

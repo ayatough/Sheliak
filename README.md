@@ -115,7 +115,7 @@ all happen on the TypeScript side.
 | **A master effect chain** | Distortion, EQ, chorus, phaser, flanger, delay, reverb and a 3-band compressor, in the order you write them |
 | **Eight tracks** | One per `synth` fence, each with its own voices and effects |
 | **A GUI that writes text** | The step sequencer and parameter panel edit the document itself, one token at a time, leaving comments and alignment untouched |
-| **A CLI** | `sheliak new` starts a song, `sheliak check` reads one back — every error by line and column, and an exit code CI can gate on |
+| **A CLI** | `sheliak new` starts a song, `check` reads one back with every error by line and column, and `render` writes it to a WAV — bit-identical to what the browser plays |
 | **Bit-identical renders** | Same document, same seed, same samples — enforced by an offline test |
 | **No binary but the source material** | Wavetables are generated procedurally; nothing about a song is opaque |
 
@@ -148,6 +148,21 @@ and no Rust toolchain — Node.js 20 or newer is the only requirement:
 npx github:ayatough/Sheliak new song.md      # the smallest song that makes a sound
 npx github:ayatough/Sheliak check song.md    # every error, by line and column
 ```
+
+`render` writes the loop to a WAV, with the same wasm and the same
+sample-accurate scheduling the browser uses — so the file is what you heard, and
+two machines given the same document and seed write the same bytes:
+
+```bash
+sheliak render song.md -o song.wav --loops 4 --tail 2s
+# wrote song.wav — 8.00s · 4 tracks · 126bpm · peak -3.2 dBFS
+```
+
+It refuses a document that does not compile rather than writing one with a track
+silently missing from it. `--tail` is off by default, so one loop is exactly
+loop-length and still loops seamlessly; a reverb that should ring out wants it.
+This is the one command that needs the DSP core built (`./scripts/build-wasm.sh`),
+because that comes out of cargo and no npm install can produce it.
 
 For `sheliak` as a command that stays, link it from a working copy:
 

@@ -122,6 +122,17 @@ first tag will close this section.
   global package's `prepare`; publishing to npm is what fixes it. Inside a
   working copy `./scripts/sheliak` runs the CLI against the sources you are
   editing, rebuilding the bundle when it is stale.
+- **`sheliak render` writes the song to a WAV.** The same `dsp.wasm`, the same
+  sample-accurate scheduling as the AudioWorklet, off the audio thread — so the
+  file is what the browser plays, and the same document and seed produce the
+  same bytes on any machine. `--loops` repeats, `--tail 2s` renders the decay
+  after the last note is released (off by default, so one loop is exactly
+  loop-length and still loops seamlessly), `--sample-rate` picks the rate
+  musical time resolves against. It refuses a document that does not compile
+  rather than writing one with a track silently missing. The scheduling moved
+  out of the end-to-end test into `web/src/audio/offline.ts` so that the test
+  and the renderer cannot drift apart; a second copy of the ABI mirror is
+  exactly what that test exists to catch.
 
 ### Changed
 - **The interface wears the brand palette.** The editor was a cool near-black with
