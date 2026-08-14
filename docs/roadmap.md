@@ -78,6 +78,12 @@ load-bearing rather than a container.
   song can be entirely free of binary files.
 - **Samples as pinned dependencies**, referenced by URL and hash in a lockfile
   rather than committed.
+- **External plugins, with the document as the wiring.** CLAP hosted as
+  WebAssembly in the browser and natively for offline renders, driven by its
+  declared parameters and never by a saved state blob, so a song that uses one is
+  still a song you can read. Specified in
+  [workstreams.md](workstreams.md#stream-3--plugins); it shares the lockfile
+  above, which is why the two should be designed together.
 - **MIDI import and export.** Import quantizes and summarizes rather than
   reproducing faithfully; that is a consequence of the editing model, not a
   limitation to apologize for.
