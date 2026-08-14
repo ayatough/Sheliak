@@ -774,7 +774,60 @@ Offline rendering first, not live playback:
 The browser stays canonical for playing and editing. A render that used plugins
 carries class `pinned` (§4) and says so.
 
-## 10. Order and dependencies
+## 10. The export direction
+
+Everything above points inward: other people's plugins, running inside Sheliak.
+The arrow reverses cheaply, and it is worth writing down before someone concludes
+it was never considered.
+
+**A Sheliak patch can be compiled into a plugin other hosts can load.** After A2
+the pieces are already there — `dsp` is compiled to wasm today, effects describe
+their own parameters, and a patch is a fully expanded IR that dumps as JSON. A
+`synth` fence plus the engine plus a parameter mapping is, structurally, a
+`.wclap`; producing a native `.clap` from the same core is the same exercise
+against a different target, since `dsp` builds for the native target already.
+
+It is worth more than the effort suggests:
+
+- **It answers the lock-in question.** A text format that only its own editor can
+  play is a format people are right to be wary of. "The sound you wrote in
+  Markdown loads in your DAW" removes that objection without compromising
+  anything in the notation.
+- **It costs the reproducibility classes nothing.** An exported plugin is output,
+  not a referenced dependency, so §4 does not apply to it. The arrow pointing out
+  is free in a way the arrow pointing in is not.
+- **It does not depend on a draft holding still.** If web-clap moves, an exporter
+  goes stale; it does not break the app.
+- **Track D produces most of it as a by-product.** D's first deliverable is one of
+  Sheliak's own effects compiled to a `.wclap` and round-tripped — that is the
+  exporter with a smaller subject.
+
+Treat it as a follow-on to D rather than a track of its own, and do not let it
+start before A4: exporting a patch whose parameter layout is about to change means
+building the exporter twice.
+
+### Not this: translating native binaries
+
+Recorded as rejected so it is not re-proposed. Running an unmodified commercial
+`.clap` in the browser would mean dynamic binary translation of x86 — which does
+exist, as CheerpX and WebVM demonstrate, and which has no place here:
+
+- DBT compiles new traces **while the code runs**. Inside `process()` that
+  allocates and takes unbounded time — non-negotiable 2 and the render deadline,
+  broken on every block.
+- Moving it off the audio thread adds buffering latency and gives up live
+  playing. And for a non-realtime render the emulator is pointless: the native
+  path (§9) runs the same plugin directly and far faster.
+- The case where it would help and the case where it could work do not overlap.
+- Commercial plugins commonly forbid it by licence and gate themselves behind
+  online or dongle activation that a sandbox cannot satisfy.
+- It makes determinism worse, not better.
+
+"Commercial plugins in the browser" is not a hard problem waiting for effort. It
+is a request that conflicts with constraints this project chose deliberately, and
+§9 is the honest answer to it.
+
+## 11. Order and dependencies
 
 | Phase | Depends on | Can start now |
 |---|---|---|
@@ -784,10 +837,12 @@ carries class `pinned` (§4) and says so.
 | §7 generalized `fx` fence | §5, §6 | After |
 | §9 native render path | §5 (for the plugin interface); nothing else | Yes, in parallel |
 | §8 `.wclap` host in the browser | §5, §7 | After |
+| §10 exporting a patch as a plugin | A4 (the layout must have stopped moving) | After |
 
 §5 and §6 are unconditional: they pay for themselves in the cost of the ninth
 effect, whether or not a single external plugin is ever loaded. §9 shares almost
-no files with anything and can run alongside from day one.
+no files with anything and can run alongside from day one. §10 is the only item
+here that survives web-clap being abandoned.
 
 ## Splitting the work
 
@@ -795,6 +850,22 @@ Four tracks. **A and C can run concurrently from the start; B waits on Stream 2'
 frontmatter; D waits on A.** Do not put two agents inside Track A — it is the
 parameter contract, and that is the file pair AGENTS.md names as the contention
 hotspot.
+
+### Where the difficulty is
+
+Two kinds of hard, and they want different handling. Some steps are **large** —
+they take a long time and you find out when they fail. Others are **silent** —
+small diffs whose failure mode is green tests and wrong audio. With no ears in
+the loop, the silent ones are the dangerous ones.
+
+| | Hard because | Handling |
+|---|---|---|
+| D / §8 | Largest. A CLAP host, inside a bundler-free worklet, plus a WASI shim, against a moving draft — and it can be invalidated before a line is written | Settle the shared-memory question first. Do not start it as anyone's first task here |
+| **A4** | **Silent.** It moves the parameter contract, which AGENTS.md names as the one change that breaks without failing | Decide the open question about per-instance blocks **in prose, merged, before the code** |
+| §4 / B | Silent, and mostly a design argument rather than an implementation | Write the classes down and get them agreed before touching frontmatter |
+| C, second half | Large, but unconstrained — no realtime deadline, no worklet, and clack does the unsafe parts | Ordinary work. Land the first half before it |
+| A1–A3, A5 | Neither. Bit-identical audio is a real check, so a mistake announces itself | Ordinary work |
+| **C, first half** | Neither, and it shares no file with any other track | **The right first task.** It also proves the IR is an interchange format rather than an internal type |
 
 ### Track A — the effect plugin boundary (§5, §6, §7)
 
@@ -841,15 +912,24 @@ verified by rendering a `defaultDoc.ts` patch and comparing against the browser'
 output; then `clack-host` on top. The first half is a useful tool on its own and
 is what proves the IR is a real interchange format rather than an internal type.
 
-### Track D — the `.wclap` host (§8)
+### Track D — the `.wclap` host (§8), and the exporter (§10)
 
-**Owns** `web/public/worklet.js`, `web/src/audio/`, the host module.
+**Owns** `web/public/worklet.js`, `web/src/audio/`, the host module, the WCLAP
+build recipe and the patch exporter.
 **Does not touch** `web/src/dsl/`, `dsp/src/`.
 
 Starts after A4. First deliverable is one of Sheliak's own effects compiled to a
 `.wclap` and round-tripped through the host with output matching the built-in
 version — not a third-party plugin. Confirm the shared-memory question in §8
 before writing code; it can invalidate the track.
+
+The build recipe that first deliverable needs — clang against the wasi-sdk
+sysroot, `libclang_rt.builtins-wasm32.a`, the WCLAP export conventions — is a
+few dozen lines of build configuration, not a compiler. It is also most of what
+§10's exporter requires, so land the two together: the exporter is the same
+recipe pointed at a whole patch instead of one effect. **If §8 is invalidated by
+the shared-memory question, §10 survives it** — exporting does not depend on
+Sheliak being able to host anything — and this track becomes the exporter alone.
 
 ### Crossings
 
