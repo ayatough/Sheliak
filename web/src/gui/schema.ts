@@ -6,7 +6,7 @@
 
 import type { PatchIR } from '../dsl/ir.ts';
 import { FILTER_MODES, LFO_WAVES } from '../dsl/ir.ts';
-import { DIST_MODES, NOISE_COLORS, FX_KEYS, type FxIR } from '../dsl/fx.ts';
+import { NOISE_COLORS, FX_KEYS, FX_DESCRIPTORS, type FxIR } from '../dsl/fx.ts';
 import { TABLE_IDS, MAX_UNISON, MAX_VOICES } from '../shared/params.ts';
 import { linearToDb } from '../dsl/units.ts';
 import type { UnitFamily } from '../dsl/format.ts';
@@ -222,84 +222,48 @@ export function buildPanel(ir: PatchIR): PanelSection[] {
   return sections;
 }
 
+/**
+ * The one control whose scale does not follow from its unit. Predelay spans
+ * 0–250 ms, where a log slider spends most of its travel below 10 ms; every
+ * other time control covers three decades and needs one.
+ */
+const LINEAR_SECONDS = new Set(['reverb.predelay']);
+
+/**
+ * One effect's controls, from its descriptor in `dsl/fx.ts`.
+ *
+ * The unit picks the control, the descriptor carries the range, and `db-linear`
+ * is the one that has to convert: the block holds linear gain and the slider
+ * has to show dB. Adding an effect adds no code here.
+ */
 function fxFields(entry: FxIR, i: number): FieldSpec[] {
-  const at = (key: string) => [String('fx'), String(i), key];
-  switch (entry.type) {
-    case 'dist': {
-      const v = entry.params;
-      return [
-        ratio(at('drive'), 'drive', v.drive),
-        ratio(at('mix'), 'mix', v.mix),
-        enumField(at('mode'), 'mode', v.mode, Object.keys(DIST_MODES)),
-        hz(at('tone'), 'tone', v.toneHz),
-      ];
+  const params = entry.params as unknown as Record<string, unknown>;
+  return FX_DESCRIPTORS[entry.type].params.map((desc): FieldSpec => {
+    const path = ['fx', String(i), desc.key];
+    const label = desc.label ?? desc.key.replace(/_/g, ' ');
+    const raw = params[desc.field];
+    switch (desc.unit) {
+      case 'norm':
+      case 'ratio':
+        return ratio(path, label, raw as number);
+      case 'db':
+        return db(path, label, raw as number, desc.min, desc.max);
+      case 'db-linear':
+        return db(path, label, linearToDb(raw as number), desc.min, desc.max);
+      case 'hz':
+        return hz(path, label, raw as number, desc.min, desc.max);
+      case 'seconds':
+        return LINEAR_SECONDS.has(`${entry.type}.${desc.key}`)
+          ? { path, label, kind: 'lin', unit: 'sec', min: desc.min, max: desc.max, step: desc.step, value: raw as number }
+          : secs(path, label, raw as number, desc.min, desc.max);
+      case 'count':
+        return int(path, label, raw as number, desc.min ?? 0, desc.max ?? 1, desc.step);
+      case 'bool':
+        return toggle(path, label, raw as boolean);
+      case 'enum':
+        return enumField(path, label, String(raw), Object.keys(desc.values ?? {}));
     }
-    case 'eq': {
-      const v = entry.params;
-      return [
-        db(at('low'), 'low', v.lowDb, -24, 24),
-        db(at('mid'), 'mid', v.midDb, -24, 24),
-        db(at('high'), 'high', v.highDb, -24, 24),
-        hz(at('mid_freq'), 'mid freq', v.midFreqHz),
-      ];
-    }
-    case 'chorus': {
-      const v = entry.params;
-      return [hz(at('rate'), 'rate', v.rateHz, 0.01, 20), ratio(at('depth'), 'depth', v.depth), ratio(at('mix'), 'mix', v.mix)];
-    }
-    case 'phaser': {
-      const v = entry.params;
-      return [
-        hz(at('rate'), 'rate', v.rateHz, 0.01, 20),
-        ratio(at('depth'), 'depth', v.depth),
-        ratio(at('feedback'), 'feedback', v.feedback),
-        ratio(at('mix'), 'mix', v.mix),
-        int(at('stages'), 'stages', v.stages, 2, 8, 2),
-        hz(at('center'), 'center', v.centerHz),
-      ];
-    }
-    case 'flanger': {
-      const v = entry.params;
-      return [
-        hz(at('rate'), 'rate', v.rateHz, 0.01, 20),
-        ratio(at('depth'), 'depth', v.depth),
-        ratio(at('feedback'), 'feedback', v.feedback),
-        ratio(at('mix'), 'mix', v.mix),
-      ];
-    }
-    case 'delay': {
-      const v = entry.params;
-      return [
-        secs(at('time'), 'time', v.timeS, 0.001, 2),
-        ratio(at('feedback'), 'feedback', v.feedback),
-        ratio(at('mix'), 'mix', v.mix),
-        toggle(at('pingpong'), 'ping-pong', v.pingpong),
-        hz(at('tone'), 'tone', v.toneHz),
-      ];
-    }
-    case 'reverb': {
-      const v = entry.params;
-      return [
-        ratio(at('size'), 'size', v.size),
-        ratio(at('damp'), 'damp', v.damp),
-        ratio(at('mix'), 'mix', v.mix),
-        { path: at('predelay'), label: 'predelay', kind: 'lin', unit: 'sec', min: 0, max: 0.25, step: 0.001, value: v.predelayS },
-        ratio(at('width'), 'width', v.width),
-      ];
-    }
-    case 'comp': {
-      const v = entry.params;
-      return [
-        db(at('thresh_low'), 'thresh low', v.threshLowDb, -80, 0),
-        db(at('thresh_mid'), 'thresh mid', v.threshMidDb, -80, 0),
-        db(at('thresh_high'), 'thresh high', v.threshHighDb, -80, 0),
-        int(at('ratio'), 'ratio', v.ratio, 1, 20),
-        secs(at('attack'), 'attack', v.attackS, 0.0005, 1),
-        secs(at('release'), 'release', v.releaseS, 0.005, 5),
-        db(at('makeup'), 'makeup', linearToDb(v.makeup), -24, 24),
-      ];
-    }
-  }
+  });
 }
 
 /** Every key this schema can write, per effect type — used by the tests. */

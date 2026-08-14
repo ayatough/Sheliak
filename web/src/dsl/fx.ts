@@ -204,6 +204,12 @@ export interface FxParamDesc<P> {
   beats?: number;
   /** `enum` only: the spellings, and what each is worth in the block. */
   values?: Record<string, number>;
+  /** Editable range. Domain facts — a phaser has 2..8 stages — not GUI ones. */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** Shown instead of the key with its underscores spaced out. */
+  label?: string;
 }
 
 export interface FxDesc<P> {
@@ -239,9 +245,9 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
     id: FX_EQ,
     aliases: ['eq'],
     params: [
-      { key: 'low', field: 'lowDb', offset: EQ_LOW_DB, unit: 'db', value: 0 },
-      { key: 'mid', field: 'midDb', offset: EQ_MID_DB, unit: 'db', value: 0 },
-      { key: 'high', field: 'highDb', offset: EQ_HIGH_DB, unit: 'db', value: 0 },
+      { key: 'low', field: 'lowDb', offset: EQ_LOW_DB, unit: 'db', value: 0, min: -24, max: 24 },
+      { key: 'mid', field: 'midDb', offset: EQ_MID_DB, unit: 'db', value: 0, min: -24, max: 24 },
+      { key: 'high', field: 'highDb', offset: EQ_HIGH_DB, unit: 'db', value: 0, min: -24, max: 24 },
       { key: 'mid_freq', field: 'midFreqHz', offset: EQ_MID_FREQ_HZ, unit: 'hz', value: 1000 },
     ],
   },
@@ -249,7 +255,7 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
     id: FX_CHORUS,
     aliases: ['chorus'],
     params: [
-      { key: 'rate', field: 'rateHz', offset: CHORUS_RATE_HZ, unit: 'hz', value: 0.8 },
+      { key: 'rate', field: 'rateHz', offset: CHORUS_RATE_HZ, unit: 'hz', value: 0.8, min: 0.01, max: 20 },
       { key: 'depth', field: 'depth', offset: CHORUS_DEPTH, unit: 'ratio', value: 0.3 },
       { key: 'mix', field: 'mix', offset: CHORUS_MIX, unit: 'ratio', value: 0.35 },
     ],
@@ -258,11 +264,11 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
     id: FX_PHASER,
     aliases: ['phaser'],
     params: [
-      { key: 'rate', field: 'rateHz', offset: PHASER_RATE_HZ, unit: 'hz', value: 0.4 },
+      { key: 'rate', field: 'rateHz', offset: PHASER_RATE_HZ, unit: 'hz', value: 0.4, min: 0.01, max: 20 },
       { key: 'depth', field: 'depth', offset: PHASER_DEPTH, unit: 'ratio', value: 0.7 },
       { key: 'feedback', field: 'feedback', offset: PHASER_FEEDBACK, unit: 'ratio', value: 0.3 },
       { key: 'mix', field: 'mix', offset: PHASER_MIX, unit: 'ratio', value: 0.4 },
-      { key: 'stages', field: 'stages', offset: PHASER_STAGES, unit: 'count', value: 6 },
+      { key: 'stages', field: 'stages', offset: PHASER_STAGES, unit: 'count', value: 6, min: 2, max: 8, step: 2 },
       { key: 'center', field: 'centerHz', offset: PHASER_CENTER_HZ, unit: 'hz', value: 800 },
     ],
   },
@@ -270,7 +276,7 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
     id: FX_FLANGER,
     aliases: ['flanger'],
     params: [
-      { key: 'rate', field: 'rateHz', offset: FLANGER_RATE_HZ, unit: 'hz', value: 0.25 },
+      { key: 'rate', field: 'rateHz', offset: FLANGER_RATE_HZ, unit: 'hz', value: 0.25, min: 0.01, max: 20 },
       { key: 'depth', field: 'depth', offset: FLANGER_DEPTH, unit: 'ratio', value: 0.6 },
       { key: 'feedback', field: 'feedback', offset: FLANGER_FEEDBACK, unit: 'ratio', value: 0.5 },
       { key: 'mix', field: 'mix', offset: FLANGER_MIX, unit: 'ratio', value: 0.35 },
@@ -281,10 +287,10 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
     aliases: ['delay'],
     params: [
       // 3/16 = 0.75 beat, so the default moves with the document's bpm.
-      { key: 'time', field: 'timeS', offset: DELAY_TIME_S, unit: 'seconds', beats: 0.75 },
+      { key: 'time', field: 'timeS', offset: DELAY_TIME_S, unit: 'seconds', beats: 0.75, min: 0.001, max: 2 },
       { key: 'feedback', field: 'feedback', offset: DELAY_FEEDBACK, unit: 'ratio', value: 0.4 },
       { key: 'mix', field: 'mix', offset: DELAY_MIX, unit: 'ratio', value: 0.25 },
-      { key: 'pingpong', field: 'pingpong', offset: DELAY_PINGPONG, unit: 'bool', value: true },
+      { key: 'pingpong', field: 'pingpong', offset: DELAY_PINGPONG, unit: 'bool', value: true, label: 'ping-pong' },
       { key: 'tone', field: 'toneHz', offset: DELAY_TONE_HZ, unit: 'hz', value: 4000 },
     ],
   },
@@ -295,7 +301,7 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
       { key: 'size', field: 'size', offset: REVERB_SIZE, unit: 'ratio', value: 0.6 },
       { key: 'damp', field: 'damp', offset: REVERB_DAMP, unit: 'ratio', value: 0.5 },
       { key: 'mix', field: 'mix', offset: REVERB_MIX, unit: 'ratio', value: 0.2 },
-      { key: 'predelay', field: 'predelayS', offset: REVERB_PREDELAY_S, unit: 'seconds', value: 0.02 },
+      { key: 'predelay', field: 'predelayS', offset: REVERB_PREDELAY_S, unit: 'seconds', value: 0.02, min: 0, max: 0.25, step: 0.001 },
       { key: 'width', field: 'width', offset: REVERB_WIDTH, unit: 'ratio', value: 1 },
     ],
   },
@@ -303,13 +309,13 @@ export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
     id: FX_MBCOMP,
     aliases: ['comp', 'mbcomp'],
     params: [
-      { key: 'thresh_low', field: 'threshLowDb', offset: MBCOMP_THRESH_LOW_DB, unit: 'db', value: -24 },
-      { key: 'thresh_mid', field: 'threshMidDb', offset: MBCOMP_THRESH_MID_DB, unit: 'db', value: -24 },
-      { key: 'thresh_high', field: 'threshHighDb', offset: MBCOMP_THRESH_HIGH_DB, unit: 'db', value: -24 },
-      { key: 'ratio', field: 'ratio', offset: MBCOMP_RATIO, unit: 'count', value: 3 },
-      { key: 'attack', field: 'attackS', offset: MBCOMP_ATTACK_S, unit: 'seconds', value: 0.01 },
-      { key: 'release', field: 'releaseS', offset: MBCOMP_RELEASE_S, unit: 'seconds', value: 0.12 },
-      { key: 'makeup', field: 'makeup', offset: MBCOMP_MAKEUP, unit: 'db-linear', value: 1 }, // 0dB
+      { key: 'thresh_low', field: 'threshLowDb', offset: MBCOMP_THRESH_LOW_DB, unit: 'db', value: -24, min: -80, max: 0 },
+      { key: 'thresh_mid', field: 'threshMidDb', offset: MBCOMP_THRESH_MID_DB, unit: 'db', value: -24, min: -80, max: 0 },
+      { key: 'thresh_high', field: 'threshHighDb', offset: MBCOMP_THRESH_HIGH_DB, unit: 'db', value: -24, min: -80, max: 0 },
+      { key: 'ratio', field: 'ratio', offset: MBCOMP_RATIO, unit: 'count', value: 3, min: 1, max: 20 },
+      { key: 'attack', field: 'attackS', offset: MBCOMP_ATTACK_S, unit: 'seconds', value: 0.01, min: 0.0005, max: 1 },
+      { key: 'release', field: 'releaseS', offset: MBCOMP_RELEASE_S, unit: 'seconds', value: 0.12, min: 0.005, max: 5 },
+      { key: 'makeup', field: 'makeup', offset: MBCOMP_MAKEUP, unit: 'db-linear', value: 1, min: -24, max: 24 }, // 0dB
     ],
   },
 };
