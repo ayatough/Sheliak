@@ -12,6 +12,8 @@ policy.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-14
+
 ### Added
 - **A song is a Markdown file that makes sound.** Synth patches written in
   ```` ```synth ```` fences and note data in ```` ```loop ```` fences are parsed
