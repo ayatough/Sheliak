@@ -6,8 +6,9 @@ All notable changes to Sheliak are recorded here. The format follows
 notation**. See [docs/development.md](docs/development.md#versioning) for the
 policy.
 
-Nothing has been released yet. Everything below is on `main` and unreleased; the
-first tag will close this section.
+`## [Unreleased]` collects what is on `main` and not yet tagged.
+[`scripts/release.sh`](scripts/release.sh) closes it — see
+[docs/releasing.md](docs/releasing.md).
 
 ## [Unreleased]
 

@@ -49,12 +49,13 @@ only then publishes the archive and its checksum. `workflow_dispatch` builds and
 uploads the tarball as a run artifact without publishing anything, which is the
 only way to check the packaging before a tag makes it permanent.
 
-**Cutting a release is two pushes, in this order.** Bump the version everywhere
-`check-versions.sh` looks, close `## [Unreleased]` in the changelog, push that to
-`main` and let CI go green — *then* tag it and push the tag. The order is not a
-style preference: the site's root is built from the newest tag, so tagging first
-would have Pages rebuild the front page from the release before last, while CI
-is still running on the commit that was meant to be it.
+**Cutting a release is four commands, and they are in
+[docs/releasing.md](releasing.md).** `./scripts/release.sh <version>` does every
+mechanical part — the six version copies, the changelog, the gate — and then
+stops, because what is left is a commit and a tag and those are not a script's
+to make. The order is load-bearing: the site's root is built from the newest
+tag, so tagging before CI goes green on the bump rebuilds the front page from
+the release before last.
 
 Two sites come out of one deployment, because GitHub Pages serves one directory
 tree per repository: `/` is the latest tag, built from that tag's own checkout,

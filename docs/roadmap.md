@@ -1,6 +1,6 @@
 # Roadmap
 
-Sheliak is at `v0.1.0`. Nothing has been released yet; `main` is what exists.
+Sheliak is at `v0.1.0`. `main` is the working branch; releases are tagged from it.
 
 The goal is not a text-based DAW. It is a form in which a song can be **reviewed**:
 read, played, diffed, merged, and reproduced exactly by anyone who clones the

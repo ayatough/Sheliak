@@ -50,6 +50,14 @@ is the whole of the state. See [README](README.md) for the user view,
    place a colour is written, and the scope canvas reads it back rather than
    repeating it.
 
+## Releasing
+
+Four commands, in [docs/releasing.md](docs/releasing.md). `./scripts/release.sh
+<version>` does every mechanical part and runs the gate; the two that follow are
+a commit and a tag, in that order, with CI green in between. **Do not tag before
+CI passes on the bump commit** — the site's front page is built from the newest
+tag, and tagging early rebuilds it from the release before last.
+
 ## Definition of done
 
 A change is finished when all of these hold:

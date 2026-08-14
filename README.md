@@ -19,7 +19,7 @@ it at **[/next/](https://ayatough.github.io/Sheliak/next/)**, marked as a workin
 copy — so the front page is a version somebody chose to cut, and an unreleased
 afternoon is still one click away.
 
-[Syntax](docs/syntax.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Workstreams](docs/workstreams.md) · [Contributing](CONTRIBUTING.md) · [Agents](AGENTS.md) · [Brand](assets/brand/README.md) · [日本語](docs/ja/README.md)
+[Syntax](docs/syntax.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Releasing](docs/releasing.md) · [Roadmap](docs/roadmap.md) · [Workstreams](docs/workstreams.md) · [Contributing](CONTRIBUTING.md) · [Agents](AGENTS.md) · [Brand](assets/brand/README.md) · [日本語](docs/ja/README.md)
 
 <a href="https://www.buymeacoffee.com/qython" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
 
@@ -153,10 +153,10 @@ curl -fsSL https://raw.githubusercontent.com/ayatough/Sheliak/main/scripts/insta
 ```
 
 That puts `sheliak` in `~/.local/bin`, with the DSP core and the app beside it,
-so every command below works out of the box. **It needs a release to fetch, and
-there is not one yet** — until the first tag, use `npx github:ayatough/Sheliak`
-(which can run `new`, `check` and `fmt`, but not `render` or `serve`, because
-those need the built engine) or a working copy.
+so every command below works out of the box. `npx github:ayatough/Sheliak` runs
+the tip of `main` without installing anything, though only `new`, `check` and
+`fmt` — `render` and `serve` need the built engine, which only a release or a
+working copy carries.
 
 One artifact covers every platform: the CLI is a JavaScript bundle, `dsp.wasm`
 is wasm, and the app is static files. Nothing in it is platform-specific, which
@@ -208,9 +208,10 @@ audio bugs are found here rather than by listening. The web suite loads the real
 
 ## Status
 
-Sheliak is at `v0.1.0`. **Nothing has been released yet** — there is no tag, and
-`main` is what exists. It is `0.x` and pre-release: the notation will keep
-changing.
+Sheliak is at `v0.1.0`. It is `0.x` and pre-release: **the notation will keep
+changing**, so pin a version if you depend on it. `main` is the working branch —
+the front page is the latest release, and [/next/](https://ayatough.github.io/Sheliak/next/)
+is whatever `main` last passed CI on.
 
 - **Working:** the `synth`, `phrase` and `loop` fences, hot reload, eight tracks,
   the wavetable engine, filter, envelopes, LFO, modulation matrix, noise, the
@@ -237,8 +238,7 @@ broken — it means it is allowed to change under you.
 
 What that means if you are using Sheliak:
 
-- **Depend on a release, not on `main`** — once there are releases. Until then,
-  pin a commit.
+- **Depend on a release, not on `main`.**
 - **Bug reports against `main` are welcome**; say which commit, since there may
   not be a version number to name.
 

@@ -89,3 +89,7 @@ something is the way it is, or what is coming, that is the file to read.
 
 Issues are the inbox; the workstreams file is what has been accepted and thought
 through. An issue that turns into work becomes a stream there.
+
+## Releasing
+
+Four commands, in [docs/releasing.md](docs/releasing.md).
