@@ -907,7 +907,12 @@ rate, dominated by the delay lines and the reverb's comb banks.
 
 - **A4a — per-slot blocks.** The offset change above, keeping one instance per
   type for now. Removes the `PARAM_COUNT` wall at the ninth effect. Cheap,
-  verifiable, no memory question. Do this one.
+  verifiable, no memory question. **Landed.** One consequence was not obvious
+  from the armchair and is worth carrying forward: the slot *is* the address, so
+  reordering a chain moves its parameters. The writing side rebuilds the whole
+  block every compile, so it costs nothing there — but a test that permuted
+  `FX_ORDER` over one shared set of blocks was expressing something the layout
+  no longer supports, and had to be rebuilt rather than patched.
 - **A4b — duplicate instances of a type.** Blocked on measuring per-effect
   memory first, and then on a decision that has a real cost attached. **The
   first deliverable of A4b is the measurement, not a design.**
@@ -962,7 +967,8 @@ the FX tables in `docs/architecture.md`, the `fx` section of `docs/syntax.md`.
 | A2 | The effect set described once | `FX_DESCRIPTORS` in `dsl/fx.ts` drives the type ids, aliases, allowed keys, defaults, block flattening and expanded view; audio and the expanded view are byte-identical | **landed** |
 | A2b | The contract checks itself | `params.contract.test.ts` compares every constant in `params.rs` against `params.ts` and fails by name | **landed** |
 | A3 | Panel from descriptors | `gui/schema.ts` builds FX controls from descriptors; the built panel is byte-identical to what the hand-written specs produced | **landed** |
-| A4 | Variable-length, instance-based FX region | Two instances of one effect type can exist; the region is not `(type_id - 1) * 8`; `PARAM_COUNT` is no longer a wall at the ninth type; the layout change is documented in `architecture.md` and moved in both contract files in one commit | **next**, and see §12 first |
+| A4a | Blocks addressed by chain slot | `base = FX_SLOT_BASE + slot * FX_SLOT_STRIDE`; a type id is a name rather than an address, so a ninth effect needs no room reserved; audio bit-identical | **landed** |
+| A4b | Two instances of one type | Duplicates stop being dropped. Blocked on measuring per-effect memory first — see §12 | **next** |
 | A5 | Per-track effects | — | landed before this stream: the chain belongs to the track it is written in |
 
 **A1 was the gate**, and the bit-identical criterion is what made the rest safe
