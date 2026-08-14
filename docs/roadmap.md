@@ -19,7 +19,7 @@ The sound engine, and enough notation to use it.
 - Two oscillators with unison, a four-mode TPT filter, two exponential ADSRs, an
   LFO, an 8-slot modulation matrix
 - Seeded white and pink noise, mixed in before the filter
-- An eight-type master effect chain applied in written order
+- An eight-type effect chain per track, applied in written order
 - Eight tracks, one per `synth` fence
 - A step sequencer and parameter panel that edit the document text itself, one
   token at a time

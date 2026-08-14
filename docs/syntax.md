@@ -150,7 +150,10 @@ mixed with the oscillators inside the voice, before the filter.
 ### `fx`
 
 A list. **The order you write is the order they process**, each type at most once,
-up to 8. The chain runs on the master bus after the tracks are summed.
+up to 8. **The chain belongs to the track it is written in**: it runs on that
+track's own stereo output, after its voices are summed and its level applied.
+Tracks are summed after that, and the master bus does nothing but a soft-clip
+guard — so a reverb in one `synth` fence does not wash over the others.
 
 ```yaml
 fx:

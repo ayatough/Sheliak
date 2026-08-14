@@ -84,7 +84,9 @@ exports:
 PARAM_COUNT = 192。
 
 **エフェクト型ID**: 1=dist, 2=eq, 3=chorus, 4=phaser, 5=flanger, 6=delay, 7=reverb, 8=mbcomp。
-マスターバス (ボイス合算後・ステレオ) に FX order の順で直列適用。
+**FX チェーンはトラックごと**。そのトラックのボイス合算・レベル適用の後に、FX order の順で
+直列適用する（ステレオ）。トラックの合算はその後で、マスターバスはソフトクリップガード以外
+何もしない。
 主要パラメータ (詳細・単位は params.rs / params.ts のコメントが正):
 
 | 型 | パラメータ |

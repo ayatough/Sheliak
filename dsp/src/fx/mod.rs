@@ -1,6 +1,8 @@
-//! Master FX chain (docs/architecture.md v0.2).
+//! Per-track FX chain (docs/architecture.md).
 //!
-//! Runs on the stereo master bus, after voice summing and the master gain.
+//! Runs on one track's stereo bus, after its voices are summed and its master
+//! gain applied — `MultiEngine` sums the tracks afterwards and adds nothing but
+//! a soft-clip guard. "Master" here means the track's own bus, not the mix.
 //! `FX_ORDER_BASE[0..8]` is a list of effect type ids giving the processing
 //! order; `0` is an empty slot and each type may appear at most once
 //! (duplicates after the first are ignored).
@@ -201,7 +203,7 @@ impl Fx {
         }
     }
 
-    /// Processes the master bus in place. No allocation.
+    /// Processes this track's stereo bus in place. No allocation.
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         if !self.any {
             return; // bit-exact bypass

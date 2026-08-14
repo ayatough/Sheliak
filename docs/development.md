@@ -106,7 +106,7 @@ rather than something the bundler shrugs at.
 ```
 dsp/                 Rust DSP core (cdylib for wasm32, rlib for native tests)
   src/params.rs        parameter block layout — contract file
-  src/fx/              master effect chain, one file per effect
+  src/fx/              per-track effect chain, one file per effect
   tests/verify.rs      determinism, aliasing, DC, click
 web/
   public/worklet.js    AudioWorkletProcessor (plain JS, outside the bundler)

@@ -32,11 +32,12 @@ first tag will close this section.
   band-pass; two exponential ADSR envelopes; one LFO; and an 8-slot modulation
   matrix routing envelopes, the LFO and velocity to cutoff, morph, pitch and
   amplitude.
-- **A noise source and a master effects chain.** Noise is generated per voice
+- **A noise source and an effect chain per track.** Noise is generated per voice
   from a seeded RNG and mixed before the filter, in white or pink. Eight effect
   types — distortion, EQ, chorus, phaser, flanger, delay, reverb and a
-  three-band compressor — run on the master bus in the order the `fx:` list is
-  written.
+  three-band compressor — run on the track that writes them, in the order the
+  `fx:` list is written, after that track's voices are summed. The master bus
+  sums the tracks and does nothing else but guard against clipping.
 - **Eight tracks.** Each ```` ```synth ```` fence is a track with its own patch,
   voices and effect chain; wavetable mipmaps are shared across all of them. Track
   outputs are summed with a soft-clip guard that only acts near full scale.

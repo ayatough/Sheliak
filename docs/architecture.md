@@ -56,7 +56,7 @@ dsp/                 Rust DSP core
   src/noise.rs         white / pink noise
   src/rng.rs           seeded RNG — the only source of randomness
   src/smoother.rs      one-pole parameter smoothing
-  src/fx/              master effect chain, one file per effect
+  src/fx/              per-track effect chain, one file per effect
   tests/verify.rs      offline verification on the native target
 web/
   public/worklet.js    AudioWorkletProcessor (plain JS, self-contained)
@@ -153,8 +153,10 @@ just comes out wrong. Change both in the same commit.
 | 7 | reverb | `SIZE`, `DAMP`, `MIX`, `PREDELAY_S` (≤ 0.25), `WIDTH` |
 | 8 | mbcomp | `THRESH_{LOW,MID,HIGH}_DB`, `RATIO`, `ATTACK_S`, `RELEASE_S`, `MAKEUP` (crossovers fixed at 120 Hz / 2.5 kHz) |
 
-The chain runs on the master bus, in stereo, after the tracks are summed. Each
-type appears at most once.
+The chain is per track, in stereo: it runs on that track's output, after its
+voices are summed and its level applied, which is why `FX_*` lives in the track's
+own parameter block. The tracks are summed after that and the master bus does
+nothing but the soft-clip guard. Each type appears at most once.
 
 **Modulation sources**: 0 none, 1 `env.filter`, 2 `env.amp`, 3 `lfo.1`,
 4 `velocity`. Envelopes are `0..1`, the LFO is bipolar `-1..1`, velocity is `0..1`.
