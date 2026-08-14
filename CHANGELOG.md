@@ -182,6 +182,16 @@ first tag will close this section.
   repeating the block it stopped on; `web/src/integration.test.ts` checks the
   sum through the real `dsp.wasm` over the four-track default document. The
   parameter block layout is unchanged and the mix is bit-identical to before.
+- **Two published sites: the release, and the tip of `main`.** GitHub Pages
+  serves one directory tree per repository, so `pages.yml` builds two into it:
+  `/` from the newest tag's own checkout, and `/next/` from `main`, marked as a
+  working copy in the page's own header and carrying a `noindex`. Publishing
+  used to be the same action as pushing, which put every unreleased afternoon on
+  the front page. It is triggered by CI and Release *finishing* rather than by
+  the push — run on the same event they race, and a red commit can reach the
+  site first — and `scripts/build-site.sh` builds either channel, here or in CI.
+  Cutting a release is therefore two pushes in order: the version bump, CI
+  green, then the tag.
 
 ### Changed
 - **One mistake is reported once.** A miscounted phrase row used to produce

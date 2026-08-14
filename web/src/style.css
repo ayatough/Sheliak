@@ -73,6 +73,28 @@ body {
   font-size: 12px;
 }
 
+/* The version stamp. Quiet when it names a release, and marked when it names
+   the tip of main — the two channels share one deployment, so the page has to
+   say which one it is. */
+.brand .ver {
+  color: var(--dim);
+  font-size: 11px;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+.brand .ver:hover {
+  color: var(--fg);
+}
+
+.brand .ver.dev {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 .brand .dot {
   margin-left: 4px;
 }

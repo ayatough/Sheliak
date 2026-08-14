@@ -29,6 +29,7 @@ const metaEl = $<HTMLElement>('meta');
 const scope = $<HTMLCanvasElement>('scope');
 const posEl = $<HTMLElement>('pos');
 const viewTabs = $<HTMLElement>('view-tabs');
+const versionEl = $<HTMLAnchorElement>('version');
 
 /**
  * The file behind the document, when there is one. Without `sheliak serve` every
@@ -445,6 +446,24 @@ function sizeScope(): void {
 
 window.addEventListener('resize', sizeScope);
 
+/**
+ * The version stamp, when the site was built with one. Two channels share one
+ * deployment — the root is the latest release, `/next/` is the tip of `main` —
+ * and without this they are indistinguishable at a glance, which is how someone
+ * ends up reporting a bug against a build nobody has released.
+ */
+function renderVersion(): void {
+  const channel = import.meta.env['VITE_SITE_CHANNEL'];
+  const version = import.meta.env['VITE_SITE_VERSION'];
+  if (!version) return;
+  versionEl.hidden = false;
+  versionEl.textContent = channel === 'dev' ? `next · ${version}` : version;
+  versionEl.classList.toggle('dev', channel === 'dev');
+  versionEl.title =
+    channel === 'dev' ? 'the tip of main — a working copy, not a release' : 'the latest release';
+}
+
+renderVersion();
 editor.value = DEFAULT_DOC;
 selectView('gui');
 sizeScope();

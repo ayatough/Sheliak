@@ -36,6 +36,7 @@ cargo test --manifest-path dsp/Cargo.toml     # offline DSP verification
 ./scripts/build-wasm.sh                       # rebuild the wasm after a Rust change
 ./scripts/check-versions.sh                   # every version agrees
 ./scripts/build-release.sh                    # the release tarball, into dist-release/
+./scripts/build-site.sh site                  # the published site, into site/
 ```
 
 ### Releasing
@@ -47,6 +48,26 @@ the result somewhere unrelated to the repository, runs the CLI out of it, and
 only then publishes the archive and its checksum. `workflow_dispatch` builds and
 uploads the tarball as a run artifact without publishing anything, which is the
 only way to check the packaging before a tag makes it permanent.
+
+**Cutting a release is two pushes, in this order.** Bump the version everywhere
+`check-versions.sh` looks, close `## [Unreleased]` in the changelog, push that to
+`main` and let CI go green — *then* tag it and push the tag. The order is not a
+style preference: the site's root is built from the newest tag, so tagging first
+would have Pages rebuild the front page from the release before last, while CI
+is still running on the commit that was meant to be it.
+
+Two sites come out of one deployment, because GitHub Pages serves one directory
+tree per repository: `/` is the latest tag, built from that tag's own checkout,
+and `/next/` is the tip of `main`, marked as a working copy and carrying a
+`noindex`. `pages.yml` is triggered by CI and Release *finishing* rather than by
+the push that started them — run on the same event they race, and a commit with
+a red suite can reach the site first. Both channels are built by
+`scripts/build-site.sh`, which is also how you build either of them here:
+
+```bash
+VITE_BASE=/Sheliak/ VITE_SITE_CHANNEL=stable VITE_SITE_VERSION=v0.1.0 \
+  ./scripts/build-site.sh site
+```
 
 `scripts/install.sh` is what the README's `curl | sh` runs: latest tag from the
 releases API, checksum verified, extracted to `~/.local/share/sheliak`, with a

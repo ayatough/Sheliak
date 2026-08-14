@@ -14,8 +14,10 @@ machine.
 > strung across a tortoise shell.
 
 **▶ [Play it in the browser](https://ayatough.github.io/Sheliak/)** — no install,
-no account. It publishes from `main` after CI goes green, so the page is whatever
-last passed the gate.
+no account. That is the **latest release**. The tip of `main` is published beside
+it at **[/next/](https://ayatough.github.io/Sheliak/next/)**, marked as a working
+copy — so the front page is a version somebody chose to cut, and an unreleased
+afternoon is still one click away.
 
 [Syntax](docs/syntax.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Workstreams](docs/workstreams.md) · [Contributing](CONTRIBUTING.md) · [Agents](AGENTS.md) · [Brand](assets/brand/README.md) · [日本語](docs/ja/README.md)
 
@@ -134,10 +136,12 @@ npm run dev                 # development server
 npm run build               # production build
 ```
 
-The sound is in a browser: there is no native player yet. The published build is
-at **<https://ayatough.github.io/Sheliak/>**, deployed by
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) once CI has passed
-on `main`. See [docs/development.md](docs/development.md) for the full guide.
+The sound is in a browser: there is no native player yet. Two sites are
+published by [`.github/workflows/pages.yml`](.github/workflows/pages.yml), both
+only after CI has gone green: **<https://ayatough.github.io/Sheliak/>** is the
+latest release, built from that tag's own tree, and
+**<https://ayatough.github.io/Sheliak/next/>** is the tip of `main`. See
+[docs/development.md](docs/development.md) for the full guide.
 
 ## The CLI
 

@@ -1,0 +1,138 @@
+name: Pages
+
+# Publishes two sites from one deployment, because GitHub Pages serves exactly
+# one directory tree per repository:
+#
+#   /        the latest tag — what somebody arriving from a link should see
+#   /next/   the tip of `main` — how a change gets looked at before it is
+#            released, labelled as a working copy and asking not to be indexed
+#
+# The split exists because checking a change and publishing it used to be the
+# same action. With no pull request in the way, `main` is where work lands, so
+# tying the public face of the project to a tag is what keeps a half-finished
+# afternoon off the front page.
+#
+# Triggered by CI finishing rather than by the push: run on the same event, the
+# two race, and a commit with a red test suite can reach the site first.
+#
+# Publishing a release is the other trigger, and it is not optional. Cutting one
+# means pushing the version bump and *then* tagging it, so the CI run for that
+# commit finishes before the tag exists — and the root, built from the newest
+# tag, would be rebuilt from the release before last.
+#
+# `release: published` alone does not cover it. A release cut by dispatching the
+# Release workflow is created with `GITHUB_TOKEN`, and GitHub does not let an
+# event raised by that token start another workflow — the loop guard that also
+# stops Release restarting itself. So the release event never arrives. Watching
+# the Release workflow finish catches both routes: `workflow_run` fires on the
+# run itself, not on the token that made the release inside it.
+on:
+  workflow_run:
+    workflows: ["CI", "Release"]
+    types: [completed]
+    branches: ["main"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # Nothing that came from a push is published unless the run that produced it
+    # passed. The other two triggers are the author saying so by hand — a
+    # dispatch, or a release, whose commit CI already went green on before it
+    # could be tagged.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `git describe` needs the history and the tags, and the default
+          # shallow clone has neither. Checking out the commit CI actually
+          # tested, rather than whatever `main` points at now, keeps the site
+          # and the green tick describing the same thing.
+          #
+          # Every other trigger takes the default branch, never `github.ref`:
+          # on a `release` that ref is the tag, and checking it out would build
+          # the preview from the release too — leaving /next/ claiming to be
+          # `main` while showing something else entirely.
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.event.repository.default_branch }}
+      - run: git fetch --tags --force
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dsp
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: resolve version
+        id: v
+        run: |
+          sha=$(git rev-parse --short HEAD)
+          tag=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          if [ -n "$tag" ]; then
+            n=$(git rev-list --count "$tag..HEAD")
+            echo "tag=$tag"            >> "$GITHUB_OUTPUT"
+            echo "dev=$tag +$n · $sha" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag="     >> "$GITHUB_OUTPUT"
+            echo "dev=$sha" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Built from the tag's own tree, so the released site is the site that was
+      # released — its app, its engine, its build script. Until the first tag
+      # exists there is nothing to build it from, and the root gets `main`.
+      - name: build the released site
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+          VITE_SITE_CHANNEL: stable
+          VITE_SITE_VERSION: ${{ steps.v.outputs.tag }}
+        run: |
+          if [ -z "${{ steps.v.outputs.tag }}" ]; then
+            echo "no tag yet; the root gets main instead"
+            ./scripts/build-site.sh site
+            exit 0
+          fi
+          git worktree add /tmp/released "${{ steps.v.outputs.tag }}"
+          cd /tmp/released
+          ./scripts/build-site.sh "$GITHUB_WORKSPACE/site"
+
+      # `build-site.sh` clears its own output directory, so this has to come
+      # second: the other order would take the released site down with it.
+      - name: build the preview site
+        if: steps.v.outputs.tag != ''
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/next/
+          VITE_SITE_CHANNEL: dev
+          VITE_SITE_VERSION: ${{ steps.v.outputs.dev }}
+        run: ./scripts/build-site.sh site/next
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
