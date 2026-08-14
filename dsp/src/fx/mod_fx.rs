@@ -8,6 +8,7 @@ use crate::params::*;
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::{allpass_coef, phase_sin, soft_limit, Allpass1, DelayLine, FxLfo};
+use super::Effect;
 
 // --------------------------------------------------------------- chorus
 
@@ -35,13 +36,15 @@ impl Chorus {
             line: [DelayLine::new(cap), DelayLine::new(cap)],
         }
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Chorus {
+    fn reset(&mut self) {
         self.line[0].clear();
         self.line[1].clear();
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], _sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], _sample_rate: f32, first: bool) {
         super::set(
             &mut self.rate,
             super::fclamp(p[CHORUS_RATE_HZ], 0.0, 20.0),
@@ -55,11 +58,11 @@ impl Chorus {
         super::set(&mut self.mix, super::fclamp(p[CHORUS_MIX], 0.0, 1.0), first);
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         self.mix.current() > 0.0 || self.mix.target() > 0.0
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let n = l.len();
         let mut mix = self.mix.block(n);
         let depth = self.depth.advance(n);
@@ -112,13 +115,15 @@ impl Flanger {
             line: [DelayLine::new(cap), DelayLine::new(cap)],
         }
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Flanger {
+    fn reset(&mut self) {
         self.line[0].clear();
         self.line[1].clear();
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], _sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], _sample_rate: f32, first: bool) {
         super::set(
             &mut self.rate,
             super::fclamp(p[FLANGER_RATE_HZ], 0.0, 20.0),
@@ -141,11 +146,11 @@ impl Flanger {
         );
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         self.mix.current() > 0.0 || self.mix.target() > 0.0
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let n = l.len();
         let mut mix = self.mix.block(n);
         let depth = self.depth.advance(n);
@@ -204,8 +209,10 @@ impl Phaser {
             fb_state: [0.0; 2],
         }
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Phaser {
+    fn reset(&mut self) {
         for ch in self.ap.iter_mut() {
             for s in ch.iter_mut() {
                 s.reset();
@@ -214,7 +221,7 @@ impl Phaser {
         self.fb_state = [0.0; 2];
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
         // 2..8, even.
         let raw = super::fclamp(p[PHASER_STAGES], 2.0, MAX_STAGES as f32).round() as usize;
         self.stages = (raw & !1).clamp(2, MAX_STAGES);
@@ -241,11 +248,11 @@ impl Phaser {
         super::set(&mut self.mix, super::fclamp(p[PHASER_MIX], 0.0, 1.0), first);
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         self.mix.current() > 0.0 || self.mix.target() > 0.0
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let n = l.len();
         let mut mix = self.mix.block(n);
         let depth = self.depth.advance(n);

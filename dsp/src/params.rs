@@ -74,7 +74,7 @@ pub const NOISE_ENABLED: usize = 0; // 0/1
 pub const NOISE_LEVEL: usize = 1; // linear
 pub const NOISE_COLOR: usize = 2; // 0=white 1=pink
 
-// Master FX chain: processing order as a list of effect type ids, 0 = empty.
+// Per-track FX chain: processing order as a list of effect type ids, 0 = empty.
 pub const FX_ORDER_BASE: usize = 104;
 pub const FX_SLOTS: usize = 8;
 

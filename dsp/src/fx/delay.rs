@@ -16,6 +16,7 @@ use crate::params::{DELAY_FEEDBACK, DELAY_MIX, DELAY_PINGPONG, DELAY_TIME_S, DEL
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::{soft_limit, DelayLine, OnePole};
+use super::Effect;
 
 /// Longest delay allocated at `init()` (docs/architecture.md: TIME_S ≤ 2.0).
 pub const MAX_DELAY_S: f32 = 2.0;
@@ -47,15 +48,17 @@ impl Delay {
             lp: [OnePole::default(); 2],
         }
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Delay {
+    fn reset(&mut self) {
         self.line[0].clear();
         self.line[1].clear();
         self.lp[0].reset();
         self.lp[1].reset();
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
         let secs = super::fclamp(p[DELAY_TIME_S], MIN_DELAY_S, MAX_DELAY_S);
         super::set(&mut self.time, secs * sample_rate, first);
         super::set(
@@ -72,11 +75,11 @@ impl Delay {
         self.pingpong = p[DELAY_PINGPONG] >= 0.5;
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         self.mix.current() > 0.0 || self.mix.target() > 0.0
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let n = l.len();
         let mut mix = self.mix.block(n);
         let mut time = self.time.block(n);

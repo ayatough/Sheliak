@@ -72,7 +72,7 @@ export const NOISE_ENABLED = 0; // 0/1
 export const NOISE_LEVEL = 1; // linear
 export const NOISE_COLOR = 2; // 0=white 1=pink
 
-// Master FX chain: processing order as a list of effect type ids, 0 = empty.
+// Per-track FX chain: processing order as a list of effect type ids, 0 = empty.
 export const FX_ORDER_BASE = 104;
 export const FX_SLOTS = 8;
 

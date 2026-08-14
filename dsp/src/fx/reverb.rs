@@ -20,6 +20,7 @@ use crate::params::{REVERB_DAMP, REVERB_MIX, REVERB_PREDELAY_S, REVERB_SIZE, REV
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::DelayLine;
+use super::Effect;
 
 const COMB_TUNING: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
 const ALLPASS_TUNING: [usize; 4] = [556, 441, 341, 225];
@@ -137,8 +138,10 @@ impl Reverb {
         }
         self.tuned_size = size;
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Reverb {
+    fn reset(&mut self) {
         for combs in self.combs.iter_mut() {
             for c in combs.iter_mut() {
                 c.line.clear();
@@ -154,7 +157,7 @@ impl Reverb {
         self.pre[1].clear();
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
         super::set(
             &mut self.size,
             super::fclamp(p[REVERB_SIZE], 0.0, 1.0),
@@ -178,11 +181,11 @@ impl Reverb {
         );
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         self.mix.current() > 0.0 || self.mix.target() > 0.0
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], _sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], _sample_rate: f32) {
         let n = l.len();
         let mut mix = self.mix.block(n);
         let mut pre_d = self.predelay.block(n);
