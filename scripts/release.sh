@@ -104,13 +104,14 @@ cargo test --manifest-path dsp/Cargo.toml
 
 cat <<EOF
 
-v$version is prepared and the gate is green. Two commands are left, in this
-order — the second one publishes, so read the first one's CI result first:
+v$version is prepared and the gate is green. Two steps are left, in this order —
+the second one publishes, so read the first one's CI result first:
 
   git commit -am "Release v$version" && git push origin main
-  # wait for CI to pass on that commit, then:
-  git tag v$version && git push origin v$version
+  # wait for CI to pass on that commit, then cut it, either way:
+  git tag v$version && git push origin v$version   # if you can push tags
+  gh workflow run release.yml -f publish=true      # if you cannot
 
-Tagging before CI finishes rebuilds the site's front page from the release
+Cutting it before CI finishes rebuilds the site's front page from the release
 before last. docs/releasing.md says why.
 EOF
