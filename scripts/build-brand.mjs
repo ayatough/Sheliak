@@ -438,8 +438,10 @@ const ASSETS = [
 
 mkdirSync(BRAND, { recursive: true });
 for (const [name, content] of ASSETS) writeFileSync(join(BRAND, name), content);
+// favicon.svg is the icon; mark.svg is the transparent mark the topbar shows.
 writeFileSync(join(PUBLIC, 'favicon.svg'), icon(true));
-console.log(`wrote ${ASSETS.length} SVGs to assets/brand/ and web/public/favicon.svg`);
+writeFileSync(join(PUBLIC, 'mark.svg'), markOnly(true));
+console.log(`wrote ${ASSETS.length} SVGs to assets/brand/, plus web/public/{favicon,mark}.svg`);
 
 // ------------------------------------------------------------------- PNGs ---
 

@@ -41,10 +41,14 @@ is the whole of the state. See [README](README.md) for the user view,
 7. **Do not weaken a test to make it pass.** If a quality gate fails, either the
    change is wrong or the expectation genuinely moved — and if it moved, say so
    in the commit message.
-8. **`assets/brand/*.svg` and `web/public/favicon.svg` are build output.** The
-   mark is embedded in eight of those files; hand-editing one is how they drift
-   apart. Change `scripts/build-brand.mjs`, re-run it, commit both. CI re-runs the
-   script and fails on any difference.
+8. **The brand artwork is build output.** `assets/brand/*.svg`,
+   `web/public/favicon.svg` and `web/public/mark.svg` all come out of
+   `scripts/build-brand.mjs`, which embeds the same mark in eight of them;
+   hand-editing one is how they drift apart. Change the script, re-run it, commit
+   both. CI re-runs it and fails on any difference. The app's palette in
+   `web/src/style.css` is the same brand palette — the `:root` block is the only
+   place a colour is written, and the scope canvas reads it back rather than
+   repeating it.
 
 ## Definition of done
 
@@ -64,7 +68,7 @@ If you touched the artwork, also:
 
 ```bash
 node scripts/build-brand.mjs --png                   # needs Chrome/Chromium for the PNGs
-git diff --exit-code -- assets/brand web/public      # nothing left unregenerated
+git diff --exit-code -- 'assets/brand/*.svg' web/public  # nothing left unregenerated
 ```
 
 `npm run build` runs `tsc --noEmit` first, so a type error fails the build rather
@@ -128,7 +132,7 @@ kick drum or a burst of noise. Three consequences:
 | `web/src/shared/params.ts` | Parameter block layout — **contract** | Only alongside `params.rs` |
 | `web/src/defaultDoc.ts` | The document the editor opens with | A DSL feature needs showing |
 | `scripts/build-brand.mjs` | Every logo, icon and social image — **source** | The artwork changes |
-| `assets/brand/`, `web/public/*.png`, `favicon.svg` | Generated artwork | Never by hand |
+| `assets/brand/`, `web/public/*.png`, `favicon.svg`, `mark.svg` | Generated artwork | Never by hand |
 
 `web/public/worklet.js` is plain JavaScript, not TypeScript, and lives in
 `public/` rather than `src/`. That is deliberate: an AudioWorklet module is loaded

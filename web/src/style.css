@@ -1,14 +1,24 @@
+/*
+ * The brand palette (assets/brand/README.md), used as interface tokens. Only
+ * these lines know a colour; everything below refers to them, and the scope
+ * canvas in main.ts reads them back out rather than repeating the values.
+ *
+ * --warn is amber rather than a paler gold on purpose: the brand gold is now
+ * --accent, and the status dot switches between the two, so they have to differ
+ * in hue and not only in lightness.
+ */
 :root {
-  --bg: #0e1014;
-  --panel: #161a21;
-  --panel-2: #1b2029;
-  --line: #262c37;
-  --fg: #d9dee7;
-  --dim: #8b94a4;
-  --accent: #6fd3c7;
-  --accent-dim: #2f6d66;
-  --err: #ff7a85;
-  --warn: #f0c674;
+  --bg: #0a0c0b;
+  --panel: #111411;
+  --panel-2: #191d19;
+  --line: #2c302c;
+  --fg: #dcd9cf;
+  --dim: #8e9187;
+  --accent: #e5a900;
+  --accent-dim: #6b4f00;
+  --on-accent: #0a0c0b;
+  --err: #f4675c;
+  --warn: #e8912f;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }
 
@@ -52,16 +62,26 @@ body {
   letter-spacing: 0.02em;
 }
 
+.brand .mark {
+  display: block;
+  width: auto;
+  height: 26px;
+}
+
 .brand .sub {
   color: var(--dim);
   font-size: 12px;
+}
+
+.brand .dot {
+  margin-left: 4px;
 }
 
 .dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #4a5261;
+  background: #4a4e46;
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.03);
   transition: background 0.2s;
 }
@@ -85,7 +105,7 @@ body {
 button.play {
   font: inherit;
   font-weight: 600;
-  color: #06110f;
+  color: var(--on-accent);
   background: var(--accent);
   border: none;
   border-radius: 6px;
@@ -199,8 +219,8 @@ textarea#editor {
 /* ------------------------------------------------------------------ errors */
 
 .errors {
-  border: 1px solid rgba(255, 122, 133, 0.35);
-  background: rgba(255, 122, 133, 0.07);
+  border: 1px solid rgba(244, 103, 92, 0.35);
+  background: rgba(244, 103, 92, 0.07);
   border-radius: 6px;
   padding: 8px 10px;
   font-family: var(--mono);
@@ -365,7 +385,7 @@ label.num input {
 }
 
 .chip.on {
-  color: #06110f;
+  color: var(--on-accent);
   background: var(--accent);
   border-color: var(--accent);
 }
@@ -442,17 +462,17 @@ label.num input {
 
 .cell.onset {
   background: var(--accent-dim);
-  color: #eafffb;
+  color: #fff2d2;
   border-color: var(--accent);
 }
 
 /* A tag other than `o` means the onset carries more than one group. */
 .cell.chord {
-  background: linear-gradient(var(--accent-dim), #2a5c78);
+  background: linear-gradient(var(--accent-dim), #7d4410);
 }
 
 .cell.hold {
-  background: #23413f;
+  background: #382c11;
   border-color: var(--accent-dim);
 }
 
@@ -590,7 +610,7 @@ label.num input {
 }
 
 .field .toggle.on {
-  color: #06110f;
+  color: var(--on-accent);
   background: var(--accent);
   border-color: var(--accent);
 }

@@ -98,8 +98,22 @@ first tag will close this section.
   manifest and Open Graph and Twitter card tags pointing at a 1200×630 image; the
   title says what Sheliak is rather than what it is built from. Nothing about the
   audio changed.
+- **A link to the running app.** The README, its Japanese counterpart and the
+  build instructions now point at <https://ayatough.github.io/Sheliak/>, which
+  `deploy.yml` has been publishing since before anything said so.
 
 ### Changed
+- **The interface wears the brand palette.** The editor was a cool near-black with
+  a teal accent, which shared nothing with the mark on its own tab. It is now the
+  warm near-black and the gold: `#0A0C0B` behind, `#111411` panels, `#E5A900` on
+  the transport, the sliders, the sequencer's onsets and the scope trace. The
+  `:root` block in `web/src/style.css` is the only place a colour is written —
+  the seven values that were spelled out in rules, and the three the scope canvas
+  had copied into `main.ts`, now read the tokens instead. `--warn` moved from a
+  pale gold to amber `#E8912F` because the status dot switches between it and the
+  accent, and two shades of the same hue is not a signal. The topbar shows the
+  mark. Every foreground token clears 6:1 on the new background; nothing about the
+  audio, the notation or the layout changed.
 - **Notes moved out of the `loop` fence.** `lead: C4 . . .` no longer parses;
   the same music is written as a `phrase` grid and the loop line names it. The
   default document was rewritten accordingly, and the step sequencer now

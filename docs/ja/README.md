@@ -23,7 +23,10 @@ DAW はプロジェクトファイルが不透明なバイナリで、差分も�
 
 ## 動かす
 
-Rust（`wasm32-unknown-unknown` ターゲット）と Node.js 20 以降が必要です。
+**公開版: <https://ayatough.github.io/Sheliak/>** — インストール不要でブラウザから
+そのまま鳴らせます。`main` で CI が通ったあとに自動で更新されます。
+
+手元で動かす場合は Rust（`wasm32-unknown-unknown` ターゲット）と Node.js 20 以降が必要です。
 
 ```bash
 ./scripts/build-wasm.sh     # DSPコア → web/public/dsp.wasm

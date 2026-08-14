@@ -349,6 +349,14 @@ viewTabs.addEventListener('click', (ev) => {
 
 let scopeRunning = false;
 
+// The scope is drawn on a canvas, so it cannot inherit the palette the way the
+// rest of the interface does. Read the same custom properties instead of
+// copying their values here, where a retheme would not find them.
+function themeColor(name: string, fallback: string): string {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
 function startScope(): void {
   if (scopeRunning) return;
   const analyser = engine.analyser;
@@ -359,6 +367,9 @@ function startScope(): void {
   scopeRunning = true;
   sizeScope();
   const data = new Uint8Array(analyser.fftSize);
+  const paint = themeColor('--panel', '#111411');
+  const rule = themeColor('--line', '#2c302c');
+  const trace = themeColor('--accent', '#e5a900');
 
   const draw = () => {
     const a = engine.analyser;
@@ -370,17 +381,17 @@ function startScope(): void {
 
     const w = scope.width;
     const h = scope.height;
-    ctx2d.fillStyle = '#161a21';
+    ctx2d.fillStyle = paint;
     ctx2d.fillRect(0, 0, w, h);
 
-    ctx2d.strokeStyle = '#262c37';
+    ctx2d.strokeStyle = rule;
     ctx2d.lineWidth = 1;
     ctx2d.beginPath();
     ctx2d.moveTo(0, h / 2);
     ctx2d.lineTo(w, h / 2);
     ctx2d.stroke();
 
-    ctx2d.strokeStyle = '#6fd3c7';
+    ctx2d.strokeStyle = trace;
     ctx2d.lineWidth = 1.5;
     ctx2d.beginPath();
     const step = data.length / w;

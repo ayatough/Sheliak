@@ -55,10 +55,19 @@ height) on every side. The icon files already include it.
 Never put `#E5A900` on the cream: it fails even the 3:1 threshold for graphical
 objects. That is what `#B07E00` and the `*-light.svg` variants are for.
 
-The **web app's own palette is different** — it is a cool near-black with a teal
-accent (`web/src/style.css`). That is deliberate for now: retheming the editor is
-a separate decision from having a brand. The only brand colour the app carries
-today is the icon.
+**The web app uses this palette too.** The `:root` block in `web/src/style.css` is
+the only place in the interface where a colour is written; everything else refers
+to those tokens, and the oscilloscope canvas reads them back out with
+`getComputedStyle` rather than repeating the values. Two interface tokens have no
+brand equivalent and are chosen against it:
+
+| Token | Value | Why |
+|---|---|---|
+| `--warn` | `#E8912F` | amber, not a paler gold. The status dot switches between `--accent` and `--warn`, so they have to differ in hue and not only in lightness |
+| `--err` | `#F4675C` | warm red, tuned to sit beside the gold rather than the old cool palette |
+
+The app is dark-only. The `*-light.svg` variants exist for documents and slides,
+not for a light theme that does not exist yet.
 
 ## Typography
 

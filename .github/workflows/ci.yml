@@ -64,12 +64,12 @@ jobs:
 
       # The mark is embedded in eight SVGs. Regenerating them is the only thing
       # that keeps those copies identical, so check that whoever last touched the
-      # artwork actually re-ran the script. The PNGs are left out: they need a
-      # browser, and they are committed.
+      # artwork actually re-ran the script. Only the generated files: the brand
+      # README next to them is written by hand, and the PNGs need a browser.
       - name: brand assets are up to date
         run: |
           node scripts/build-brand.mjs
-          git diff --exit-code -- assets/brand web/public/favicon.svg
+          git diff --exit-code -- 'assets/brand/*.svg' web/public/favicon.svg web/public/mark.svg
 
   versions:
     name: version consistency

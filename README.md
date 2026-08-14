@@ -13,6 +13,10 @@ machine.
 > Sheliak (β Lyrae) — from the Arabic name for the lyre, an instrument first
 > strung across a tortoise shell.
 
+**▶ [Play it in the browser](https://ayatough.github.io/Sheliak/)** — no install,
+no account. It publishes from `main` after CI goes green, so the page is whatever
+last passed the gate.
+
 [Syntax](docs/syntax.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Workstreams](docs/workstreams.md) · [Contributing](CONTRIBUTING.md) · [Agents](AGENTS.md) · [Brand](assets/brand/README.md) · [日本語](docs/ja/README.md)
 
 ---
@@ -127,8 +131,10 @@ npm run dev                 # development server
 npm run build               # production build
 ```
 
-There is no installable binary yet: Sheliak runs in a browser. See
-[docs/development.md](docs/development.md) for the full guide.
+There is no installable binary yet: Sheliak runs in a browser. The published
+build is at **<https://ayatough.github.io/Sheliak/>**, deployed by
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) once CI has passed
+on `main`. See [docs/development.md](docs/development.md) for the full guide.
 
 ## Test
 
