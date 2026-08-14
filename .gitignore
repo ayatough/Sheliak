@@ -4,3 +4,4 @@
 /web/public/dsp.wasm
 *.log
 .DS_Store
+/web/dist-cli/

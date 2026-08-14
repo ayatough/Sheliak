@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Run the Sheliak CLI from a working copy, without installing anything.
+#
+#   ./scripts/sheliak new song.md
+#   ./scripts/sheliak check song.md
+#
+# The CLI is a bundle, and a bundle is build output. This rebuilds it whenever a
+# source file is newer than it, because a stale checker passing a document it
+# would now reject is the one failure a checker must not have. The build's own
+# output goes to stderr so that `check --format json` still writes one JSON
+# document to stdout and nothing else.
+#
+# The build has to happen in the repository and the CLI has to run where it was
+# called from, so the two are kept apart deliberately: the file arguments are
+# the user's, relative to their shell, and a `cd` that outlived the build would
+# silently resolve every one of them somewhere else.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+bundle="$root/web/dist-cli/sheliak.mjs"
+
+if [ ! -d "$root/web/node_modules" ]; then
+  echo "error: web/node_modules is missing — run \`cd web && npm install\` first" >&2
+  exit 1
+fi
+
+sources=("$root/web/src" "$root/web/package.json" "$root/web/vite.cli.config.ts")
+if [ ! -f "$bundle" ] || [ -n "$(find "${sources[@]}" -newer "$bundle" 2>/dev/null)" ]; then
+  (cd "$root/web" && npm run --silent build:cli) >&2
+fi
+
+exec node "$bundle" "$@"

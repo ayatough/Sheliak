@@ -101,6 +101,19 @@ first tag will close this section.
 - **A link to the running app.** The README, its Japanese counterpart and the
   build instructions now point at <https://ayatough.github.io/Sheliak/>, which
   `deploy.yml` has been publishing since before anything said so.
+- **A command line: `sheliak new` and `sheliak check`.** `new` writes the
+  smallest song that makes a sound — one `synth` fence, one `phrase`, and the
+  `loop` binding them — and never overwrites a file that exists; `--empty`
+  writes a blank one. `check` runs the same `compile()` the browser runs and
+  reports every error by line and column, exiting non-zero so a song can be
+  gated in CI; it also warns about the two things a clean compile still leaves
+  silent, a track no loop line binds and a phrase nothing plays, with `--strict`
+  to fail on those and `--format json` for a caller that will act on the
+  findings. Until now a syntax error could only be found by pasting the document
+  into the browser. It is a Node program over the TypeScript parser rather than
+  a second binary beside the DSP core, because a Rust CLI would mean parsing the
+  notation twice. Build it with `npm run build:cli` in `web/`, or run
+  `./scripts/sheliak`, which rebuilds it when it is stale.
 
 ### Changed
 - **The interface wears the brand palette.** The editor was a cool near-black with

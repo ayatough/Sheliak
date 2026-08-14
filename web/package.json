@@ -7,12 +7,16 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:cli": "vite build --config vite.cli.config.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.10",
     "vitest": "^2.1.4"
+  },
+  "bin": {
+    "sheliak": "./dist-cli/sheliak.mjs"
   }
 }

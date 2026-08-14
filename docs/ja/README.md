@@ -41,6 +41,20 @@ cargo test --manifest-path dsp/Cargo.toml   # 決定性・エイリアス・DC�
 cd web && npm test                          # パーサ・GUI・wasm 結合テスト
 ```
 
+コマンドライン（曲の作成と検査）:
+
+```bash
+cd web && npm run build:cli        # → web/dist-cli/sheliak.mjs
+
+./scripts/sheliak new song.md      # 音が鳴る最小の曲を書き出す
+./scripts/sheliak check song.md    # ブラウザと同じ compile() で検査し、行:列 で報告
+```
+
+`new` は `synth` フェンス1つ・`phrase` 1つ・両者を結ぶ `loop` だけを書きます。既存の
+ファイルを上書きすることはありません。`check` はエラーがあれば非ゼロで終了するので CI に
+かけられ、コンパイルが通っても鳴らないもの——どの `loop` 行にも束ねられていないトラックと、
+どこからも参照されない `phrase`——は警告として報告します。
+
 ## このディレクトリの中身
 
 英語版が整備される前に日本語で書かれた設計資料です。翻訳ではなく原文なので、

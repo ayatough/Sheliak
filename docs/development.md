@@ -24,11 +24,24 @@ end-to-end test loads the real binary.
 cd web && npm run dev        # development server
 cd web && npm run build      # tsc --noEmit, then a production build
 cd web && npm test           # vitest
+cd web && npm run build:cli  # bundle the CLI -> web/dist-cli/sheliak.mjs
+
+./scripts/sheliak new song.md                 # start a song
+./scripts/sheliak check song.md               # compile it and report every error
 
 cargo test --manifest-path dsp/Cargo.toml     # offline DSP verification
 ./scripts/build-wasm.sh                       # rebuild the wasm after a Rust change
 ./scripts/check-versions.sh                   # every version agrees
 ```
+
+The CLI lives in `web/src/cli/` and is bundled by `vite.cli.config.ts`, because
+it imports the DSL parser — the same `compile()` the browser runs, so a document
+that passes `check` is a document the editor accepts. `./scripts/sheliak`
+rebuilds the bundle whenever a source file is newer than it; nothing else needs
+to remember to. Its tests are ordinary vitest files beside it and run as part of
+`npm test`, and `src/cli/scaffold.test.ts` compiles the starter song and fails on
+so much as a warning, which is what stops `sheliak new` writing a file that no
+longer parses.
 
 `npm run build` type-checks before bundling, so a type error is a build failure
 rather than something the bundler shrugs at.
@@ -46,6 +59,7 @@ web/
   src/dsl/             fence extraction, YAML subset, parsing, surgical edits
   src/gui/             step sequencer and parameter panel
   src/audio/           AudioContext, wasm loading, worklet messaging
+  src/cli/             `sheliak new` and `sheliak check`, over the same parser
 scripts/             build helpers
 docs/                architecture, syntax, roadmap, workstreams; ja/ translations
 ```

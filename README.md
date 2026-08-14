@@ -115,6 +115,7 @@ all happen on the TypeScript side.
 | **A master effect chain** | Distortion, EQ, chorus, phaser, flanger, delay, reverb and a 3-band compressor, in the order you write them |
 | **Eight tracks** | One per `synth` fence, each with its own voices and effects |
 | **A GUI that writes text** | The step sequencer and parameter panel edit the document itself, one token at a time, leaving comments and alignment untouched |
+| **A CLI** | `sheliak new` starts a song, `sheliak check` reads one back — every error by line and column, and an exit code CI can gate on |
 | **Bit-identical renders** | Same document, same seed, same samples — enforced by an offline test |
 | **No binary but the source material** | Wavetables are generated procedurally; nothing about a song is opaque |
 
@@ -133,10 +134,48 @@ npm run dev                 # development server
 npm run build               # production build
 ```
 
-There is no installable binary yet: Sheliak runs in a browser. The published
-build is at **<https://ayatough.github.io/Sheliak/>**, deployed by
+The sound is in a browser: there is no native player yet. The published build is
+at **<https://ayatough.github.io/Sheliak/>**, deployed by
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) once CI has passed
 on `main`. See [docs/development.md](docs/development.md) for the full guide.
+
+## The CLI
+
+`sheliak` starts a song and reads one back without opening anything. It is a
+Node program rather than a second binary beside the DSP core, because the
+notation is parsed in TypeScript and the Rust side does not know the DSL — a
+second parser would be a second copy of the contract to keep in step.
+
+```bash
+cd web && npm install && npm run build:cli   # -> web/dist-cli/sheliak.mjs
+
+./scripts/sheliak new song.md      # the smallest song that makes a sound
+./scripts/sheliak check song.md    # every error, by line and column
+```
+
+`new` writes one `synth` fence, one `phrase` and the `loop` that binds them —
+short enough to read in full, so that everything left out is visibly taking a
+default. `--empty` writes a blank file instead, and neither ever overwrites a
+file that is already there.
+
+`check` compiles the document exactly as the browser does and exits non-zero on
+any error, so a repository of songs can be gated in CI the way a repository of
+code is. It also reports the two things compiling cannot call an error, because
+both are legal and both are silent — a track no loop line binds, and a phrase
+nothing plays:
+
+```
+song.md — 2 tracks of 3 · 4 phrases · 126bpm · 1 bar
+  song.md:12:32  error    bare numbers are not allowed for "level" — expected a gain in dB (e.g. -6dB)
+  song.md:41:1   warning  phrase `bridge` is never bound by a loop line, so it never plays
+```
+
+`--strict` fails on the warnings too, and `--format json` emits the same run as
+records for something that is going to act on them rather than read them.
+
+`./scripts/sheliak` rebuilds the bundle whenever it is out of date, so a working
+copy never checks a song against a stale copy of the checker. To put `sheliak`
+on your `PATH` instead, run `npm link` in `web/`.
 
 ## Test
 
@@ -159,7 +198,8 @@ changing.
 - **Working:** the `synth`, `phrase` and `loop` fences, hot reload, eight tracks,
   the wavetable engine, filter, envelopes, LFO, modulation matrix, noise, the
   eight-effect master chain, the two-way-synced step sequencer and parameter
-  panel, offline verification, and a GitHub Pages deployment
+  panel, `sheliak new` and `sheliak check`, offline verification, and a GitHub
+  Pages deployment
 - **Next:** the note-event ABI (Track B of
   [docs/workstreams.md](docs/workstreams.md)) — `note_on` gains a glide time and
   a legato flag, which is what makes a written `gliss` actually slide
