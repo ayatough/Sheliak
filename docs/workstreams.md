@@ -631,7 +631,7 @@ claiming in frontmatter:
 
 | Class | Meaning | Golden audio hash |
 |---|---|---|
-| `engine` | Built-in engine only. Non-negotiable 5 applies in full | Meaningful, checkable in CI |
+| `engine` | Built-in engine only. Non-negotiable 5 applies in full | Meaningful **against a named engine build** — see §9: two builds of the same source agree to one LSB, not to the byte |
 | `pinned` | External plugins, resolved through a lockfile | Meaningful only against the same lockfile on a comparable build |
 | `unpinned` | External plugins, unresolved | None. The document plays; it does not reproduce |
 
@@ -648,6 +648,10 @@ Two things follow that are easy to miss:
 - "Rendered previews on a pull request" and "golden audio hashes" in the roadmap
   are only unconditionally true for `engine`. That is worth stating before those
   features are built on the assumption that every song is checkable.
+- **Even `engine` pins a build, not a version.** The native renderer and the
+  wasm one disagree by a single least-significant bit on effects that use
+  transcendental functions (§9). A hash is a property of the document *and* the
+  binary that rendered it, and CI has to compare like with like.
 
 ## 5. The internal plugin boundary
 
@@ -782,6 +786,43 @@ this**, which is what makes the path affordable now rather than after a rewrite.
 [clack](https://github.com/prokopyl/clack) is the Rust CLAP host binding, and is
 the only functional option.
 
+**The first half has landed.** `render/` is a native crate that takes a render
+job — the flat parameter block per track, the loop's events in samples, and how
+long to render — and writes a WAV. `sheliak render <song.md> --emit-job <job>`
+produces one, which keeps the parser where it is: the job is the same content
+`worklet.js` receives over `postMessage`, so nothing about Markdown crosses into
+Rust. `clack-host` on top is what remains.
+
+### The two builds are not bit-identical, and it is one bit
+
+Worth knowing before anything is built on top of it, because it bears on §4.
+`scripts/check-render-parity.sh` renders a document both ways and compares.
+On the FX stress document, 6% of samples differ and **every single difference is
+one LSB at 16 bits — about -90 dBFS**. A track with no effects at all is
+byte-for-byte identical.
+
+The divergence is in the effect chain, which is where `tanh`, `exp` and `sin`
+are, and the two builds reach different implementations of them; the wasm one is
+also compiled with `+simd128`. So the arithmetic differs in the last place or
+two, and it shows up only where a sample was already sitting on a rounding
+boundary.
+
+Two consequences:
+
+- **A golden audio hash pins an engine build, not an engine version.** §4's
+  `engine` class has to say which build produced the hash, or CI will compare a
+  native render against a browser hash and call a working song broken. This is a
+  smaller claim than "determinism holds" and it is the true one.
+- **Determinism itself is untouched.** The same document, seed and *build* still
+  produce identical bytes — that is what `verify.rs` and the wasm end-to-end
+  test assert, and both still pass. What does not hold is bit-identity across
+  two different compilations of the same source, which was never promised and is
+  now measured rather than assumed.
+
+Making them agree exactly would mean pinning the transcendental functions — a
+shared software libm rather than each target's own. That is a real piece of work
+and it should be a decision, not a side effect of wanting previews.
+
 Offline rendering first, not live playback:
 
 - commercial plugins exist natively today, so this path delivers the actual
@@ -856,7 +897,7 @@ is a request that conflicts with constraints this project chose deliberately, an
 | §6 descriptors and generation | §5 | With §5 |
 | §4 reproducibility classes and lockfile | Stream 2 frontmatter | Design now, land with frontmatter |
 | §7 generalized `fx` fence | §5, §6 | After |
-| §9 native render path | §5 (for the plugin interface); nothing else | Yes, in parallel |
+| §9 native render path | §5 (for the plugin interface); nothing else | **first half landed** |
 | §8 `.wclap` host in the browser | §5, §7 | After |
 | §10 exporting a patch as a plugin | A4 (the layout must have stopped moving) | After |
 
@@ -1015,14 +1056,23 @@ hash; and the determinism check states which class it is asserting.
 
 ### Track C — the native render path (§9)
 
-**Owns** a new renderer crate and its tests, the Patch IR JSON dump.
+**Owns** `render/`, `web/src/cli/job.ts`, `scripts/check-render-parity.sh`.
 **Does not touch** `web/src/gui/`, `web/public/worklet.js`, `dsp/src/fx/`.
 
-The only track that shares essentially no file with the others. Land it in two
-halves: first `Patch IR JSON -> dsp rlib -> .wav` with **no plugins at all**,
-verified by rendering a `defaultDoc.ts` patch and comparing against the browser's
-output; then `clack-host` on top. The first half is a useful tool on its own and
-is what proves the IR is a real interchange format rather than an internal type.
+The only track that shares essentially no file with the others.
+
+**First half landed**: `render job -> dsp rlib -> .wav`, with no plugins at all,
+checked against the browser's output by `scripts/check-render-parity.sh`. It
+proved the interchange format is real, and it turned up the one-LSB divergence
+in §9 that §4 now has to account for.
+
+One correction to what this said before: the boundary is **not** the Patch IR.
+The IR is the parser's output and still carries names and units; what the
+renderer needs is the flat parameter block, which is what the worklet gets and
+what the engine reads. Sending the IR would have put a second consumer of the
+notation's shape in Rust — exactly the thing §9 exists to avoid.
+
+What remains is `clack-host` on top.
 
 ### Track D — the `.wclap` host (§8), and the exporter (§10)
 

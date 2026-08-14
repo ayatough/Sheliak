@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildJob } from './job.ts';
 import { compile } from '../dsl/compile.ts';
 import { instantiateDsp, renderLoop, renderTail } from '../audio/offline.ts';
 import { sortErrors } from '../dsl/errors.ts';
@@ -28,6 +29,12 @@ export interface RenderOptions {
   stems?: boolean;
   /** Overrides where `dsp.wasm` is looked for. */
   wasm?: string;
+  /**
+   * Write the render job here instead of synthesizing. Compiling and
+   * synthesizing are separable, and the native renderer needs the first half
+   * without the second (docs/workstreams.md §9).
+   */
+  emitJob?: string;
 }
 
 export interface RenderResult {
@@ -39,6 +46,8 @@ export interface RenderResult {
   bpm: number;
   /** Stem files written, in track order. Empty unless `stems` was asked for. */
   stemFiles: string[];
+  /** True when `--emit-job` wrote a job rather than audio. */
+  job?: boolean;
 }
 
 /**
@@ -94,6 +103,21 @@ export function render(source: string, opts: RenderOptions): RenderResult {
   }
   if (result.tracks.length === 0) {
     throw new Error('no `synth` fence: the document declares no track, so there is nothing to render');
+  }
+
+  if (opts.emitJob !== undefined) {
+    const job = buildJob(result, opts);
+    writeFileSync(opts.emitJob, `${JSON.stringify(job, null, 2)}\n`);
+    return {
+      out: opts.emitJob,
+      frames: job.loopFrames + job.tailFrames,
+      seconds: (job.loopFrames + job.tailFrames) / opts.sampleRate,
+      tracks: job.tracks.length,
+      bpm: result.bpm,
+      peak: 0,
+      stemFiles: [],
+      job: true,
+    };
   }
 
   const wasmPath = opts.wasm ?? defaultWasmPath();

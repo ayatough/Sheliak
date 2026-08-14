@@ -32,7 +32,12 @@ cd web && npm run build:cli  # bundle the CLI -> web/dist-cli/sheliak.mjs
 ./scripts/sheliak render song.md -o out.wav   # render it offline (needs the wasm)
 ./scripts/sheliak serve song.md               # the app, pointed at that file
 
+./scripts/sheliak render song.md --emit-job job.json   # compile only, no engine
+./render/target/release/sheliak-render job.json -o out.wav   # synthesize natively
+./scripts/check-render-parity.sh song.md      # how far the two builds disagree
+
 cargo test --manifest-path dsp/Cargo.toml     # offline DSP verification
+cargo test --manifest-path render/Cargo.toml  # the native renderer's own checks
 ./scripts/build-wasm.sh                       # rebuild the wasm after a Rust change
 ./scripts/check-versions.sh                   # every version agrees
 ./scripts/build-release.sh                    # the release tarball, into dist-release/
@@ -130,6 +135,10 @@ dsp/                 Rust DSP core (cdylib for wasm32, rlib for native tests)
   src/params.rs        parameter block layout — contract file
   src/fx/              per-track effect chain, one file per effect
   tests/verify.rs      determinism, aliasing, DC, click
+  tests/footprint.rs   what init() allocates, measured
+render/              native renderer: a render job -> WAV, no browser, no wasm.
+                     Exists so a CLAP plugin can be hosted later; a .clap is a
+                     dynamic library and cannot be loaded in a tab
 web/
   public/worklet.js    AudioWorkletProcessor (plain JS, outside the bundler)
   src/shared/params.ts parameter block layout — contract file
