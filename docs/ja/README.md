@@ -41,23 +41,26 @@ cargo test --manifest-path dsp/Cargo.toml   # 決定性・エイリアス・DC�
 cd web && npm test                          # パーサ・GUI・wasm 結合テスト
 ```
 
-コマンドライン（曲の作成と検査）。clone も Rust ツールチェーンも不要で、Node.js 20 以降だけ:
+コマンドライン。clone も Rust ツールチェーンも不要で、Node.js 20 以降だけ:
 
 ```bash
-npx github:ayatough/Sheliak new song.md      # 音が鳴る最小の曲を書き出す
-npx github:ayatough/Sheliak check song.md    # ブラウザと同じ compile() で検査し、行:列 で報告
+curl -fsSL https://raw.githubusercontent.com/ayatough/Sheliak/main/scripts/install.sh | sh
+
+sheliak new song.md      # 音が鳴る最小の曲を書き出す
+sheliak check song.md    # ブラウザと同じ compile() で検査し、行:列 で報告
 ```
 
-`sheliak` を常設コマンドにするなら、作業コピーから link します:
+`~/.local/bin` に入り、DSP コアとアプリも一緒に置かれるので全コマンドが動きます。
+**取得先の Release が必要で、まだ1つもありません** — 最初のタグを打つまでは
+`npx github:ayatough/Sheliak`（`new` / `check` / `fmt` は動きますが、エンジンを
+同梱していないので `render` と `serve` は動きません）か、作業コピーを使ってください。
 
-```bash
-git clone https://github.com/ayatough/Sheliak && cd Sheliak
-npm install && npm link
-```
+tarball は全プラットフォーム共通で1つです。CLI は JavaScript バンドル、`dsp.wasm` は
+wasm、アプリは静的ファイルで、プラットフォーム依存の部分がないためです。
 
-`npm install -g <git url>` だけは動きません。グローバルインストールでは npm が
-`prepare` の前に依存を入れないためで、CLI は `prepare` でバンドルされます。npm への
-publish（＝ビルド済みの tarball を配る）が本来の解決で、それは最初のリリースの仕事です。
+作業コピーからは `npm install && npm link` でも同じコマンドが入ります。
+`npm install -g <git url>` だけは動きません（グローバルインストールでは npm が
+`prepare` の前に依存を入れないため）。
 
 `fmt` は phrase グリッドを正規化します。ビート定規・行順・グループタグ・小節線・
 ラベル幅はすべて**導出**されるので、手書きの定規がグリッドと食い違うことがなくなります。
@@ -71,8 +74,8 @@ phrase の外（散文・synth フェンス・コメント・整列）はバイ�
 sheliak render song.md -o song.wav --loops 4 --tail 2s
 ```
 
-このコマンドだけは DSP コアのビルド（`./scripts/build-wasm.sh`）が必要です。cargo の
-成果物なので、npm install では作れません。
+インストール版は DSP コアを同梱しています。作業コピーからは先に
+`./scripts/build-wasm.sh`（cargo の成果物なので npm では作れません）が必要です。
 
 `serve` はコピペを消すコマンドです。自分のファイルを開いた状態でアプリが立ち上がり、
 **エディタで保存すると再生を止めずに鳴り直し**、GUI（ステップシーケンサ・パラメータパネル）の
@@ -82,8 +85,9 @@ sheliak render song.md -o song.wav --loops 4 --tail 2s
 sheliak serve song.md          # http://localhost:4321
 ```
 
-`render` と同じく DSP コアのビルドが必要で、さらにアプリ本体を作業コピーから動かすため
-リポジトリが必要です（`new` と `check` は不要）。
+ビルド済みのアプリを素の HTTP サーバで配ります（バンドラもリポジトリも不要）。
+インストール版はそれを同梱しています。作業コピーからは `cd web && npm run build`、
+あるいは `./scripts/sheliak` が自動でビルドします。
 
 作業コピー内では `./scripts/sheliak` が編集中のソースを使い、古ければ自動で再ビルドします。
 

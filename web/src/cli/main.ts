@@ -344,8 +344,9 @@ Usage:
           editor reloads the sound without stopping the transport, and the
           step sequencer and parameter panel write their edits back to the
           same file — which is what makes the document, and not the browser
-          tab, the thing your song lives in. Runs the app from a working copy,
-          so unlike the others it needs the repository
+          tab, the thing your song lives in. Serves the built app, so it needs
+          one: an installed release carries it, and a working copy builds it
+          with \`npm run build\` in web/
 
   --strict       also exit non-zero on the warnings, for a project that wants
                  no unbound track to reach main

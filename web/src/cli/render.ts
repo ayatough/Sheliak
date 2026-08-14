@@ -40,18 +40,22 @@ export interface RenderResult {
 /**
  * Where the DSP binary lives, relative to the module asking for it.
  *
- * Two answers, because this module runs from two places: bundled as
- * `dist-cli/sheliak.mjs`, one hop from `public/`, and straight from
- * `src/cli/render.ts` under vitest, which is two. `SHELIAK_WASM` overrides both,
- * for a build kept somewhere else entirely. The first candidate is returned
- * unconditionally when none exists, so the error names the expected location
- * rather than the last one tried.
+ * Three answers, because this module runs from three places: an installed
+ * release, where the built app sits in `app/` beside the bundle; the bundle in a
+ * working copy at `web/dist-cli/`, one hop from `public/`; and the source at
+ * `web/src/cli/`, which is two. `SHELIAK_WASM` overrides all of them, for a
+ * build kept somewhere else entirely. The first candidate is returned when none
+ * exists, so the error names the expected location rather than the last tried.
  */
 export function defaultWasmPath(): string {
   const fromEnv = process.env['SHELIAK_WASM'];
   if (fromEnv) return fromEnv;
   const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [resolve(here, '../public/dsp.wasm'), resolve(here, '../../public/dsp.wasm')];
+  const candidates = [
+    resolve(here, 'app/dsp.wasm'),
+    resolve(here, '../public/dsp.wasm'),
+    resolve(here, '../../public/dsp.wasm'),
+  ];
   return candidates.find(existsSync) ?? candidates[0];
 }
 

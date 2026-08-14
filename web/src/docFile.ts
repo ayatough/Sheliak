@@ -121,17 +121,17 @@ export class DocFile {
   }
 }
 
-/** The endpoint `serve` answers on. Shared so the two halves cannot disagree. */
+/** The endpoints `serve` answers on. Shared so the two halves cannot disagree. */
 export const DOC_ENDPOINT = '/__sheliak/doc';
-/** The HMR event `serve` pushes a changed file on. */
-export const DOC_EVENT = 'sheliak:doc';
+export const DOC_EVENTS_ENDPOINT = '/__sheliak/events';
 
 /**
- * The real transport: `fetch` for both directions and Vite's HMR socket for the
+ * The real transport: `fetch` for both directions and an EventSource for the
  * push. `load()` answering null is the normal case — the published app is not
- * served by anything that knows this endpoint.
+ * served by anything that knows these endpoints — and the stream is only opened
+ * once it has answered, so nothing on GitHub Pages ever holds a request open.
  */
-export function browserTransport(hot?: { on(event: string, cb: (data: DocPayload) => void): void }): DocTransport {
+export function browserTransport(): DocTransport {
   return {
     async load() {
       try {
@@ -155,7 +155,15 @@ export function browserTransport(hot?: { on(event: string, cb: (data: DocPayload
       }
     },
     onRemote(handler) {
-      hot?.on(DOC_EVENT, handler);
+      if (typeof EventSource === 'undefined') return;
+      const stream = new EventSource(DOC_EVENTS_ENDPOINT);
+      stream.onmessage = (event) => {
+        try {
+          handler(JSON.parse(event.data) as DocPayload);
+        } catch {
+          // A frame we cannot read is not worth tearing the stream down for.
+        }
+      };
     },
   };
 }

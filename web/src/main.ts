@@ -36,7 +36,7 @@ const viewTabs = $<HTMLElement>('view-tabs');
  * document is `defaultDoc.ts` and lives only in the textarea.
  */
 const docFile = new DocFile({
-  transport: browserTransport(import.meta.hot),
+  transport: browserTransport(),
   apply: (text) => {
     writeEditor(text);
     recompile();

@@ -29,4 +29,12 @@ if [ ! -f "$bundle" ] || [ -n "$(find "${sources[@]}" -newer "$bundle" 2>/dev/nu
   (cd "$root/web" && npm run --silent build:cli) >&2
 fi
 
+# `serve` runs the built app rather than Vite, so a working copy needs one built
+# and kept current — otherwise editing the app and running `serve` would show
+# yesterday's interface with no indication that it had.
+app="$root/web/dist/index.html"
+if [ ! -f "$app" ] || [ -n "$(find "$root/web/src" "$root/web/index.html" -newer "$app" 2>/dev/null)" ]; then
+  (cd "$root/web" && npm run --silent build) >&2
+fi
+
 exec node "$bundle" "$@"
