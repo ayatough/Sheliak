@@ -495,9 +495,12 @@ depends on it and every day it is postponed makes it a larger breaking change.
 
 # Stream 3 — Plugins
 
-**Status:** specified, not started. The first two tracks (§5, §6) are worth doing
-on their own merits and commit the project to nothing; the CLAP-facing work (§8,
-§9) should not begin until they have landed.
+**Status:** Track A is under way — the effect boundary (§5), the descriptors
+(§6) and the panel built from them (A1–A3) have landed, along with a test that
+makes the two halves of the parameter contract check each other. None of it
+commits the project to a plugin format; all of it is worth having anyway. A4 is
+next and §12 decides it in advance. The CLAP-facing work (§8, §9) has not
+started.
 
 ## Why
 
@@ -680,15 +683,33 @@ The contract is already written twice by hand, and AGENTS.md says so three times
 because it is the failure that does not announce itself. A descriptor format
 naively added on both sides makes it three.
 
-**Declare descriptors once in Rust and generate the TypeScript.** A build script
-emits the effect descriptors as JSON, `web/` imports it, and the FX region of
-`web/src/shared/params.ts` stops being maintained by hand. CI fails if the
-generated file is out of date — the same shape as the brand-asset check in
-non-negotiable 8, which exists for exactly this class of drift.
+**This section originally said to declare the descriptors in Rust and generate
+the TypeScript. That was wrong, and building it is what showed why.** A
+descriptor carries a DSL key, a unit and a default; non-negotiable 1 says a
+string, a field name or a unit conversion inside `dsp/` is a bug. Putting the
+descriptors in the crate would have broken the rule the whole stream exists to
+respect, in the file that respects it most carefully.
 
-This does not dissolve the `params.rs` / `params.ts` pair for the synth
-parameters, and it should not try to in this stream. It stops the effect half
-from growing, which is the half that grows.
+**The descriptors live in `web/src/dsl/fx.ts`, and the Rust side keeps its
+numbers.** `FX_DESCRIPTORS` gives each effect its id, its accepted spellings,
+and per parameter the DSL key, the IR field, the block offset, the unit, the
+default and the editable range. Everything that used to be a per-effect table is
+computed from it: the type ids, the alias map, the allowed keys, the defaults,
+the flattening into the parameter block, the expanded view, and the parameter
+panel. An effect in `dsp/src/fx/` still reads a number at an offset and never
+learns it was written `-6dB`.
+
+Generation turned out to be the wrong tool for the other half too. What was
+wanted was not a generated file but the guarantee that the two halves agree, and
+a test gives that without a build step, a committed artifact or a staleness
+check: `web/src/shared/params.contract.test.ts` reads `params.rs`, compares
+every constant against `params.ts`, and fails by name. It covers the synth
+parameters as well, which generation scoped to the effects would not have.
+
+The remaining duplication is deliberate. The IR interfaces (`DistIR` and the
+rest) stay hand-written, because they are what makes `field` in a descriptor a
+compile-time error when it is misspelled — a generated type could not check the
+thing that generated it.
 
 ## 7. The `fx` fence, generalized
 
@@ -844,6 +865,66 @@ effect, whether or not a single external plugin is ever loaded. §9 shares almos
 no files with anything and can run alongside from day one. §10 is the only item
 here that survives web-clap being abandoned.
 
+## 12. A4, decided before it is written
+
+A1–A3 said "decide the open question about per-instance blocks in prose, merged,
+before the code". This is that, and thinking it through moved the difficulty:
+**the offsets are the easy half and the memory is the hard one.**
+
+### The offsets
+
+Today the region is per *type*: `FX_PARAMS_BASE + (type_id - 1) * FX_PARAMS_STRIDE`,
+112–175 of a 192-float block. It cannot hold a ninth type and it cannot hold two
+reverbs, because a type has exactly one home.
+
+**Make the region per *slot* instead: `FX_SLOT_BASE + slot * FX_SLOT_STRIDE`,
+with the slot's type still in `FX_ORDER_BASE[slot]`.** Eight slots at a stride of
+eight is 64 floats — exactly what the per-type region costs now, so the block
+does not grow. A ninth type stops being a layout question entirely: a type id is
+just a number written in an order slot. Two reverbs become two slots.
+
+This is a small change and the contract test plus the bit-identical render cover
+it. It is not the whole of A4.
+
+### The memory
+
+A per-slot block means a per-slot *instance*, and that is where it gets
+expensive. Today each track holds one of each type, allocated once in `init()`.
+If any slot can be any type, the options are:
+
+| | Cost |
+|---|---|
+| One of every type in every slot | 8 slots × 8 types × 8 tracks. A 2-second stereo delay line alone makes this absurd |
+| One instance per slot that can become any type | 8 slots × the largest variant × 8 tracks. Possibly several times today's footprint |
+| Keep one instance per type, let it appear in several slots | Cheap, and a lie: the two "reverbs" would share one tail |
+| Allocate on demand | Forbidden. `init()` is the only place that may allocate |
+
+Nothing here can be picked from an armchair, because the answer depends on
+numbers nobody has measured: the actual bytes per effect at the maximum sample
+rate, dominated by the delay lines and the reverb's comb banks.
+
+### So A4 splits in two
+
+- **A4a — per-slot blocks.** The offset change above, keeping one instance per
+  type for now. Removes the `PARAM_COUNT` wall at the ninth effect. Cheap,
+  verifiable, no memory question. Do this one.
+- **A4b — duplicate instances of a type.** Blocked on measuring per-effect
+  memory first, and then on a decision that has a real cost attached. **The
+  first deliverable of A4b is the measurement, not a design.**
+
+Splitting them matters because A4a unblocks the thing this stream is for —
+effects that are not the eight compiled in — while A4b only buys two reverbs.
+
+### What none of it solves
+
+A CLAP plugin has as many parameters as it likes, commonly dozens. **No stride
+holds that**, so hosted plugins do not put their parameters in the fixed block
+at all; §8 and §9 need a variable-length region sized at `init()`, or a separate
+buffer. That is a different mechanism from A4 and it should not be smuggled into
+it. A4 is about making the *built-in* set open-ended; the plugin transport is
+its own design, and §7's notation is deliberately silent on where the numbers
+travel.
+
 ## Splitting the work
 
 Four tracks. **A and C can run concurrently from the start; B waits on Stream 2's
@@ -875,17 +956,20 @@ the FX tables in `docs/architecture.md`, the `fx` section of `docs/syntax.md`.
 **Does not touch** `web/public/worklet.js`, `dsp/src/{engine,voice,oscillator}.rs`,
 `web/src/dsl/phrase.ts`.
 
-| # | Step | Finished when |
-|---|---|---|
-| A1 | Effect descriptors in Rust | Every one of the eight effects declares its id, name and parameters with ranges, units and defaults; `fx/mod.rs` dispatches over the registry rather than a hardcoded id match; **audio is bit-identical** — `verify.rs` and `integration.test.ts` produce the same samples |
-| A2 | Generate the TypeScript side | The FX region of `params.ts` and the effect tables in `fx.ts` come from the descriptors via a build script; CI fails on a stale generated file; audio still bit-identical |
-| A3 | Panel from descriptors | `gui/schema.ts` builds FX controls from descriptors instead of hand-written specs; every existing control behaves as before and still edits one token |
-| A4 | Variable-length, instance-based FX region | Two instances of one effect type can exist; the region is not `(type_id - 1) * 8`; `PARAM_COUNT` is no longer a wall at the ninth type; the layout change is documented in `architecture.md` and moved in both contract files in one commit |
-| A5 | Per-track effects | An effect chain can be attached to a track as well as the master bus, expressed in the `fx` fence and shown in `defaultDoc.ts` |
+| # | Step | Finished when | |
+|---|---|---|---|
+| A1 | The chain dispatches over a registry | `Effect` is a trait, `Fx` holds `[Box<dyn Effect>; FX_TYPE_COUNT]`, and the four per-type `match`es are loops; **audio is bit-identical** | **landed** |
+| A2 | The effect set described once | `FX_DESCRIPTORS` in `dsl/fx.ts` drives the type ids, aliases, allowed keys, defaults, block flattening and expanded view; audio and the expanded view are byte-identical | **landed** |
+| A2b | The contract checks itself | `params.contract.test.ts` compares every constant in `params.rs` against `params.ts` and fails by name | **landed** |
+| A3 | Panel from descriptors | `gui/schema.ts` builds FX controls from descriptors; the built panel is byte-identical to what the hand-written specs produced | **landed** |
+| A4 | Variable-length, instance-based FX region | Two instances of one effect type can exist; the region is not `(type_id - 1) * 8`; `PARAM_COUNT` is no longer a wall at the ninth type; the layout change is documented in `architecture.md` and moved in both contract files in one commit | **next**, and see §12 first |
+| A5 | Per-track effects | — | landed before this stream: the chain belongs to the track it is written in |
 
-**A1 is the gate.** If A1 lands without bit-identical audio, the descriptor set
-does not faithfully describe the effects, and every step above it inherits the
-discrepancy.
+**A1 was the gate**, and the bit-identical criterion is what made the rest safe
+to attempt: a three-track document with all eight effects in one chain, a second
+chain reordered with one effect at `mix: 0%`, and a third track with no chain,
+rendered to WAV before and after every step. Keep using it for A4 — it is the
+only check that sees a parameter landing one slot over.
 
 ### Track B — reproducibility classes and the lockfile (§4)
 
