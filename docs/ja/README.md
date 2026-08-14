@@ -72,7 +72,13 @@ phrase の外（散文・synth フェンス・コメント・整列）はバイ�
 
 ```bash
 sheliak render song.md -o song.wav --loops 4 --tail 2s
+sheliak render song.md --stems          # song.wav ＋ song.lead.wav / song.bass.wav …
 ```
+
+`--stems`（パラアウト）はトラックごとに1ファイル書き出します。各トラック自身の
+エフェクトチェーンを通した後・合算する前でタップしているので、**ステムの総和は
+ミックスと完全に一致**します（16bit ファイルでは各々を独立に丸めるため最下位ビット
+1つ以内、浮動小数点ではサンプル単位で厳密に一致。テストで固定しています）。
 
 インストール版は DSP コアを同梱しています。作業コピーからは先に
 `./scripts/build-wasm.sh`（cargo の成果物なので npm では作れません）が必要です。

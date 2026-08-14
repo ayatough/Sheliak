@@ -24,6 +24,8 @@ export interface RenderOptions {
   /** Seconds of decay rendered after the last note is released. */
   tailSeconds: number;
   sampleRate: number;
+  /** Also write one file per track, beside the mix. */
+  stems?: boolean;
   /** Overrides where `dsp.wasm` is looked for. */
   wasm?: string;
 }
@@ -35,6 +37,8 @@ export interface RenderResult {
   peak: number;
   tracks: number;
   bpm: number;
+  /** Stem files written, in track order. Empty unless `stems` was asked for. */
+  stemFiles: string[];
 }
 
 /**
@@ -107,19 +111,39 @@ export function render(source: string, opts: RenderOptions): RenderResult {
   }
 
   const dsp = instantiateDsp(wasm);
+  const stemTracks = opts.stems ? result.tracks.map((t) => t.track) : [];
   const loopFrames = result.loop.lengthSamples * opts.loops;
-  const body = renderLoop(dsp, result.tracks, result.loop, loopFrames, opts.sampleRate);
+  const body = renderLoop(dsp, result.tracks, result.loop, loopFrames, opts.sampleRate, stemTracks);
 
   const tailFrames = Math.round(opts.tailSeconds * opts.sampleRate);
   const l = concat(body.l, tailFrames);
   const r = concat(body.r, tailFrames);
+  const stems = new Map([...body.stems].map(([t, b]) => [t, { l: concat(b.l, tailFrames), r: concat(b.r, tailFrames) }]));
   if (tailFrames > 0) {
-    const tail = renderTail(dsp, tailFrames);
+    const tail = renderTail(dsp, tailFrames, stemTracks);
     l.set(tail.l, loopFrames);
     r.set(tail.r, loopFrames);
+    for (const [track, buffers] of stems) {
+      const from = tail.stems.get(track);
+      if (from === undefined) continue;
+      buffers.l.set(from.l, loopFrames);
+      buffers.r.set(from.r, loopFrames);
+    }
   }
 
   writeFileSync(opts.out, encodeWav(l, r, opts.sampleRate));
+
+  // Named after the mix, not after the document: `-o mix.wav` should put the
+  // parts beside the whole, under the name the whole was given.
+  const stemFiles: string[] = [];
+  for (const track of result.tracks) {
+    const buffers = stems.get(track.track);
+    if (buffers === undefined) continue;
+    const path = stemPath(opts.out, track.id);
+    writeFileSync(path, encodeWav(buffers.l, buffers.r, opts.sampleRate));
+    stemFiles.push(path);
+  }
+
   return {
     out: opts.out,
     frames: l.length,
@@ -127,7 +151,19 @@ export function render(source: string, opts: RenderOptions): RenderResult {
     peak: peakOf(l, r),
     tracks: result.tracks.length,
     bpm: result.bpm,
+    stemFiles,
   };
+}
+
+/**
+ * `song.wav` + `lead` -> `song.lead.wav`.
+ *
+ * A track id is an identifier in the notation, not a filename, so anything a
+ * path would read as structure is replaced rather than trusted.
+ */
+export function stemPath(out: string, trackId: string): string {
+  const safe = trackId.replace(/[^A-Za-z0-9._-]/g, '-') || 'track';
+  return `${out.replace(/\.wav$/i, '')}.${safe}.wav`;
 }
 
 function concat(head: Float32Array, extra: number): Float32Array {
@@ -140,10 +176,11 @@ function concat(head: Float32Array, extra: number): Float32Array {
 /** The line printed after a successful render. */
 export function describeRender(r: RenderResult): string {
   const clipped = r.peak > 1 ? '  ⚠ clipped' : '';
-  return (
+  const head =
     `wrote ${r.out} — ${r.seconds.toFixed(2)}s · ${r.tracks} track${r.tracks === 1 ? '' : 's'} · ` +
-    `${r.bpm}bpm · peak ${dbfs(r.peak)}${clipped}`
-  );
+    `${r.bpm}bpm · peak ${dbfs(r.peak)}${clipped}`;
+  if (r.stemFiles.length === 0) return head;
+  return [head, ...r.stemFiles.map((f) => `      ${f}`)].join('\n');
 }
 
 function dbfs(peak: number): string {

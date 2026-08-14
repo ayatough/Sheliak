@@ -169,6 +169,19 @@ first tag will close this section.
   over server-sent events instead of Vite's HMR socket. That is what lets a
   release carry everything `serve` needs, and it leaves the CLI with no runtime
   dependency at all. Working on the app itself is what `npm run dev` is for.
+- **Stems: `sheliak render --stems`.** One WAV per track beside the mix, named
+  after it (`song.wav` → `song.lead.wav`). `MultiEngine` now keeps each track's
+  output for the block it just rendered instead of summing it away through a
+  shared scratch buffer, and two new exports — `out_track_l_ptr(track)` and
+  `out_track_r_ptr(track)` — hand it back. A stem is tapped after that track's
+  own effect chain and before the tracks are summed, so **the stems add back up
+  to the mix exactly**: the master bus does nothing but sum, and its soft-clip
+  guard is the identity below `CLIP_KNEE`. `dsp/tests/verify.rs` asserts that
+  bit for bit, that a track with no note yields silence rather than a copy of
+  the mix, and that a track falling dormant clears its buffer instead of
+  repeating the block it stopped on; `web/src/integration.test.ts` checks the
+  sum through the real `dsp.wasm` over the four-track default document. The
+  parameter block layout is unchanged and the mix is bit-identical to before.
 
 ### Changed
 - **One mistake is reported once.** A miscounted phrase row used to produce

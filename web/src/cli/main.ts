@@ -197,6 +197,9 @@ function cmdRender(args: string[]): Outcome {
         opts.sampleRate = n;
         break;
       }
+      case '--stems':
+        opts.stems = true;
+        break;
       case '--wasm':
         opts.wasm = args[++i];
         if (opts.wasm === undefined) return usage('--wasm requires a path to dsp.wasm');
@@ -317,8 +320,8 @@ Usage:
   sheliak new <file.md> [--empty]
   sheliak check <file.md>... [--strict] [--format text|json]
   sheliak fmt <file.md>... [--check]
-  sheliak render <file.md> [-o <out.wav>] [--loops <n>] [--tail <2s>]
-                 [--sample-rate <hz>] [--wasm <dsp.wasm>]
+  sheliak render <file.md> [-o <out.wav>] [--stems] [--loops <n>]
+                 [--tail <2s>] [--sample-rate <hz>] [--wasm <dsp.wasm>]
   sheliak serve <file.md> [-p <port>]
 
   new     write the smallest song that makes a sound — one synth fence, one
@@ -354,6 +357,10 @@ Usage:
                  change, the way \`cargo fmt --check\` gates a repository
   --format       json emits the same run as records, for a caller that is
                  going to act on them rather than read them
+  --stems        also write one file per track beside the mix, named after it
+                 (song.wav -> song.lead.wav, song.bass.wav ...). A stem is the
+                 track after its own effect chain and before the tracks are
+                 summed, so the stems add back up to the mix exactly
   --loops        how many times the loop repeats (default 1)
   --tail         decay rendered after the last note is released, e.g. 2s. The
                  default is none, so one loop is exactly loop-length and still

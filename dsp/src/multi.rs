@@ -52,8 +52,14 @@ pub struct MultiEngine {
     sample_rate: f32,
     tables: Vec<Table>,
     tracks: Vec<Track>,
-    scratch_l: [f32; MAX_BLOCK],
-    scratch_r: [f32; MAX_BLOCK],
+    /// Each track's own output for the block just rendered, kept rather than
+    /// summed away so that a stem can be read back after [`Self::process`].
+    /// This is where a track's FX chain has already run, so a stem is the track
+    /// as it sounds in the mix, and the stems sum to the mix exactly — the only
+    /// thing between them is the master guard, which is the identity until
+    /// something approaches full scale.
+    track_l: Vec<[f32; MAX_BLOCK]>,
+    track_r: Vec<[f32; MAX_BLOCK]>,
 }
 
 impl MultiEngine {
@@ -73,8 +79,8 @@ impl MultiEngine {
             sample_rate: sr,
             tables: tables::build_all(),
             tracks,
-            scratch_l: [0.0; MAX_BLOCK],
-            scratch_r: [0.0; MAX_BLOCK],
+            track_l: vec![[0.0; MAX_BLOCK]; MAX_TRACKS],
+            track_r: vec![[0.0; MAX_BLOCK]; MAX_TRACKS],
         }
     }
 
@@ -93,6 +99,16 @@ impl MultiEngine {
 
     pub fn track_mut(&mut self, track: usize) -> Option<&mut Track> {
         self.tracks.get_mut(track)
+    }
+
+    /// One track's output for the block just rendered — its stem. Whatever
+    /// [`Self::process`] last wrote, so it is only meaningful right after a
+    /// call, and only the first `nframes` of it.
+    pub fn track_out(&self, track: usize) -> Option<(&[f32], &[f32])> {
+        match (self.track_l.get(track), self.track_r.get(track)) {
+            (Some(l), Some(r)) => Some((l.as_slice(), r.as_slice())),
+            _ => None,
+        }
     }
 
     /// Voices sounding across every track.
@@ -164,17 +180,23 @@ impl MultiEngine {
         out_l[..n].fill(0.0);
         out_r[..n].fill(0.0);
 
-        for t in self.tracks.iter_mut() {
-            if !t.process(
-                &self.tables,
-                &mut self.scratch_l[..n],
-                &mut self.scratch_r[..n],
-            ) {
+        for ((t, bl), br) in self
+            .tracks
+            .iter_mut()
+            .zip(self.track_l.iter_mut())
+            .zip(self.track_r.iter_mut())
+        {
+            if !t.process(&self.tables, &mut bl[..n], &mut br[..n]) {
+                // A dormant track contributes nothing — and its buffer has to
+                // say so, or a stem read after this block would be the last
+                // block it was awake for, repeated.
+                bl[..n].fill(0.0);
+                br[..n].fill(0.0);
                 continue;
             }
             for i in 0..n {
-                out_l[i] += self.scratch_l[i];
-                out_r[i] += self.scratch_r[i];
+                out_l[i] += bl[i];
+                out_r[i] += br[i];
             }
         }
 

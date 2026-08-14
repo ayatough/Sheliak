@@ -115,7 +115,7 @@ all happen on the TypeScript side.
 | **An effect chain per track** | Distortion, EQ, chorus, phaser, flanger, delay, reverb and a 3-band compressor, in the order you write them, on the track that writes them |
 | **Eight tracks** | One per `synth` fence, each with its own voices and effects |
 | **A GUI that writes text** | The step sequencer and parameter panel edit the document itself, one token at a time, leaving comments and alignment untouched |
-| **A CLI** | `new` starts a song, `check` reads one back with every error by line and column, `fmt` makes one structure have one spelling, `render` writes a WAV, and `serve` opens the app on a file so your editor and the GUI edit the same document |
+| **A CLI** | `new` starts a song, `check` reads one back with every error by line and column, `fmt` makes one structure have one spelling, `render` writes a WAV or a stem per track, and `serve` opens the app on a file so your editor and the GUI edit the same document |
 | **Bit-identical renders** | Same document, same seed, same samples — enforced by an offline test |
 | **No binary but the source material** | Wavetables are generated procedurally; nothing about a song is opaque |
 

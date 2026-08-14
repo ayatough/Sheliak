@@ -16,7 +16,7 @@
 use rustfft::num_complex::Complex32;
 use rustfft::FftPlanner;
 
-use sheliak_dsp::multi::soft_clip_master;
+use sheliak_dsp::multi::{soft_clip_master, CLIP_KNEE};
 use sheliak_dsp::noise::Noise;
 use sheliak_dsp::oscillator::{detune_offsets, mip_level_for};
 use sheliak_dsp::params::*;
@@ -1547,5 +1547,140 @@ fn per_note_glide_overrides_the_patch_in_both_directions() {
     assert!(
         (jumped - HZ_60).abs() < 4.0,
         "glide_s = 0 should override the patch glide, but pitch reads {jumped} Hz"
+    );
+}
+
+// ============================== stems (per-track taps)
+
+/// Stereo audio: left and right, same length.
+type Stereo = (Vec<f32>, Vec<f32>);
+
+/// Renders like [`render`], but also collects each track's own output block by
+/// block — which is the only way to read a stem, since the buffers hold one
+/// block at a time.
+fn render_with_stems(
+    engine: &mut MultiEngine,
+    events: &[(usize, Ev)],
+    total: usize,
+    tracks: usize,
+) -> (Stereo, Vec<Stereo>) {
+    let mut l = vec![0.0f32; total];
+    let mut r = vec![0.0f32; total];
+    let mut stems: Vec<Stereo> = (0..tracks)
+        .map(|_| (Vec::with_capacity(total), Vec::with_capacity(total)))
+        .collect();
+    let mut pos = 0usize;
+    let mut next = 0usize;
+    while pos < total {
+        while next < events.len() && events[next].0 <= pos {
+            match &events[next].1 {
+                Ev::On(t, n, v) => engine.note_on(*t, *n, *v),
+                Ev::OnEx(t, n, v, g, lg) => engine.note_on_ex(*t, *n, *v, *g, *lg),
+                Ev::Off(t, n) => engine.note_off(*t, *n),
+                Ev::Patch(t, p) => engine.apply_patch(*t, p),
+            }
+            next += 1;
+        }
+        let mut len = MAX_BLOCK.min(total - pos);
+        if next < events.len() {
+            len = len.min(events[next].0 - pos);
+        }
+        assert!(len > 0);
+        engine.process(&mut l[pos..pos + len], &mut r[pos..pos + len]);
+        for (track, stem) in stems.iter_mut().enumerate() {
+            let (sl, sr) = engine.track_out(track).expect("track in range");
+            stem.0.extend_from_slice(&sl[..len]);
+            stem.1.extend_from_slice(&sr[..len]);
+        }
+        pos += len;
+    }
+    ((l, r), stems)
+}
+
+#[test]
+fn stems_sum_to_the_mix() {
+    // The promise a stem export makes: the parts add up to the whole. It holds
+    // bit for bit because the master bus does nothing but sum — the guard is
+    // the identity below CLIP_KNEE, which two quiet tracks stay under.
+    let mut lead = lead_patch();
+    lead[P_MASTER_GAIN] = 0.25;
+    let mut bass = lead_patch();
+    bass[P_SEED] = 9.0;
+    bass[P_MASTER_GAIN] = 0.25;
+
+    let mut e = MultiEngine::new(SR);
+    let ((mix_l, mix_r), stems) = render_with_stems(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(0, Box::new(lead))),
+            (0, Ev::Patch(1, Box::new(bass))),
+            (0, Ev::On(0, 60.0, 0.8)),
+            (240, Ev::On(1, 36.0, 0.9)),
+            (SR as usize / 8, Ev::Off(0, 60.0)),
+        ],
+        SR as usize / 4,
+        2,
+    );
+
+    assert!(peak(&mix_l) < CLIP_KNEE, "test must stay under the guard");
+    assert!(rms(&stems[0].0) > 0.0001, "the lead stem is silent");
+    assert!(rms(&stems[1].0) > 0.0001, "the bass stem is silent");
+
+    let sum_l: Vec<f32> = (0..mix_l.len())
+        .map(|i| stems[0].0[i] + stems[1].0[i])
+        .collect();
+    let sum_r: Vec<f32> = (0..mix_r.len())
+        .map(|i| stems[0].1[i] + stems[1].1[i])
+        .collect();
+    assert_bit_identical(&sum_l, &mix_l, "stems must sum to the mix (L)");
+    assert_bit_identical(&sum_r, &mix_r, "stems must sum to the mix (R)");
+}
+
+#[test]
+fn a_stem_carries_only_its_own_track() {
+    // What makes it a stem rather than a copy of the mix: silence on a track
+    // that was never asked to play, however loud the others are.
+    let mut e = MultiEngine::new(SR);
+    let (_, stems) = render_with_stems(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(0, Box::new(lead_patch()))),
+            (0, Ev::Patch(1, Box::new(lead_patch()))),
+            (0, Ev::On(0, 60.0, 0.9)),
+        ],
+        SR as usize / 8,
+        2,
+    );
+    assert!(rms(&stems[0].0) > 0.001, "the playing track is silent");
+    assert!(
+        stems[1].0.iter().all(|v| *v == 0.0),
+        "a track with no note must produce an empty stem"
+    );
+}
+
+#[test]
+fn a_dormant_track_does_not_repeat_its_last_block() {
+    // The buffer is reused every block, so a track that falls dormant has to be
+    // cleared rather than left holding the audio it stopped on.
+    let mut short = lead_patch();
+    short[ENV_AMP_BASE + ENV_D] = 0.005;
+    short[ENV_AMP_BASE + ENV_S] = 0.0;
+    short[ENV_AMP_BASE + ENV_R] = 0.005;
+
+    let mut e = MultiEngine::new(SR);
+    let (_, stems) = render_with_stems(
+        &mut e,
+        &[
+            (0usize, Ev::Patch(0, Box::new(short))),
+            (0, Ev::On(0, 60.0, 0.9)),
+            (480, Ev::Off(0, 60.0)),
+        ],
+        SR as usize / 2,
+        1,
+    );
+    let tail = &stems[0].0[stems[0].0.len() - MAX_BLOCK..];
+    assert!(
+        tail.iter().all(|v| *v == 0.0),
+        "a dormant track's stem must be silent, not its last live block"
     );
 }

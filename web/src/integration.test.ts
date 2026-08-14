@@ -65,4 +65,41 @@ describe.skipIf(!existsSync(WASM_PATH))('dsp.wasm end-to-end', () => {
       expect(a.r[i]).toBe(b.r[i]);
     }
   });
+
+  it('the stems of the four tracks sum back to the mix, sample for sample', () => {
+    // What `render --stems` promises. It holds through the real wasm because a
+    // stem is tapped after that track's own FX chain and the master bus does
+    // nothing but sum — the guard is the identity below CLIP_KNEE, and the
+    // default document sits well under it.
+    const result = compile(DEFAULT_DOC, SR);
+    const tracks = result.tracks.map((t) => t.track);
+    expect(tracks).toHaveLength(4);
+
+    const total = SR / 2;
+    const { l, r, stems } = renderLoop(instantiate(), result.tracks, result.loop!, total, SR, tracks);
+    expect(stems.size).toBe(4);
+
+    // `Math.fround` after every add, in track order: the engine accumulates in
+    // f32 and JS numbers are f64, so summing them the obvious way lands a few
+    // parts in 10^12 away from what the mix actually holds. Reproducing the
+    // engine's arithmetic is the point — an approximate check here would pass
+    // just as happily on a stem that was subtly the wrong track.
+    for (let i = 0; i < total; i++) {
+      let sumL = 0;
+      let sumR = 0;
+      for (const track of tracks) {
+        const stem = stems.get(track)!;
+        sumL = Math.fround(sumL + stem.l[i]!);
+        sumR = Math.fround(sumR + stem.r[i]!);
+      }
+      expect(sumL).toBe(l[i]);
+      expect(sumR).toBe(r[i]);
+    }
+
+    // And each stem is really only its own track.
+    for (const track of tracks) {
+      const stem = stems.get(track)!;
+      expect(stem.l.some((v) => v !== 0)).toBe(true);
+    }
+  });
 });

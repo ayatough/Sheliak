@@ -97,6 +97,22 @@ describe.skipIf(!hasWasm)('rendering', () => {
     expect(readFileSync(join(dir, 'a.wav'))).toEqual(readFileSync(join(dir, 'b.wav')));
   });
 
+  it('writes a file per track with --stems, named after the mix', () => {
+    const result = render(TEMPLATE, opts({ stems: true }));
+    expect(result.stemFiles).toEqual([join(dir, 'out.lead.wav')]);
+    expect(existsSync(result.stemFiles[0]!)).toBe(true);
+    expect(frames(result.stemFiles[0]!)).toBe(result.frames);
+  });
+
+  it('writes no stems unless asked', () => {
+    expect(render(TEMPLATE, opts()).stemFiles).toEqual([]);
+  });
+
+  it('stems reach the same length as the mix when there is a tail', () => {
+    const result = render(TEMPLATE, opts({ stems: true, tailSeconds: 0.25 }));
+    expect(frames(result.stemFiles[0]!)).toBe(result.frames);
+  });
+
   it('resolves musical time against the sample rate it is given', () => {
     const at44 = render(TEMPLATE, opts({ out: join(dir, '44.wav'), sampleRate: 44100 }));
     expect(at44.seconds).toBeCloseTo(2, 5);

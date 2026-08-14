@@ -94,8 +94,19 @@ all_notes_off()                 fast fade to silence on every track
 process(nframes: u32)           nframes <= 128; writes out_l / out_r
 out_l_ptr() -> u32              f32 x 128
 out_r_ptr() -> u32              f32 x 128
+out_track_l_ptr(track: u32)     f32 x 128 — that track's own output for the
+out_track_r_ptr(track: u32)     block just rendered; 0 (null) out of range
 ```
 
+- **The per-track taps are stems.** `out_track_*_ptr` points at the buffer that
+  track wrote in the last `process`, after its own effect chain and before the
+  tracks are summed, so **the stems add back up to the mix exactly** — the
+  master bus does nothing but sum, and its soft-clip guard is the identity below
+  `CLIP_KNEE`. Only the first `nframes` are meaningful and only until the next
+  `process`, so a caller collecting stems copies them block by block; a track
+  that fell dormant has its buffer cleared rather than left holding the block it
+  stopped on. `dsp/tests/verify.rs` checks all three properties, and
+  `web/src/integration.test.ts` checks the sum through the real binary.
 - A track index outside `0..MAX_TRACKS` is ignored, never a panic. Panics abort.
 - A track with no patch applied is silent and costs nothing.
 - **`note_on` carries the glide and legato a glissando needs**

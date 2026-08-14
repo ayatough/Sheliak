@@ -189,3 +189,33 @@ pub extern "C" fn out_l_ptr() -> *const f32 {
 pub extern "C" fn out_r_ptr() -> *const f32 {
     shell().out_r.as_ptr()
 }
+
+/// One track's own output for the block just rendered — its stem, after that
+/// track's FX chain and before the tracks are summed. Null for an out-of-range
+/// index, and for any call made before `init`.
+///
+/// The stems of every track sum to what `out_l_ptr`/`out_r_ptr` hold, exactly,
+/// unless the master guard engaged — which it does not below `CLIP_KNEE`.
+#[no_mangle]
+pub extern "C" fn out_track_l_ptr(track: u32) -> *const f32 {
+    match shell()
+        .engine
+        .as_ref()
+        .and_then(|e| e.track_out(track as usize))
+    {
+        Some((l, _)) => l.as_ptr(),
+        None => core::ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn out_track_r_ptr(track: u32) -> *const f32 {
+    match shell()
+        .engine
+        .as_ref()
+        .and_then(|e| e.track_out(track as usize))
+    {
+        Some((_, r)) => r.as_ptr(),
+        None => core::ptr::null(),
+    }
+}

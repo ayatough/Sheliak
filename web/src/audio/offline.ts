@@ -27,6 +27,43 @@ export interface DspExports {
   process(nframes: number): void;
   out_l_ptr(): number;
   out_r_ptr(): number;
+  /** One track's own output for the block just rendered — its stem. */
+  out_track_l_ptr(track: number): number;
+  out_track_r_ptr(track: number): number;
+}
+
+/** L/R for one render, plus each requested track's own output. */
+export interface Rendered {
+  l: Float32Array;
+  r: Float32Array;
+  /** Keyed by track index; empty unless stems were asked for. */
+  stems: Map<number, { l: Float32Array; r: Float32Array }>;
+}
+
+/**
+ * Somewhere to accumulate stems block by block. The wasm buffers hold one block
+ * at a time, so a stem only exists if it is copied out as it goes.
+ */
+function newStems(tracks: readonly number[], total: number): Map<number, { l: Float32Array; r: Float32Array }> {
+  return new Map(tracks.map((t) => [t, { l: new Float32Array(total), r: new Float32Array(total) }]));
+}
+
+/** Copies `n` frames of every requested stem out of the wasm buffers. */
+function collectStems(
+  dsp: DspExports,
+  stems: Map<number, { l: Float32Array; r: Float32Array }>,
+  n: number,
+  at: number,
+): void {
+  for (const [track, buffers] of stems) {
+    const lp = dsp.out_track_l_ptr(track);
+    const rp = dsp.out_track_r_ptr(track);
+    // Null for a track the engine does not have; nothing to copy, and the
+    // buffer stays the silence it was allocated as.
+    if (lp === 0 || rp === 0) continue;
+    buffers.l.set(new Float32Array(dsp.memory.buffer, lp, n), at);
+    buffers.r.set(new Float32Array(dsp.memory.buffer, rp, n), at);
+  }
 }
 
 /** The render quantum the worklet is called with. */
@@ -51,7 +88,8 @@ export function renderLoop(
   loop: LoopIR,
   total: number,
   sampleRate: number,
-): { l: Float32Array; r: Float32Array } {
+  stemTracks: readonly number[] = [],
+): Rendered {
   dsp.init(sampleRate);
   for (const track of tracks) {
     new Float32Array(dsp.memory.buffer, dsp.params_ptr(track.track), PARAM_COUNT).set(track.params);
@@ -60,6 +98,7 @@ export function renderLoop(
 
   const l = new Float32Array(total);
   const r = new Float32Array(total);
+  const stems = newStems(stemTracks, total);
   let counter = 0;
   let evIdx = 0;
   let written = 0;
@@ -77,6 +116,7 @@ export function renderLoop(
     dsp.process(n);
     l.set(new Float32Array(dsp.memory.buffer, dsp.out_l_ptr(), n), written);
     r.set(new Float32Array(dsp.memory.buffer, dsp.out_r_ptr(), n), written);
+    collectStems(dsp, stems, n, written);
     written += n;
     counter += n;
     while (counter >= loop.lengthSamples) {
@@ -84,7 +124,7 @@ export function renderLoop(
       evIdx = 0;
     }
   }
-  return { l, r };
+  return { l, r, stems };
 }
 
 /**
@@ -93,17 +133,19 @@ export function renderLoop(
  * not. Continues from the state `renderLoop` left behind, so it must be called
  * on the same instance and nothing may re-`init()` in between.
  */
-export function renderTail(dsp: DspExports, total: number): { l: Float32Array; r: Float32Array } {
+export function renderTail(dsp: DspExports, total: number, stemTracks: readonly number[] = []): Rendered {
   dsp.all_notes_off();
   const l = new Float32Array(total);
   const r = new Float32Array(total);
+  const stems = newStems(stemTracks, total);
   let written = 0;
   while (written < total) {
     const n = Math.min(BLOCK, total - written);
     dsp.process(n);
     l.set(new Float32Array(dsp.memory.buffer, dsp.out_l_ptr(), n), written);
     r.set(new Float32Array(dsp.memory.buffer, dsp.out_r_ptr(), n), written);
+    collectStems(dsp, stems, n, written);
     written += n;
   }
-  return { l, r };
+  return { l, r, stems };
 }
