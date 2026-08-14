@@ -106,69 +106,91 @@ fn base_params() -> [f32; PARAM_COUNT] {
     p
 }
 
-/// Writes one parameter of an effect's 8-float block.
-fn fxp(p: &mut [f32; PARAM_COUNT], ty: u32, off: usize, v: f32) {
-    p[FX_PARAMS_BASE + (ty as usize - 1) * FX_PARAMS_STRIDE + off] = v;
+/// Writes one parameter into a chain slot's 8-float block. Blocks belong to
+/// slots, not to types, so this takes the position in the chain.
+fn fxp(p: &mut [f32; PARAM_COUNT], slot: usize, off: usize, v: f32) {
+    p[FX_SLOT_BASE + slot * FX_SLOT_STRIDE + off] = v;
 }
 
-/// Fills every effect's parameter block with a musically sensible setting.
-/// Does *not* touch FX_ORDER — the caller decides which ones run.
+/// The chain `chain_all` builds, and the pairing `fill_all_fx_params` assumes.
+const ALL_FX_TYPES: [u32; FX_TYPE_COUNT] = [
+    FX_DIST, FX_EQ, FX_CHORUS, FX_PHASER, FX_FLANGER, FX_DELAY, FX_REVERB, FX_MBCOMP,
+];
+
+/// One effect type's musically sensible settings, written into a chain slot.
+/// Blocks belong to slots now, so filling one means saying where the effect is.
+fn fill_fx_params(p: &mut [f32; PARAM_COUNT], slot: usize, ty: u32) {
+    match ty {
+        FX_DIST => {
+            fxp(p, slot, DIST_DRIVE, 0.35);
+            fxp(p, slot, DIST_MIX, 0.6);
+            fxp(p, slot, DIST_MODE, 0.0);
+            fxp(p, slot, DIST_TONE_HZ, 9_000.0);
+        }
+        FX_EQ => {
+            fxp(p, slot, EQ_LOW_DB, 3.0);
+            fxp(p, slot, EQ_MID_DB, -2.5);
+            fxp(p, slot, EQ_HIGH_DB, 4.0);
+            fxp(p, slot, EQ_MID_FREQ_HZ, 1_200.0);
+        }
+        FX_CHORUS => {
+            fxp(p, slot, CHORUS_RATE_HZ, 0.8);
+            fxp(p, slot, CHORUS_DEPTH, 0.4);
+            fxp(p, slot, CHORUS_MIX, 0.35);
+        }
+        FX_PHASER => {
+            fxp(p, slot, PHASER_RATE_HZ, 0.4);
+            fxp(p, slot, PHASER_DEPTH, 0.7);
+            fxp(p, slot, PHASER_FEEDBACK, 0.4);
+            fxp(p, slot, PHASER_MIX, 0.4);
+            fxp(p, slot, PHASER_STAGES, 6.0);
+            fxp(p, slot, PHASER_CENTER_HZ, 800.0);
+        }
+        FX_FLANGER => {
+            fxp(p, slot, FLANGER_RATE_HZ, 0.25);
+            fxp(p, slot, FLANGER_DEPTH, 0.6);
+            fxp(p, slot, FLANGER_FEEDBACK, 0.5);
+            fxp(p, slot, FLANGER_MIX, 0.35);
+        }
+        FX_DELAY => {
+            fxp(p, slot, DELAY_TIME_S, 0.28);
+            fxp(p, slot, DELAY_FEEDBACK, 0.45);
+            fxp(p, slot, DELAY_MIX, 0.25);
+            fxp(p, slot, DELAY_PINGPONG, 1.0);
+            fxp(p, slot, DELAY_TONE_HZ, 4_000.0);
+        }
+        FX_REVERB => {
+            fxp(p, slot, REVERB_SIZE, 0.6);
+            fxp(p, slot, REVERB_DAMP, 0.5);
+            fxp(p, slot, REVERB_MIX, 0.2);
+            fxp(p, slot, REVERB_PREDELAY_S, 0.02);
+            fxp(p, slot, REVERB_WIDTH, 1.0);
+        }
+        FX_MBCOMP => {
+            fxp(p, slot, MBCOMP_THRESH_LOW_DB, -18.0);
+            fxp(p, slot, MBCOMP_THRESH_MID_DB, -20.0);
+            fxp(p, slot, MBCOMP_THRESH_HIGH_DB, -22.0);
+            fxp(p, slot, MBCOMP_RATIO, 3.0);
+            fxp(p, slot, MBCOMP_ATTACK_S, 0.01);
+            fxp(p, slot, MBCOMP_RELEASE_S, 0.12);
+            fxp(p, slot, MBCOMP_MAKEUP, 1.4);
+        }
+        _ => {}
+    }
+}
+
+/// Fills slot i with the settings for `ALL_FX_TYPES[i]`, which is the pairing
+/// `chain_all` builds. Does *not* touch FX_ORDER — the caller decides which
+/// ones run, and a populated block under an empty order must stay silent.
 fn fill_all_fx_params(p: &mut [f32; PARAM_COUNT]) {
-    fxp(p, FX_DIST, DIST_DRIVE, 0.35);
-    fxp(p, FX_DIST, DIST_MIX, 0.6);
-    fxp(p, FX_DIST, DIST_MODE, 0.0);
-    fxp(p, FX_DIST, DIST_TONE_HZ, 9_000.0);
-
-    fxp(p, FX_EQ, EQ_LOW_DB, 3.0);
-    fxp(p, FX_EQ, EQ_MID_DB, -2.5);
-    fxp(p, FX_EQ, EQ_HIGH_DB, 4.0);
-    fxp(p, FX_EQ, EQ_MID_FREQ_HZ, 1_200.0);
-
-    fxp(p, FX_CHORUS, CHORUS_RATE_HZ, 0.8);
-    fxp(p, FX_CHORUS, CHORUS_DEPTH, 0.4);
-    fxp(p, FX_CHORUS, CHORUS_MIX, 0.35);
-
-    fxp(p, FX_PHASER, PHASER_RATE_HZ, 0.4);
-    fxp(p, FX_PHASER, PHASER_DEPTH, 0.7);
-    fxp(p, FX_PHASER, PHASER_FEEDBACK, 0.4);
-    fxp(p, FX_PHASER, PHASER_MIX, 0.4);
-    fxp(p, FX_PHASER, PHASER_STAGES, 6.0);
-    fxp(p, FX_PHASER, PHASER_CENTER_HZ, 800.0);
-
-    fxp(p, FX_FLANGER, FLANGER_RATE_HZ, 0.25);
-    fxp(p, FX_FLANGER, FLANGER_DEPTH, 0.6);
-    fxp(p, FX_FLANGER, FLANGER_FEEDBACK, 0.5);
-    fxp(p, FX_FLANGER, FLANGER_MIX, 0.35);
-
-    fxp(p, FX_DELAY, DELAY_TIME_S, 0.28);
-    fxp(p, FX_DELAY, DELAY_FEEDBACK, 0.45);
-    fxp(p, FX_DELAY, DELAY_MIX, 0.25);
-    fxp(p, FX_DELAY, DELAY_PINGPONG, 1.0);
-    fxp(p, FX_DELAY, DELAY_TONE_HZ, 4_000.0);
-
-    fxp(p, FX_REVERB, REVERB_SIZE, 0.6);
-    fxp(p, FX_REVERB, REVERB_DAMP, 0.5);
-    fxp(p, FX_REVERB, REVERB_MIX, 0.2);
-    fxp(p, FX_REVERB, REVERB_PREDELAY_S, 0.02);
-    fxp(p, FX_REVERB, REVERB_WIDTH, 1.0);
-
-    fxp(p, FX_MBCOMP, MBCOMP_THRESH_LOW_DB, -18.0);
-    fxp(p, FX_MBCOMP, MBCOMP_THRESH_MID_DB, -20.0);
-    fxp(p, FX_MBCOMP, MBCOMP_THRESH_HIGH_DB, -22.0);
-    fxp(p, FX_MBCOMP, MBCOMP_RATIO, 3.0);
-    fxp(p, FX_MBCOMP, MBCOMP_ATTACK_S, 0.01);
-    fxp(p, FX_MBCOMP, MBCOMP_RELEASE_S, 0.12);
-    fxp(p, FX_MBCOMP, MBCOMP_MAKEUP, 1.4);
+    for (slot, ty) in ALL_FX_TYPES.iter().enumerate() {
+        fill_fx_params(p, slot, *ty);
+    }
 }
 
 /// Puts all eight effects in the chain, in type order.
 fn chain_all(p: &mut [f32; PARAM_COUNT]) {
-    for (i, ty) in [
-        FX_DIST, FX_EQ, FX_CHORUS, FX_PHASER, FX_FLANGER, FX_DELAY, FX_REVERB, FX_MBCOMP,
-    ]
-    .iter()
-    .enumerate()
-    {
+    for (i, ty) in ALL_FX_TYPES.iter().enumerate() {
         p[FX_ORDER_BASE + i] = *ty as f32;
     }
 }
@@ -672,9 +694,9 @@ fn determinism_with_full_fx_chain() {
 
     // A second patch mid-render exercises hot reload through the chain too.
     let mut p2 = p;
-    fxp(&mut p2, FX_DELAY, DELAY_TIME_S, 0.15);
-    fxp(&mut p2, FX_REVERB, REVERB_SIZE, 0.85);
-    fxp(&mut p2, FX_DIST, DIST_MODE, 1.0);
+    fxp(&mut p2, 5, DELAY_TIME_S, 0.15);
+    fxp(&mut p2, 6, REVERB_SIZE, 0.85);
+    fxp(&mut p2, 0, DIST_MODE, 1.0);
 
     let sr = SR as usize;
     let events = vec![
@@ -743,13 +765,13 @@ fn mbcomp_below_threshold_is_transparent() {
 
     let mut comp = plain;
     comp[FX_ORDER_BASE] = FX_MBCOMP as f32;
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_THRESH_LOW_DB, 12.0);
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_THRESH_MID_DB, 12.0);
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_THRESH_HIGH_DB, 12.0);
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_RATIO, 4.0);
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_ATTACK_S, 0.01);
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_RELEASE_S, 0.12);
-    fxp(&mut comp, FX_MBCOMP, MBCOMP_MAKEUP, 1.0);
+    fxp(&mut comp, 0, MBCOMP_THRESH_LOW_DB, 12.0);
+    fxp(&mut comp, 0, MBCOMP_THRESH_MID_DB, 12.0);
+    fxp(&mut comp, 0, MBCOMP_THRESH_HIGH_DB, 12.0);
+    fxp(&mut comp, 0, MBCOMP_RATIO, 4.0);
+    fxp(&mut comp, 0, MBCOMP_ATTACK_S, 0.01);
+    fxp(&mut comp, 0, MBCOMP_RELEASE_S, 0.12);
+    fxp(&mut comp, 0, MBCOMP_MAKEUP, 1.0);
 
     let n = SR as usize / 2;
     let mut a = MultiEngine::new(SR);
@@ -790,15 +812,15 @@ fn delay_and_reverb_tails_decay_without_runaway() {
     p[P_MASTER_GAIN] = 0.5;
     p[FX_ORDER_BASE] = FX_DELAY as f32;
     p[FX_ORDER_BASE + 1] = FX_REVERB as f32;
-    fxp(&mut p, FX_DELAY, DELAY_TIME_S, 0.2);
-    fxp(&mut p, FX_DELAY, DELAY_FEEDBACK, 0.9); // top of the allowed range
-    fxp(&mut p, FX_DELAY, DELAY_MIX, 0.5);
-    fxp(&mut p, FX_DELAY, DELAY_PINGPONG, 1.0);
-    fxp(&mut p, FX_DELAY, DELAY_TONE_HZ, 4_000.0);
-    fxp(&mut p, FX_REVERB, REVERB_SIZE, 0.7);
-    fxp(&mut p, FX_REVERB, REVERB_DAMP, 0.4);
-    fxp(&mut p, FX_REVERB, REVERB_MIX, 0.4);
-    fxp(&mut p, FX_REVERB, REVERB_WIDTH, 1.0);
+    fxp(&mut p, 0, DELAY_TIME_S, 0.2);
+    fxp(&mut p, 0, DELAY_FEEDBACK, 0.9); // top of the allowed range
+    fxp(&mut p, 0, DELAY_MIX, 0.5);
+    fxp(&mut p, 0, DELAY_PINGPONG, 1.0);
+    fxp(&mut p, 0, DELAY_TONE_HZ, 4_000.0);
+    fxp(&mut p, 1, REVERB_SIZE, 0.7);
+    fxp(&mut p, 1, REVERB_DAMP, 0.4);
+    fxp(&mut p, 1, REVERB_MIX, 0.4);
+    fxp(&mut p, 1, REVERB_WIDTH, 1.0);
 
     let mut e = MultiEngine::new(SR);
     e.apply_patch(0, &p);
@@ -857,15 +879,15 @@ fn dist_and_reverb_stay_dc_free_and_unclipped() {
     p[NOISE_BASE + NOISE_LEVEL] = 0.25;
     p[FX_ORDER_BASE] = FX_DIST as f32;
     p[FX_ORDER_BASE + 1] = FX_REVERB as f32;
-    fxp(&mut p, FX_DIST, DIST_DRIVE, 0.3);
-    fxp(&mut p, FX_DIST, DIST_MIX, 1.0);
-    fxp(&mut p, FX_DIST, DIST_MODE, 0.0);
-    fxp(&mut p, FX_DIST, DIST_TONE_HZ, 20_000.0);
-    fxp(&mut p, FX_REVERB, REVERB_SIZE, 0.6);
-    fxp(&mut p, FX_REVERB, REVERB_DAMP, 0.5);
-    fxp(&mut p, FX_REVERB, REVERB_MIX, 0.2);
-    fxp(&mut p, FX_REVERB, REVERB_PREDELAY_S, 0.02);
-    fxp(&mut p, FX_REVERB, REVERB_WIDTH, 1.0);
+    fxp(&mut p, 0, DIST_DRIVE, 0.3);
+    fxp(&mut p, 0, DIST_MIX, 1.0);
+    fxp(&mut p, 0, DIST_MODE, 0.0);
+    fxp(&mut p, 0, DIST_TONE_HZ, 20_000.0);
+    fxp(&mut p, 1, REVERB_SIZE, 0.6);
+    fxp(&mut p, 1, REVERB_DAMP, 0.5);
+    fxp(&mut p, 1, REVERB_MIX, 0.2);
+    fxp(&mut p, 1, REVERB_PREDELAY_S, 0.02);
+    fxp(&mut p, 1, REVERB_WIDTH, 1.0);
 
     let total = SR as usize;
     let mut e = MultiEngine::new(SR);
@@ -894,14 +916,19 @@ fn every_effect_alone_is_stable_and_finite() {
     ] {
         let mut p = base_params();
         p[ENV_AMP_BASE + ENV_S] = 1.0;
-        fill_all_fx_params(&mut p);
-        // Push every feedback path to its maximum for this stability check.
-        fxp(&mut p, FX_DELAY, DELAY_FEEDBACK, 1.0);
-        fxp(&mut p, FX_FLANGER, FLANGER_FEEDBACK, 1.0);
-        fxp(&mut p, FX_PHASER, PHASER_FEEDBACK, 1.0);
-        fxp(&mut p, FX_REVERB, REVERB_SIZE, 1.0);
-        fxp(&mut p, FX_DIST, DIST_DRIVE, 1.0);
+        // The effect under test is alone in the chain, so it sits in slot 0 and
+        // that is where its block has to be.
         p[FX_ORDER_BASE] = ty as f32;
+        fill_fx_params(&mut p, 0, ty);
+        // Push this one's feedback path to its maximum for the stability check.
+        match ty {
+            FX_DELAY => fxp(&mut p, 0, DELAY_FEEDBACK, 1.0),
+            FX_FLANGER => fxp(&mut p, 0, FLANGER_FEEDBACK, 1.0),
+            FX_PHASER => fxp(&mut p, 0, PHASER_FEEDBACK, 1.0),
+            FX_REVERB => fxp(&mut p, 0, REVERB_SIZE, 1.0),
+            FX_DIST => fxp(&mut p, 0, DIST_DRIVE, 1.0),
+            _ => {}
+        }
 
         let mut e = MultiEngine::new(SR);
         let (l, r) = render(
@@ -928,18 +955,32 @@ fn every_effect_alone_is_stable_and_finite() {
 #[test]
 fn fx_order_is_respected_and_deduplicated() {
     // dist → delay and delay → dist are different signal chains.
-    let mut a = base_params();
-    a[ENV_AMP_BASE + ENV_S] = 1.0;
-    fill_all_fx_params(&mut a);
-    fxp(&mut a, FX_DIST, DIST_DRIVE, 0.9);
-    fxp(&mut a, FX_DIST, DIST_MIX, 1.0);
-    fxp(&mut a, FX_DELAY, DELAY_MIX, 0.5);
-    fxp(&mut a, FX_DELAY, DELAY_FEEDBACK, 0.6);
-    let mut b = a;
-    a[FX_ORDER_BASE] = FX_DIST as f32;
-    a[FX_ORDER_BASE + 1] = FX_DELAY as f32;
-    b[FX_ORDER_BASE] = FX_DELAY as f32;
-    b[FX_ORDER_BASE + 1] = FX_DIST as f32;
+    // Blocks belong to slots, so swapping the order moves the parameters with
+    // it — which is what the writing side does on every compile. Both patches
+    // carry the same two effects with the same settings; only the order differs.
+    let two = |first: u32, second: u32| {
+        let mut p = base_params();
+        p[ENV_AMP_BASE + ENV_S] = 1.0;
+        p[FX_ORDER_BASE] = first as f32;
+        p[FX_ORDER_BASE + 1] = second as f32;
+        for (slot, ty) in [first, second].iter().enumerate() {
+            fill_fx_params(&mut p, slot, *ty);
+            match *ty {
+                FX_DIST => {
+                    fxp(&mut p, slot, DIST_DRIVE, 0.9);
+                    fxp(&mut p, slot, DIST_MIX, 1.0);
+                }
+                FX_DELAY => {
+                    fxp(&mut p, slot, DELAY_MIX, 0.5);
+                    fxp(&mut p, slot, DELAY_FEEDBACK, 0.6);
+                }
+                _ => {}
+            }
+        }
+        p
+    };
+    let a = two(FX_DIST, FX_DELAY);
+    let b = two(FX_DELAY, FX_DIST);
     // A duplicate type must be ignored rather than processed twice.
     let mut c = a;
     c[FX_ORDER_BASE + 2] = FX_DIST as f32;
@@ -980,19 +1021,19 @@ fn fx_hot_reload_is_click_free() {
     chain_all(&mut p);
 
     let mut jump = p;
-    fxp(&mut jump, FX_DIST, DIST_DRIVE, 0.95);
-    fxp(&mut jump, FX_DIST, DIST_MIX, 1.0);
-    fxp(&mut jump, FX_EQ, EQ_LOW_DB, -12.0);
-    fxp(&mut jump, FX_EQ, EQ_HIGH_DB, 12.0);
-    fxp(&mut jump, FX_CHORUS, CHORUS_DEPTH, 1.0);
-    fxp(&mut jump, FX_CHORUS, CHORUS_MIX, 1.0);
-    fxp(&mut jump, FX_PHASER, PHASER_FEEDBACK, 0.9);
-    fxp(&mut jump, FX_FLANGER, FLANGER_MIX, 1.0);
-    fxp(&mut jump, FX_DELAY, DELAY_TIME_S, 0.05);
-    fxp(&mut jump, FX_DELAY, DELAY_MIX, 0.8);
-    fxp(&mut jump, FX_REVERB, REVERB_SIZE, 1.0);
-    fxp(&mut jump, FX_REVERB, REVERB_MIX, 0.9);
-    fxp(&mut jump, FX_MBCOMP, MBCOMP_MAKEUP, 2.0);
+    fxp(&mut jump, 0, DIST_DRIVE, 0.95);
+    fxp(&mut jump, 0, DIST_MIX, 1.0);
+    fxp(&mut jump, 1, EQ_LOW_DB, -12.0);
+    fxp(&mut jump, 1, EQ_HIGH_DB, 12.0);
+    fxp(&mut jump, 2, CHORUS_DEPTH, 1.0);
+    fxp(&mut jump, 2, CHORUS_MIX, 1.0);
+    fxp(&mut jump, 3, PHASER_FEEDBACK, 0.9);
+    fxp(&mut jump, 4, FLANGER_MIX, 1.0);
+    fxp(&mut jump, 5, DELAY_TIME_S, 0.05);
+    fxp(&mut jump, 5, DELAY_MIX, 0.8);
+    fxp(&mut jump, 6, REVERB_SIZE, 1.0);
+    fxp(&mut jump, 6, REVERB_MIX, 0.9);
+    fxp(&mut jump, 7, MBCOMP_MAKEUP, 2.0);
 
     let sr = SR as usize;
     let mut e = MultiEngine::new(SR);
@@ -1024,10 +1065,10 @@ fn delay_reaches_its_two_second_maximum() {
     p[OSC_A_BASE + OSC_TABLE_ID] = TABLE_SINE as f32;
     p[ENV_AMP_BASE + ENV_R] = 0.01;
     p[FX_ORDER_BASE] = FX_DELAY as f32;
-    fxp(&mut p, FX_DELAY, DELAY_TIME_S, 2.0);
-    fxp(&mut p, FX_DELAY, DELAY_FEEDBACK, 0.0);
-    fxp(&mut p, FX_DELAY, DELAY_MIX, 1.0);
-    fxp(&mut p, FX_DELAY, DELAY_TONE_HZ, 18_000.0);
+    fxp(&mut p, 0, DELAY_TIME_S, 2.0);
+    fxp(&mut p, 0, DELAY_FEEDBACK, 0.0);
+    fxp(&mut p, 0, DELAY_MIX, 1.0);
+    fxp(&mut p, 0, DELAY_TONE_HZ, 18_000.0);
 
     let sr = SR as usize;
     let mut e = MultiEngine::new(SR);

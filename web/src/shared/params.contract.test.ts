@@ -89,9 +89,10 @@ describe('the parameter block contract', () => {
   });
 
   it('keeps the effect blocks inside the parameter block', () => {
-    // The layout arithmetic both sides perform, checked once: the last effect's
-    // block has to end at or before PARAM_COUNT.
-    const end = ts.FX_PARAMS_BASE + (rust.get('FX_TYPE_COUNT') as number) * ts.FX_PARAMS_STRIDE;
+    // The layout arithmetic both sides perform, checked once: the last slot's
+    // block has to end at or before PARAM_COUNT. Slots, not types — which is
+    // why adding an effect type no longer needs room reserved for it.
+    const end = ts.FX_SLOT_BASE + ts.FX_SLOTS * ts.FX_SLOT_STRIDE;
     expect(end).toBeLessThanOrEqual(ts.PARAM_COUNT);
   });
 });

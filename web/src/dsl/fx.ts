@@ -21,8 +21,8 @@ import {
   FX_DELAY,
   FX_REVERB,
   FX_MBCOMP,
-  FX_PARAMS_BASE,
-  FX_PARAMS_STRIDE,
+  FX_SLOT_BASE,
+  FX_SLOT_STRIDE,
   DIST_DRIVE,
   DIST_MIX,
   DIST_MODE,
@@ -377,19 +377,22 @@ export function writeNoise(p: Float32Array, noise: NoiseIR): void {
   p[NOISE_BASE + NOISE_COLOR] = NOISE_COLORS[noise.color] ?? 0;
 }
 
-/** Chain order goes into FX_ORDER slots; each effect's params into its block. */
+/**
+ * Chain order goes into the FX_ORDER slots, and each effect's parameters into
+ * the block of the slot it occupies. Position in the chain — not type — is what
+ * addresses a block, so the region stays 8 x 8 floats however many effect types
+ * come to exist, and an unused slot is left at zero.
+ */
 export function writeFxChain(p: Float32Array, chain: FxIR[]): void {
   for (let i = 0; i < FX_SLOTS; i++) {
     const entry = chain[i];
     p[FX_ORDER_BASE + i] = entry ? FX_TYPE_IDS[entry.type] : FX_NONE;
-  }
-  for (const entry of chain) {
-    writeFxParams(p, entry);
+    if (entry) writeFxParams(p, entry, i);
   }
 }
 
-function fxBase(type: FxType): number {
-  return FX_PARAMS_BASE + (FX_TYPE_IDS[type] - 1) * FX_PARAMS_STRIDE;
+export function fxSlotBase(slot: number): number {
+  return FX_SLOT_BASE + slot * FX_SLOT_STRIDE;
 }
 
 /** A field's value as the parameter block wants it: a plain `f32`. */
@@ -404,8 +407,8 @@ function toBlock(value: unknown, desc: FxParamDesc<Record<string, unknown>>): nu
   }
 }
 
-function writeFxParams(p: Float32Array, entry: FxIR): void {
-  const b = fxBase(entry.type);
+function writeFxParams(p: Float32Array, entry: FxIR, slot: number): void {
+  const b = fxSlotBase(slot);
   const params = entry.params as unknown as Record<string, unknown>;
   for (const desc of descOf(entry.type).params) {
     p[b + desc.offset] = toBlock(params[desc.field], desc);

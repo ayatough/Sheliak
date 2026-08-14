@@ -76,7 +76,8 @@ export const NOISE_COLOR = 2; // 0=white 1=pink
 export const FX_ORDER_BASE = 104;
 export const FX_SLOTS = 8;
 
-// Effect type ids (each type appears at most once in the chain)
+// Effect type ids. A type still appears at most once in a chain; the ids no
+// longer index the parameter region, so a new one needs no room reserved.
 export const FX_NONE = 0;
 export const FX_DIST = 1;
 export const FX_EQ = 2;
@@ -87,9 +88,11 @@ export const FX_DELAY = 6;
 export const FX_REVERB = 7;
 export const FX_MBCOMP = 8;
 
-// Per-effect parameter blocks: base = FX_PARAMS_BASE + (type - 1) * FX_PARAMS_STRIDE
-export const FX_PARAMS_BASE = 112;
-export const FX_PARAMS_STRIDE = 8;
+// Per-slot parameter blocks: base = FX_SLOT_BASE + slot * FX_SLOT_STRIDE.
+// Keyed by position in the chain, not by type — so the region is a fixed
+// 8 x 8 = 64 floats however many effect types exist.
+export const FX_SLOT_BASE = 112;
+export const FX_SLOT_STRIDE = 8;
 
 // Distortion (FX_DIST)
 export const DIST_DRIVE = 0; // 0..1

@@ -114,6 +114,10 @@ pub(crate) trait Effect {
     }
 }
 
+/// What an effect that is not in the chain reads. Its own slot no longer
+/// exists, and silence is what the region held before it was written.
+const SILENT_SLOT: [f32; FX_SLOT_STRIDE] = [0.0; FX_SLOT_STRIDE];
+
 pub struct Fx {
     sample_rate: f32,
     order: [u32; FX_SLOTS],
@@ -160,9 +164,12 @@ impl Fx {
     }
 
     pub fn apply_patch(&mut self, p: &[f32; PARAM_COUNT], first: bool) {
-        // Decode the order, dropping duplicates (each type at most once).
+        // Decode the order, dropping duplicates (each type at most once), and
+        // remember which slot each type landed in — that slot is where its
+        // parameters are.
         let mut order = [FX_NONE; FX_SLOTS];
         let mut seen = [false; FX_TYPE_COUNT + 1];
+        let mut slot_of = [None; FX_TYPE_COUNT + 1];
         let mut any = false;
         for (i, slot) in order.iter_mut().enumerate() {
             let ty = clamp_idx(p[FX_ORDER_BASE + i], 0.0, FX_TYPE_COUNT as f32);
@@ -170,19 +177,31 @@ impl Fx {
                 continue;
             }
             seen[ty as usize] = true;
+            slot_of[ty as usize] = Some(i);
             *slot = ty;
             any = true;
         }
         self.order = order;
         self.any = any;
 
-        // Every effect reads its block, in type-id order, whether or not it is
-        // in the chain: a patch that drops an effect still has to land in it,
-        // so that adding it back does not snap from a stale value.
+        // Every effect reads a block, in type-id order, whether or not it is in
+        // the chain: an effect that has just been dropped still has to land on
+        // silence, or adding it back would snap from a value minutes old.
+        //
+        // A type in the chain reads the block of *its slot*; one that is not
+        // reads zeros, which is what the writing side leaves in an unused slot
+        // and therefore what it used to read from its own vacated region.
         let sr = self.sample_rate;
         for (index, effect) in self.effects.iter_mut().enumerate() {
-            let base = FX_PARAMS_BASE + index * FX_PARAMS_STRIDE;
-            effect.apply_patch(&p[base..base + FX_PARAMS_STRIDE], sr, first);
+            let slot = slot_of[index + 1];
+            let block = match slot {
+                Some(slot) => {
+                    let base = FX_SLOT_BASE + slot * FX_SLOT_STRIDE;
+                    &p[base..base + FX_SLOT_STRIDE]
+                }
+                None => &SILENT_SLOT[..],
+            };
+            effect.apply_patch(block, sr, first);
         }
 
         // Rising edge (absent/silent → active) clears stale buffers.

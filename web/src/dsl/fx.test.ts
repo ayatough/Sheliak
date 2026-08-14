@@ -20,8 +20,8 @@ import {
   FX_DELAY,
   FX_REVERB,
   FX_MBCOMP,
-  FX_PARAMS_BASE,
-  FX_PARAMS_STRIDE,
+  FX_SLOT_BASE,
+  FX_SLOT_STRIDE,
   DIST_DRIVE,
   DIST_MIX,
   DIST_MODE,
@@ -63,7 +63,17 @@ import {
 } from '../shared/params.ts';
 
 const BPM = 124;
-const base = (typeId: number) => FX_PARAMS_BASE + (typeId - 1) * FX_PARAMS_STRIDE;
+/**
+ * The block belonging to an effect, found the way the engine finds it: by
+ * looking up which chain slot the type landed in. Blocks are addressed by
+ * position now, so "the reverb's parameters" depends on where the reverb is.
+ */
+const base = (p: Float32Array, typeId: number): number => {
+  for (let i = 0; i < FX_SLOTS; i++) {
+    if (p[FX_ORDER_BASE + i] === typeId) return FX_SLOT_BASE + i * FX_SLOT_STRIDE;
+  }
+  throw new Error(`type id ${typeId} is not in the chain`);
+};
 
 function parse(body: string, bpm = BPM) {
   return parseSynth(body, {}, { bodyStartLine: 1, bpm });
@@ -139,7 +149,7 @@ describe('fx chain — order and type ids', () => {
   it('leaves the whole block empty when there is no fx section', () => {
     const p = parse('filter: { cutoff: 800Hz }').params!;
     for (let i = 0; i < FX_SLOTS; i++) expect(p[FX_ORDER_BASE + i]).toBe(FX_NONE);
-    expect(p[base(FX_DELAY) + DELAY_TIME_S]).toBe(0);
+    for (let i = 0; i < FX_SLOTS * FX_SLOT_STRIDE; i++) expect(p[FX_SLOT_BASE + i]).toBe(0);
   });
 });
 
@@ -147,7 +157,7 @@ describe('fx chain — per-effect parameters', () => {
   it('dist', () => {
     const r = parse('fx:\n  - { type: dist, drive: 0.4, mix: 60%, mode: fold, tone: 8kHz }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_DIST);
+    const b = base(r.params!, FX_DIST);
     const p = r.params!;
     expect(p[b + DIST_DRIVE]).toBeCloseTo(0.4, 6);
     expect(p[b + DIST_MIX]).toBeCloseTo(0.6, 6);
@@ -158,7 +168,7 @@ describe('fx chain — per-effect parameters', () => {
   it('eq keeps gains in dB and converts kHz', () => {
     const r = parse('fx:\n  - { type: eq, low: +2dB, mid: -1dB, high: +3dB, mid_freq: 1.2kHz }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_EQ);
+    const b = base(r.params!, FX_EQ);
     const p = r.params!;
     expect(p[b + EQ_LOW_DB]).toBe(2);
     expect(p[b + EQ_MID_DB]).toBe(-1);
@@ -169,7 +179,7 @@ describe('fx chain — per-effect parameters', () => {
   it('chorus', () => {
     const r = parse('fx:\n  - { type: chorus, rate: 0.8Hz, depth: 30%, mix: 35% }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_CHORUS);
+    const b = base(r.params!, FX_CHORUS);
     const p = r.params!;
     expect(p[b + CHORUS_RATE_HZ]).toBeCloseTo(0.8, 6);
     expect(p[b + CHORUS_DEPTH]).toBeCloseTo(0.3, 6);
@@ -179,7 +189,7 @@ describe('fx chain — per-effect parameters', () => {
   it('phaser', () => {
     const r = parse('fx:\n  - { type: phaser, rate: 0.4Hz, depth: 70%, feedback: 30%, mix: 40%, stages: 6, center: 800Hz }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_PHASER);
+    const b = base(r.params!, FX_PHASER);
     const p = r.params!;
     expect(p[b + PHASER_RATE_HZ]).toBeCloseTo(0.4, 6);
     expect(p[b + PHASER_DEPTH]).toBeCloseTo(0.7, 6);
@@ -192,7 +202,7 @@ describe('fx chain — per-effect parameters', () => {
   it('flanger', () => {
     const r = parse('fx:\n  - { type: flanger, rate: 0.25Hz, depth: 60%, feedback: 50%, mix: 35% }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_FLANGER);
+    const b = base(r.params!, FX_FLANGER);
     const p = r.params!;
     expect(p[b + FLANGER_RATE_HZ]).toBeCloseTo(0.25, 6);
     expect(p[b + FLANGER_DEPTH]).toBeCloseTo(0.6, 6);
@@ -203,7 +213,7 @@ describe('fx chain — per-effect parameters', () => {
   it('delay converts musical time with the loop bpm', () => {
     const r = parse('fx:\n  - { type: delay, time: 3/16, feedback: 45%, mix: 25%, pingpong: on, tone: 4kHz }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_DELAY);
+    const b = base(r.params!, FX_DELAY);
     const p = r.params!;
     // 3/16 = 0.75 beat; at 124bpm that is 0.75 * 60/124 s.
     expect(p[b + DELAY_TIME_S]).toBeCloseTo(beatsToSeconds(0.75, BPM), 6);
@@ -217,7 +227,7 @@ describe('fx chain — per-effect parameters', () => {
   it('delay also accepts absolute time and off for pingpong', () => {
     const r = parse('fx:\n  - { type: delay, time: 375ms, pingpong: off }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_DELAY);
+    const b = base(r.params!, FX_DELAY);
     expect(r.params![b + DELAY_TIME_S]).toBeCloseTo(0.375, 6);
     expect(r.params![b + DELAY_PINGPONG]).toBe(0);
   });
@@ -225,7 +235,7 @@ describe('fx chain — per-effect parameters', () => {
   it('reverb', () => {
     const r = parse('fx:\n  - { type: reverb, size: 70%, damp: 50%, mix: 20%, predelay: 20ms, width: 100% }');
     expect(r.errors).toEqual([]);
-    const b = base(FX_REVERB);
+    const b = base(r.params!, FX_REVERB);
     const p = r.params!;
     expect(p[b + REVERB_SIZE]).toBeCloseTo(0.7, 6);
     expect(p[b + REVERB_DAMP]).toBeCloseTo(0.5, 6);
@@ -239,7 +249,7 @@ describe('fx chain — per-effect parameters', () => {
       'fx:\n  - { type: comp, thresh_low: -24dB, thresh_mid: -24dB, thresh_high: -24dB, ratio: 3, attack: 10ms, release: 120ms, makeup: 2dB }',
     );
     expect(r.errors).toEqual([]);
-    const b = base(FX_MBCOMP);
+    const b = base(r.params!, FX_MBCOMP);
     const p = r.params!;
     expect(p[b + MBCOMP_THRESH_LOW_DB]).toBe(-24);
     expect(p[b + MBCOMP_THRESH_MID_DB]).toBe(-24);
@@ -253,7 +263,7 @@ describe('fx chain — per-effect parameters', () => {
   it('accepts a musical rate for chorus/phaser/flanger', () => {
     const r = parse('fx:\n  - { type: chorus, rate: 1/4 }');
     expect(r.errors).toEqual([]);
-    expect(r.params![base(FX_CHORUS) + CHORUS_RATE_HZ]).toBeCloseTo(BPM / 60, 5);
+    expect(r.params![base(r.params!, FX_CHORUS) + CHORUS_RATE_HZ]).toBeCloseTo(BPM / 60, 5);
   });
 });
 
@@ -275,43 +285,43 @@ describe('fx chain — defaults (docs/syntax.md)', () => {
     expect(r.errors).toEqual([]);
     const p = r.params!;
 
-    let b = base(FX_DIST);
+    let b = base(r.params!, FX_DIST);
     expect(p[b + DIST_DRIVE]).toBeCloseTo(0.3, 6);
     expect(p[b + DIST_MIX]).toBe(1);
     expect(p[b + DIST_MODE]).toBe(0); // tanh
     expect(p[b + DIST_TONE_HZ]).toBe(20000);
 
-    b = base(FX_EQ);
+    b = base(r.params!, FX_EQ);
     expect(p[b + EQ_LOW_DB]).toBe(0);
     expect(p[b + EQ_MID_FREQ_HZ]).toBe(1000);
 
-    b = base(FX_CHORUS);
+    b = base(r.params!, FX_CHORUS);
     expect(p[b + CHORUS_RATE_HZ]).toBeCloseTo(0.8, 6);
     expect(p[b + CHORUS_DEPTH]).toBeCloseTo(0.3, 6);
     expect(p[b + CHORUS_MIX]).toBeCloseTo(0.35, 6);
 
-    b = base(FX_PHASER);
+    b = base(r.params!, FX_PHASER);
     expect(p[b + PHASER_STAGES]).toBe(6);
     expect(p[b + PHASER_CENTER_HZ]).toBe(800);
     expect(p[b + PHASER_FEEDBACK]).toBeCloseTo(0.3, 6);
 
-    b = base(FX_FLANGER);
+    b = base(r.params!, FX_FLANGER);
     expect(p[b + FLANGER_RATE_HZ]).toBeCloseTo(0.25, 6);
     expect(p[b + FLANGER_DEPTH]).toBeCloseTo(0.6, 6);
 
-    b = base(FX_DELAY);
+    b = base(r.params!, FX_DELAY);
     // Default is the musical 3/16, so it tracks the tempo.
     expect(p[b + DELAY_TIME_S]).toBeCloseTo(beatsToSeconds(0.75, BPM), 6);
     expect(p[b + DELAY_FEEDBACK]).toBeCloseTo(0.4, 6);
     expect(p[b + DELAY_PINGPONG]).toBe(1);
     expect(p[b + DELAY_TONE_HZ]).toBe(4000);
 
-    b = base(FX_REVERB);
+    b = base(r.params!, FX_REVERB);
     expect(p[b + REVERB_SIZE]).toBeCloseTo(0.6, 6);
     expect(p[b + REVERB_PREDELAY_S]).toBeCloseTo(0.02, 6);
     expect(p[b + REVERB_WIDTH]).toBe(1);
 
-    b = base(FX_MBCOMP);
+    b = base(r.params!, FX_MBCOMP);
     expect(p[b + MBCOMP_THRESH_MID_DB]).toBe(-24);
     expect(p[b + MBCOMP_RATIO]).toBe(3);
     expect(p[b + MBCOMP_MAKEUP]).toBe(1); // 0dB
@@ -319,7 +329,7 @@ describe('fx chain — defaults (docs/syntax.md)', () => {
 
   it('the default delay time follows the document bpm', () => {
     const slow = parse('fx:\n  - { type: delay }', 60);
-    expect(slow.params![base(FX_DELAY) + DELAY_TIME_S]).toBeCloseTo(0.75, 6);
+    expect(slow.params![base(slow.params!, FX_DELAY) + DELAY_TIME_S]).toBeCloseTo(0.75, 6);
   });
 });
 
@@ -386,9 +396,9 @@ describe('fx chain — errors', () => {
   it('clamps continuous fx values instead of erroring', () => {
     const r = parse('fx:\n  - { type: delay, time: 8s, feedback: 150% }\n  - { type: reverb, predelay: 900ms }');
     expect(r.errors).toEqual([]);
-    expect(r.params![base(FX_DELAY) + DELAY_TIME_S]).toBe(2);
-    expect(r.params![base(FX_DELAY) + DELAY_FEEDBACK]).toBe(1);
-    expect(r.params![base(FX_REVERB) + REVERB_PREDELAY_S]).toBeCloseTo(0.25, 6);
+    expect(r.params![base(r.params!, FX_DELAY) + DELAY_TIME_S]).toBe(2);
+    expect(r.params![base(r.params!, FX_DELAY) + DELAY_FEEDBACK]).toBe(1);
+    expect(r.params![base(r.params!, FX_REVERB) + REVERB_PREDELAY_S]).toBeCloseTo(0.25, 6);
   });
 });
 
