@@ -103,8 +103,13 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
 
   // Phrases are parsed before the loop, which only holds references to them.
   const phrases: Record<string, Phrase> = {};
+  // Every id the document declares, whether or not its fence parsed — the same
+  // reason `trackIds` above includes fences that failed. A loop line naming a
+  // broken phrase is not a second mistake, and must not be reported as one.
+  const declaredPhrases = new Set<string>();
   for (const fence of fences.filter((f) => f.lang === 'phrase')) {
     const id = fence.attrs['id'] ?? '';
+    if (id !== '') declaredPhrases.add(id);
     if (id !== '' && phrases[id]) {
       errors.push({
         line: fence.fenceLine,
@@ -135,6 +140,7 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
       sampleRate,
       trackIds,
       phrases,
+      declaredPhrases,
     });
     errors.push(...r.errors);
     if (r.loop) result.loop = r.loop;

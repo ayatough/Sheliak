@@ -2,7 +2,7 @@
 // would have exited with, so none of this needs a subprocess.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run } from './main.ts';
@@ -67,6 +67,52 @@ describe('check', () => {
 
   it('needs a path', async () => {
     expect((await run(['check'])).err).toContain('a file to check is required');
+  });
+});
+
+describe('fmt', () => {
+  const F = '```';
+  const RAGGED = `# song\n\n${F}phrase id=hook res=1/8 bars=1\ngrid:\n  5 |o-o.....|\n${F}\n`;
+
+  it('rewrites the file and says what it did', async () => {
+    const path = join(dir, 'song.md');
+    writeFileSync(path, RAGGED);
+    const outcome = await run(['fmt', path]);
+    expect(outcome.code).toBe(0);
+    expect(readFileSync(path, 'utf8')).toContain('#   1.2.3.4.');
+    expect(outcome.out).toContain('1 phrase formatted');
+  });
+
+  it('is quiet and successful on a file already formatted', async () => {
+    const path = join(dir, 'song.md');
+    writeFileSync(path, RAGGED);
+    await run(['fmt', path]);
+    const again = await run(['fmt', path]);
+    expect(again.code).toBe(0);
+    expect(again.out).toContain('nothing to change');
+  });
+
+  it('--check writes nothing and fails', async () => {
+    const path = join(dir, 'song.md');
+    writeFileSync(path, RAGGED);
+    const outcome = await run(['fmt', path, '--check']);
+    expect(outcome.code).toBe(1);
+    expect(outcome.err).toContain('would be reformatted');
+    expect(readFileSync(path, 'utf8')).toBe(RAGGED);
+  });
+
+  it('leaves a file that does not parse untouched, and fails', async () => {
+    const path = join(dir, 'song.md');
+    const broken = RAGGED.replace('|o-o.....|', '|o-o....|');
+    writeFileSync(path, broken);
+    const outcome = await run(['fmt', path]);
+    expect(outcome.code).toBe(1);
+    expect(outcome.err).toMatch(/left alone — it does not parse/);
+    expect(readFileSync(path, 'utf8')).toBe(broken);
+  });
+
+  it('needs a path', async () => {
+    expect((await run(['fmt'])).err).toContain('a file to format is required');
   });
 });
 

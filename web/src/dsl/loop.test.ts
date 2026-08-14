@@ -216,6 +216,25 @@ describe('compile — a whole document', () => {
     expect(r.loop).toBeUndefined();
   });
 
+  it('does not also call a broken phrase undefined', () => {
+    // One miscounted row used to produce four errors: three real ones on the
+    // rows, and `undefined phrase "verse"` on the loop line — which is false,
+    // the phrase is right there, and it was the loudest of the four.
+    const broken = DOC.replace("  5' |o---....o---....|", "  5' |o---....o---...|");
+    const r = compile(broken, SR);
+    expect(r.errors.some((e) => /undefined phrase/.test(e.message))).toBe(false);
+    expect(r.errors.some((e) => /15 cells, expected 16/.test(e.message))).toBe(true);
+    // The arrangement is still not the one the document describes, so the
+    // transport keeps the last valid loop rather than dropping a track.
+    expect(r.loop).toBeUndefined();
+  });
+
+  it('still calls a phrase undefined when nothing declares it', () => {
+    const typo = DOC.replace('lead: verse', 'lead: vesre');
+    const r = compile(typo, SR);
+    expect(r.errors.some((e) => /undefined phrase "vesre".*known: verse/.test(e.message))).toBe(true);
+  });
+
   it('rejects two phrases with one id', () => {
     const twice = DOC.replace(`${F}loop id=demo bars=1 bpm=124\nlead: verse\n${F}`,
       `${F}phrase id=verse res=1/16 bars=1\ngrid:\n  1 |o---............|\n${F}`);

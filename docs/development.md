@@ -28,6 +28,7 @@ cd web && npm run build:cli  # bundle the CLI -> web/dist-cli/sheliak.mjs
 
 ./scripts/sheliak new song.md                 # start a song
 ./scripts/sheliak check song.md               # compile it and report every error
+./scripts/sheliak fmt song.md                 # canonicalise every phrase grid
 ./scripts/sheliak render song.md -o out.wav   # render it offline (needs the wasm)
 ./scripts/sheliak serve song.md               # the app, pointed at that file
 

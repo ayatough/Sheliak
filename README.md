@@ -115,7 +115,7 @@ all happen on the TypeScript side.
 | **A master effect chain** | Distortion, EQ, chorus, phaser, flanger, delay, reverb and a 3-band compressor, in the order you write them |
 | **Eight tracks** | One per `synth` fence, each with its own voices and effects |
 | **A GUI that writes text** | The step sequencer and parameter panel edit the document itself, one token at a time, leaving comments and alignment untouched |
-| **A CLI** | `new` starts a song, `check` reads one back with every error by line and column, `render` writes it to a WAV, and `serve` opens the app on a file so your editor and the GUI edit the same document |
+| **A CLI** | `new` starts a song, `check` reads one back with every error by line and column, `fmt` makes one structure have one spelling, `render` writes a WAV, and `serve` opens the app on a file so your editor and the GUI edit the same document |
 | **Bit-identical renders** | Same document, same seed, same samples — enforced by an offline test |
 | **No binary but the source material** | Wavetables are generated procedurally; nothing about a song is opaque |
 
@@ -148,6 +148,22 @@ and no Rust toolchain — Node.js 20 or newer is the only requirement:
 npx github:ayatough/Sheliak new song.md      # the smallest song that makes a sound
 npx github:ayatough/Sheliak check song.md    # every error, by line and column
 ```
+
+`fmt` rewrites every phrase grid canonically. The beat ruler, the row order, the
+group tags, the bar lines and the label alignment are all *derived* rather than
+typed, so a grid cannot silently disagree with the ruler above it — which it can
+today, because both are written by hand:
+
+```diff
+-  # ruler is a lie
+-  5    |a---a---|
++  #    1234 1234
++  5   |o---|o---|
+```
+
+Prose, `synth` fences, comments and every alignment outside a phrase survive
+byte-for-byte. `--check` writes nothing and exits non-zero if anything would
+change, the way `cargo fmt --check` gates a repository.
 
 `render` writes the loop to a WAV, with the same wasm and the same
 sample-accurate scheduling the browser uses — so the file is what you heard, and
@@ -241,7 +257,7 @@ changing.
 - **Working:** the `synth`, `phrase` and `loop` fences, hot reload, eight tracks,
   the wavetable engine, filter, envelopes, LFO, modulation matrix, noise, the
   eight-effect master chain, the two-way-synced step sequencer and parameter
-  panel, the `sheliak` command line (`new`, `check`, `render`, `serve`), offline
+  panel, the `sheliak` command line (`new`, `check`, `fmt`, `render`, `serve`), offline
   verification, and a GitHub Pages deployment
 - **Next:** the note-event ABI (Track B of
   [docs/workstreams.md](docs/workstreams.md)) — `note_on` gains a glide time and

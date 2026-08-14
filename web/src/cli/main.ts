@@ -3,6 +3,9 @@
 // Usage:
 //   sheliak new <file.md> [--empty]
 //   sheliak check <file.md>... [--strict] [--format text|json]
+//   sheliak fmt <file.md>... [--check]
+//   sheliak render <file.md> [-o <out.wav>]
+//   sheliak serve <file.md> [-p <port>]
 //
 // It is a Node program rather than a second binary beside the DSP core on
 // purpose: the notation is parsed in TypeScript (`web/src/dsl/`), and the first
@@ -12,8 +15,9 @@
 // costs enough to avoid repeating.
 
 import { basename } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { check, failed, formatJson, formatText, type CheckOptions } from './check.ts';
+import { formatDocument } from '../dsl/formatDoc.ts';
 import { create } from './scaffold.ts';
 import { describeRender, render, type RenderOptions } from './render.ts';
 import { serve } from './serve.ts';
@@ -35,6 +39,8 @@ export async function run(argv: string[]): Promise<Outcome> {
       return cmdNew(argv.slice(1));
     case 'check':
       return cmdCheck(argv.slice(1));
+    case 'fmt':
+      return cmdFmt(argv.slice(1));
     case 'render':
       return cmdRender(argv.slice(1));
     case 'serve':
@@ -101,6 +107,63 @@ function cmdCheck(args: string[]): Outcome {
   const report = check(paths);
   const out = format === 'json' ? formatJson(report) : formatText(report);
   return { out, err: '', code: failed(report, opts) ? 1 : 0 };
+}
+
+function cmdFmt(args: string[]): Outcome {
+  const paths: string[] = [];
+  let checkOnly = false;
+  for (const arg of args) {
+    if (arg === '--check') checkOnly = true;
+    else if (!arg.startsWith('-')) paths.push(arg);
+    else return usage(`unknown argument: ${arg}`);
+  }
+  if (paths.length === 0) return usage('a file to format is required');
+
+  const lines: string[] = [];
+  let failures = 0;
+  let rewritten = 0;
+  for (const path of paths) {
+    let source: string;
+    try {
+      source = readFileSync(path, 'utf8');
+    } catch {
+      lines.push(`${path}: cannot read this file`);
+      failures++;
+      continue;
+    }
+    const result = formatDocument(source);
+    if (result.errors.length > 0) {
+      // Whole or nothing, like `cargo fmt`: a half-formatted document leaves
+      // you unable to say whether what you are looking at is canonical.
+      lines.push(`${path}: left alone — it does not parse`);
+      for (const e of result.errors) lines.push(`  ${path}:${e.line}:${e.col}  ${e.message}`);
+      failures++;
+      continue;
+    }
+    if (!result.changed) continue;
+    if (checkOnly) {
+      lines.push(`${path}: would be reformatted`);
+      failures++;
+      continue;
+    }
+    try {
+      writeFileSync(path, result.text);
+    } catch {
+      lines.push(`${path}: cannot write this file`);
+      failures++;
+      continue;
+    }
+    rewritten++;
+    lines.push(`${path}: ${result.formatted} phrase${result.formatted === 1 ? '' : 's'} formatted`);
+  }
+
+  if (lines.length === 0) {
+    lines.push(checkOnly ? 'every file is already formatted' : 'nothing to change');
+  } else if (!checkOnly && rewritten > 0 && failures === 0) {
+    lines.push(`${rewritten} file${rewritten === 1 ? '' : 's'} written`);
+  }
+  const text = lines.join('\n');
+  return failures > 0 ? { out: '', err: text, code: 1 } : { out: text, err: '', code: 0 };
 }
 
 function cmdRender(args: string[]): Outcome {
@@ -220,7 +283,7 @@ export function parseDuration(text: string | undefined): number | undefined {
  * name", not as "your file is wrong".
  */
 function unknownCommand(given: string): string {
-  const commands = ['new', 'check', 'render', 'serve', 'help'];
+  const commands = ['new', 'check', 'fmt', 'render', 'serve', 'help'];
   const close = commands
     .map((c) => ({ d: editDistance(given, c), c }))
     .filter((x) => x.d <= 2)
@@ -253,6 +316,7 @@ export function helpText(): string {
 Usage:
   sheliak new <file.md> [--empty]
   sheliak check <file.md>... [--strict] [--format text|json]
+  sheliak fmt <file.md>... [--check]
   sheliak render <file.md> [-o <out.wav>] [--loops <n>] [--tail <2s>]
                  [--sample-rate <hz>] [--wasm <dsp.wasm>]
   sheliak serve <file.md> [-p <port>]
@@ -265,6 +329,12 @@ Usage:
           a track with no loop line and a phrase nothing binds, both of which
           are silent. Exits non-zero on any error, so a song can be gated in
           CI — the reading a repository of text songs should get for free
+  fmt     rewrite every phrase grid canonically in place: the beat ruler, the
+          row order, the group tags and the label alignment are derived rather
+          than typed, so a grid cannot silently disagree with the ruler above
+          it. Prose, synth fences, comments and alignment outside a phrase
+          survive byte-for-byte. A document with a phrase that does not parse
+          is left alone entirely rather than half-formatted
   render  render the loop to a 16-bit WAV with the same wasm and the same
           sample-accurate scheduling the browser uses, so the file is what you
           heard. Refuses a document that does not compile rather than writing
@@ -279,6 +349,8 @@ Usage:
 
   --strict       also exit non-zero on the warnings, for a project that wants
                  no unbound track to reach main
+  --check        fmt only: write nothing and exit non-zero if any file would
+                 change, the way \`cargo fmt --check\` gates a repository
   --format       json emits the same run as records, for a caller that is
                  going to act on them rather than read them
   --loops        how many times the loop repeats (default 1)

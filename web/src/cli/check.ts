@@ -151,14 +151,13 @@ function silenceWarnings(result: CompileResult): Finding[] {
     out.push({ severity: 'warning', line: 1, col: 1, message: 'no `loop` fence: nothing is scheduled, so the document is silent' });
   }
 
-  // Bindings are only worth comparing against when the loop fence itself is
-  // clean. A loop with one bad line still yields the other lines, so a typo in
-  // a phrase id would otherwise report that phrase as unused and that track as
-  // unbound — two warnings that both mean "you already know, it is on line 40".
+  // Bindings are only worth comparing against a document that compiled. A
+  // broken fence drops out of the arrangement wherever it is written, so on a
+  // document with any error at all these warnings describe the error's fallout
+  // rather than the song — "phrase X is unused" when X simply failed to parse
+  // is a second report of one mistake, and the less useful one.
   const lines = result.loopMeta?.lines;
-  if (lines === undefined || loopFence === undefined) return out;
-  const loopEnd = loopFence.bodyStartLine + loopFence.body.split('\n').length;
-  if (result.errors.some((e) => e.line >= loopFence.fenceLine && e.line <= loopEnd)) return out;
+  if (lines === undefined || result.errors.length > 0) return out;
 
   const boundPhrases = new Set(lines.map((l) => l.phraseId));
   for (const fence of result.fences) {

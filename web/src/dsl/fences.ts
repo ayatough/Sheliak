@@ -13,6 +13,8 @@ export interface Fence {
   info: string;
   /** Body text without the fence lines, newline separated, no trailing newline. */
   body: string;
+  /** Leading spaces on the opening marker; body lines have them stripped. */
+  indent: number;
   /** 1-based document line of the opening fence marker. */
   fenceLine: number;
   /** 1-based document line of the FIRST body line (fenceLine + 1). */
@@ -67,6 +69,7 @@ export function extractFences(md: string): Fence[] {
       lang: firstWord(info),
       attrs: parseInfoAttrs(info),
       info,
+      indent,
       body: bodyLines.join('\n'),
       fenceLine,
       bodyStartLine: fenceLine + 1,

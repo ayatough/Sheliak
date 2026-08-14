@@ -76,6 +76,13 @@ export interface LoopParseOptions {
   trackIds?: Record<string, number>;
   /** Every `phrase` fence in the document, by id. */
   phrases?: Record<string, Phrase>;
+  /**
+   * Every phrase id the document *declares*, including fences that failed to
+   * parse and are therefore absent from `phrases`. Without it a phrase with a
+   * bad row reports twice: once where the row is, and once here as "undefined",
+   * which is not true and is the louder of the two.
+   */
+  declaredPhrases?: ReadonlySet<string>;
 }
 
 export interface LoopParseResult {
@@ -123,6 +130,13 @@ export function parseLoop(
   const events: LoopEvent[] = [];
   const lineMetas: LoopLineMeta[] = [];
   const seenIds = new Set<string>();
+  /**
+   * A line that could not be resolved for a reason already reported elsewhere.
+   * It yields no diagnostic of its own but still invalidates the loop, so the
+   * transport keeps the last valid arrangement rather than switching to one
+   * with a track quietly missing from it while a phrase is half-typed.
+   */
+  let incomplete = false;
 
   for (const line of trackLines) {
     const colon = line.text.indexOf(':');
@@ -172,7 +186,14 @@ export function parseLoop(
 
     const phrase = opts.phrases?.[phraseId];
     if (!phrase) {
-      const known = Object.keys(opts.phrases ?? {});
+      // Declared but not parsed: its own fence already reported why, and this
+      // line is not the mistake. No second diagnostic — but the loop is still
+      // not the arrangement the document describes, so it does not compile.
+      if (opts.declaredPhrases?.has(phraseId)) {
+        incomplete = true;
+        continue;
+      }
+      const known = [...(opts.declaredPhrases ?? Object.keys(opts.phrases ?? {}))];
       sink.push(
         { line: line.n, col: phraseCol },
         `undefined phrase "${phraseId}"` + (known.length ? ` (known: ${known.join(', ')})` : ''),
@@ -197,7 +218,7 @@ export function parseLoop(
   }
 
   const meta: LoopMeta = { id, bars, bpm, lines: lineMetas };
-  if (!sink.ok) return { loop: null, meta, errors: sink.errors };
+  if (!sink.ok || incomplete) return { loop: null, meta, errors: sink.errors };
 
   return { loop: { lengthSamples, events: sortEvents(events) }, meta, errors: [] };
 }

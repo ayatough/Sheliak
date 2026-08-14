@@ -143,8 +143,29 @@ first tag will close this section.
   back through the watcher as a change to apply, and what makes a queued browser
   edit yield to an external save rather than undoing it. Without `serve` nothing
   answers the endpoint, and the app behaves exactly as before.
+- **`sheliak fmt` gives one structure one spelling, across a whole document.**
+  The formatter already existed for a single fence body — it is what lets a GUI
+  gesture and a text edit be provably the same operation — but nothing ran it
+  over a file. The beat ruler, row order, group tags, bar lines and label
+  alignment are derived rather than typed, so a grid can no longer disagree with
+  the ruler above it. Prose, `synth` fences, comments and every alignment outside
+  a phrase survive byte-for-byte, and `--check` writes nothing and exits non-zero
+  if anything would change. A document with a phrase that does not parse is left
+  alone entirely rather than half-formatted.
 
 ### Changed
+- **One mistake is reported once.** A miscounted phrase row used to produce
+  four errors: one per row, plus `undefined phrase "verse"` on the loop line —
+  which was false, since the phrase is declared and simply failed to parse, and
+  was the loudest of the four. The loop now knows which ids the document
+  *declares*, not only which ones parsed, exactly as it already knew about
+  `synth` fences that failed; a line naming a declared-but-broken phrase reports
+  nothing and still invalidates the loop, so the transport keeps the last valid
+  arrangement rather than dropping a track mid-edit. A phrase whose rows all
+  failed no longer adds `phrase has no usable rows` at the fence on top of the
+  row errors that explain it, and `sheliak check` no longer reports unbound
+  tracks and unused phrases on a document that has errors — every one of those
+  was the fallout of the error, not a second thing to fix.
 - **The interface wears the brand palette.** The editor was a cool near-black with
   a teal accent, which shared nothing with the mark on its own tab. It is now the
   warm near-black and the gold: `#0A0C0B` behind, `#111411` panels, `#E5A900` on
