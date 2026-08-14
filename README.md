@@ -141,17 +141,33 @@ on `main`. See [docs/development.md](docs/development.md) for the full guide.
 
 ## The CLI
 
-`sheliak` starts a song and reads one back without opening anything. It is a
-Node program rather than a second binary beside the DSP core, because the
-notation is parsed in TypeScript and the Rust side does not know the DSL — a
-second parser would be a second copy of the contract to keep in step.
+`sheliak` starts a song and reads one back without opening anything. No clone
+and no Rust toolchain — Node.js 20 or newer is the only requirement:
 
 ```bash
-cd web && npm install && npm run build:cli   # -> web/dist-cli/sheliak.mjs
-
-./scripts/sheliak new song.md      # the smallest song that makes a sound
-./scripts/sheliak check song.md    # every error, by line and column
+npx github:ayatough/Sheliak new song.md      # the smallest song that makes a sound
+npx github:ayatough/Sheliak check song.md    # every error, by line and column
 ```
+
+For `sheliak` as a command that stays, link it from a working copy:
+
+```bash
+git clone https://github.com/ayatough/Sheliak && cd Sheliak
+npm install && npm link      # `sheliak` on your PATH, built as it installs
+```
+
+`npm install -g <git url>` is the one way in that does **not** work, and it is
+worth saying why: npm does not install a package's dependencies before running
+its `prepare` when the install is global, and the CLI is bundled by `prepare`.
+Publishing to npm is what fixes that — the registry tarball ships the bundle
+already built — and that is a job for the first release, which has not happened.
+
+It is a Node program rather than a second binary beside the DSP core, because
+the notation is parsed in TypeScript and the Rust side does not know the DSL — a
+second parser would be a second copy of the contract to keep in step. The cost
+of that is this: there is no single self-contained executable to `curl` yet, so
+the machine running `sheliak` needs Node the way the machine running the app
+needs a browser.
 
 `new` writes one `synth` fence, one `phrase` and the `loop` that binds them —
 short enough to read in full, so that everything left out is visibly taking a
@@ -173,9 +189,9 @@ song.md — 2 tracks of 3 · 4 phrases · 126bpm · 1 bar
 `--strict` fails on the warnings too, and `--format json` emits the same run as
 records for something that is going to act on them rather than read them.
 
-`./scripts/sheliak` rebuilds the bundle whenever it is out of date, so a working
-copy never checks a song against a stale copy of the checker. To put `sheliak`
-on your `PATH` instead, run `npm link` in `web/`.
+From a working copy, `./scripts/sheliak` runs the same commands against the
+sources you are editing, rebuilding the bundle whenever it is out of date — so a
+clone never checks a song against a stale copy of the checker.
 
 ## Test
 

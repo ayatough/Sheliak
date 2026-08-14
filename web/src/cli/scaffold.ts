@@ -23,8 +23,8 @@ const F = '```';
  */
 export const TEMPLATE = `# My song
 
-Rows are pitches, columns are time. Edit and play it in the browser
-(\`npm run dev\` in \`web/\`), or run \`sheliak check\` on this file.
+Rows are pitches, columns are time. \`sheliak check\` reads this file;
+<https://ayatough.github.io/Sheliak/> plays it.
 
 ${F}synth id=lead seed=1
 osc:

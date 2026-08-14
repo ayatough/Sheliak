@@ -41,14 +41,25 @@ cargo test --manifest-path dsp/Cargo.toml   # 決定性・エイリアス・DC�
 cd web && npm test                          # パーサ・GUI・wasm 結合テスト
 ```
 
-コマンドライン（曲の作成と検査）:
+コマンドライン（曲の作成と検査）。clone も Rust ツールチェーンも不要で、Node.js 20 以降だけ:
 
 ```bash
-cd web && npm run build:cli        # → web/dist-cli/sheliak.mjs
-
-./scripts/sheliak new song.md      # 音が鳴る最小の曲を書き出す
-./scripts/sheliak check song.md    # ブラウザと同じ compile() で検査し、行:列 で報告
+npx github:ayatough/Sheliak new song.md      # 音が鳴る最小の曲を書き出す
+npx github:ayatough/Sheliak check song.md    # ブラウザと同じ compile() で検査し、行:列 で報告
 ```
+
+`sheliak` を常設コマンドにするなら、作業コピーから link します:
+
+```bash
+git clone https://github.com/ayatough/Sheliak && cd Sheliak
+npm install && npm link
+```
+
+`npm install -g <git url>` だけは動きません。グローバルインストールでは npm が
+`prepare` の前に依存を入れないためで、CLI は `prepare` でバンドルされます。npm への
+publish（＝ビルド済みの tarball を配る）が本来の解決で、それは最初のリリースの仕事です。
+
+作業コピー内では `./scripts/sheliak` が編集中のソースを使い、古ければ自動で再ビルドします。
 
 `new` は `synth` フェンス1つ・`phrase` 1つ・両者を結ぶ `loop` だけを書きます。既存の
 ファイルを上書きすることはありません。`check` はエラーがあれば非ゼロで終了するので CI に

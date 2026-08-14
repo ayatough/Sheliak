@@ -61,7 +61,10 @@ function cmdNew(args: string[]): Outcome {
   } catch (e) {
     return { out: '', err: `error: ${e instanceof Error ? e.message : String(e)}`, code: 1 };
   }
-  const next = empty ? '' : `\nPlay it: cd web && npm run dev — or check it: sheliak check ${path}`;
+  // Not `npm run dev`: whoever ran this may have no clone to run it in.
+  const next = empty
+    ? ''
+    : `\nCheck it: sheliak check ${path}\nHear it:  paste it into https://ayatough.github.io/Sheliak/`;
   return { out: `wrote ${path}${next}`, err: '', code: 0 };
 }
 

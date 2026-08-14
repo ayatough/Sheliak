@@ -43,6 +43,41 @@ to remember to. Its tests are ordinary vitest files beside it and run as part of
 so much as a warning, which is what stops `sheliak new` writing a file that no
 longer parses.
 
+### The two package manifests
+
+`web/package.json` is the app and owns the toolchain. The one at the repository
+root exists for exactly one reason: npm cannot install a package from a
+subdirectory of a git repository, so without a manifest at the root there is no
+`npx github:ayatough/Sheliak` and no `npm link`. It is a distribution wrapper,
+not a second project — nothing in the local workflow goes through it and CI does
+not touch it. Its version is checked by `./scripts/check-versions.sh` like every
+other copy.
+
+Three things about it are load-bearing, and each of them is the shape it is
+because the obvious version was tried and failed:
+
+- **It bundles the CLI itself** (`prepare` runs `vite build`) rather than
+  delegating to `web/`. An `npm` invoked from inside an `npm` lifecycle script
+  inherits the outer install's config — including `--global`, which turns
+  `cd web && npm install` into an attempt to install the package into itself,
+  and rules out `--workspace` entirely ("Workspaces not supported for global
+  packages"). The price is that Vite is named in two manifests, which
+  `check-versions.sh` now compares.
+- **`web/vite.cli.config.ts` resolves every path against itself**, not the
+  working directory, because it is run from `web/` by `npm run build:cli` and
+  from the repository root by this `prepare`.
+- **`bin` points at `web/dist-cli/`, which is build output and git-ignored.**
+  That is only safe because `prepare` runs before npm packs. Without it the
+  entry is a link to a file that does not exist, which is exactly what
+  `npm install -g` from a fresh clone produced before this.
+
+What none of it buys is `npm install -g <git url>`: npm does not install
+dependencies before running a *global* package's `prepare`, so the build has
+nothing to build with, and neither `--include=dev` nor moving Vite into
+`dependencies` changes that. `npx` and `npm link` both work because both install
+locally first. The real fix is publishing to npm, where the tarball carries the
+bundle already built and `prepare` never runs on the installing machine.
+
 `npm run build` type-checks before bundling, so a type error is a build failure
 rather than something the bundler shrugs at.
 

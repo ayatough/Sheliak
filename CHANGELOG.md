@@ -112,8 +112,16 @@ first tag will close this section.
   findings. Until now a syntax error could only be found by pasting the document
   into the browser. It is a Node program over the TypeScript parser rather than
   a second binary beside the DSP core, because a Rust CLI would mean parsing the
-  notation twice. Build it with `npm run build:cli` in `web/`, or run
-  `./scripts/sheliak`, which rebuilds it when it is stale.
+  notation twice. `npx github:ayatough/Sheliak check song.md` runs it with no
+  clone and no Rust toolchain — Node.js 20 or newer is the only requirement —
+  and `npm install && npm link` in a working copy puts `sheliak` on your `PATH`.
+  There is a manifest at the repository root purely so those two have something
+  to resolve: npm cannot install from a subdirectory of a git repository, and
+  the CLI's package is `web/`. `npm install -g <git url>` is the one way in that
+  does not work, because npm does not install dependencies before running a
+  global package's `prepare`; publishing to npm is what fixes it. Inside a
+  working copy `./scripts/sheliak` runs the CLI against the sources you are
+  editing, rebuilding the bundle when it is stale.
 
 ### Changed
 - **The interface wears the brand palette.** The editor was a cool near-black with
