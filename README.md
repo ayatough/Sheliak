@@ -19,6 +19,8 @@ last passed the gate.
 
 [Syntax](docs/syntax.md) · [Architecture](docs/architecture.md) · [Development](docs/development.md) · [Roadmap](docs/roadmap.md) · [Workstreams](docs/workstreams.md) · [Contributing](CONTRIBUTING.md) · [Agents](AGENTS.md) · [Brand](assets/brand/README.md) · [日本語](docs/ja/README.md)
 
+<a href="https://www.buymeacoffee.com/qython" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ---
 
 ## Why
