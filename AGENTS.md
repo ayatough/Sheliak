@@ -197,10 +197,13 @@ and both `params` files → parse it in `web/src/dsl/fx.ts` → defaults in `ir.
 `docs/syntax.md` and the architecture table. Effect ids are part of the contract:
 append, never renumber.
 
-**Change the parameter layout.** This is the one change that breaks silently.
-`PARAM_COUNT` and every base offset are duplicated by hand across two languages.
-Move both files in one commit, run the wasm end-to-end test (which is the only
-thing that would catch a disagreement), and say in the commit message what moved.
+**Change the parameter layout.** This is the change that used to break silently.
+`PARAM_COUNT` and every base offset are duplicated by hand across two languages,
+so move both files in one commit and say in the commit message what moved.
+`web/src/shared/params.contract.test.ts` now reads `params.rs` and compares every
+constant against `params.ts`, so a disagreement fails `npm test` by name instead
+of waiting to be audible. A constant that genuinely belongs to one side only is
+named in that file's two lists; add to a list deliberately, not to get green.
 
 **Fix an audio bug.** Reproduce it offline first — `dsp/tests/verify.rs` runs the
 engine on the native target with no browser involved, which is far faster than a
