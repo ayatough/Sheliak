@@ -69,6 +69,17 @@ sheliak render song.md -o song.wav --loops 4 --tail 2s
 このコマンドだけは DSP コアのビルド（`./scripts/build-wasm.sh`）が必要です。cargo の
 成果物なので、npm install では作れません。
 
+`serve` はコピペを消すコマンドです。自分のファイルを開いた状態でアプリが立ち上がり、
+**エディタで保存すると再生を止めずに鳴り直し**、GUI（ステップシーケンサ・パラメータパネル）の
+操作は同じファイルに書き戻されます。曲が住んでいる場所がブラウザのタブではなくファイルになります。
+
+```bash
+sheliak serve song.md          # http://localhost:4321
+```
+
+`render` と同じく DSP コアのビルドが必要で、さらにアプリ本体を作業コピーから動かすため
+リポジトリが必要です（`new` と `check` は不要）。
+
 作業コピー内では `./scripts/sheliak` が編集中のソースを使い、古ければ自動で再ビルドします。
 
 `new` は `synth` フェンス1つ・`phrase` 1つ・両者を結ぶ `loop` だけを書きます。既存の

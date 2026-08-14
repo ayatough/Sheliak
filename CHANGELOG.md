@@ -133,6 +133,16 @@ first tag will close this section.
   out of the end-to-end test into `web/src/audio/offline.ts` so that the test
   and the renderer cannot drift apart; a second copy of the ABI mirror is
   exactly what that test exists to catch.
+- **`sheliak serve` points the app at a file.** The app opened a document
+  compiled into the bundle and kept the song in a textarea, so nothing survived
+  a reload and auditioning meant copy-paste. `serve song.md` runs the dev server
+  on your file: saving it in your own editor reloads the sound without stopping
+  the transport, and the step sequencer and parameter panel write their edits
+  back to the same file. Both directions are guarded by one rule — text equal to
+  what was last exchanged is not a change — which is what stops a write coming
+  back through the watcher as a change to apply, and what makes a queued browser
+  edit yield to an external save rather than undoing it. Without `serve` nothing
+  answers the endpoint, and the app behaves exactly as before.
 
 ### Changed
 - **The interface wears the brand palette.** The editor was a cool near-black with

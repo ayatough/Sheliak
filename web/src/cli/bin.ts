@@ -4,7 +4,7 @@
 
 import { run } from './main.ts';
 
-const { out, err, code } = run(process.argv.slice(2));
+const { out, err, code } = await run(process.argv.slice(2));
 if (out) console.log(out);
 if (err) console.error(err);
 process.exit(code);

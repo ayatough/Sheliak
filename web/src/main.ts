@@ -6,6 +6,7 @@ import { compile, type CompileResult } from './dsl/compile.ts';
 import { phraseExpandedLines } from './dsl/phrase.ts';
 import { GuiView } from './gui/view.ts';
 import { DEFAULT_DOC } from './defaultDoc.ts';
+import { browserTransport, DocFile } from './docFile.ts';
 
 const DEBOUNCE_MS = 150;
 /** Used to compile before the AudioContext exists; replaced by the real rate. */
@@ -28,6 +29,19 @@ const metaEl = $<HTMLElement>('meta');
 const scope = $<HTMLCanvasElement>('scope');
 const posEl = $<HTMLElement>('pos');
 const viewTabs = $<HTMLElement>('view-tabs');
+
+/**
+ * The file behind the document, when there is one. Without `sheliak serve` every
+ * method on it is inert and the app behaves exactly as it always has: the
+ * document is `defaultDoc.ts` and lives only in the textarea.
+ */
+const docFile = new DocFile({
+  transport: browserTransport(import.meta.hot),
+  apply: (text) => {
+    writeEditor(text);
+    recompile();
+  },
+});
 
 let lastValidPatchAt = 0; // monotonic counter of successful patch applications
 /** Per-track expanded views, kept when a fence errors (last valid patch). */
@@ -55,9 +69,22 @@ const engine = new AudioEngine({
 // ---------------------------------------------------------------------- gui
 
 /**
+ * Replaces the editor's text without stealing focus, the caret or the scroll
+ * position — used by every write the person at the keyboard did not type: the
+ * GUI's edits, and the file's own when `sheliak serve` is behind it.
+ */
+function writeEditor(doc: string): void {
+  const { scrollTop, selectionStart, selectionEnd } = editor;
+  const focused = document.activeElement === editor;
+  editor.value = doc;
+  editor.scrollTop = scrollTop;
+  if (focused) editor.setSelectionRange(selectionStart, selectionEnd);
+}
+
+/**
  * The GUI is a projection: it reads the document, and every gesture hands back
- * a patched document. `setDoc` writes the textarea without stealing focus or
- * scroll position, then recompiles immediately so the sound follows the knob.
+ * a patched document. `setDoc` writes the textarea, then recompiles immediately
+ * so the sound follows the knob.
  */
 const gui = new GuiView(
   {
@@ -71,11 +98,7 @@ const gui = new GuiView(
   {
     getDoc: () => editor.value,
     setDoc: (doc: string) => {
-      const { scrollTop, selectionStart, selectionEnd } = editor;
-      const focused = document.activeElement === editor;
-      editor.value = doc;
-      editor.scrollTop = scrollTop;
-      if (focused) editor.setSelectionRange(selectionStart, selectionEnd);
+      writeEditor(doc);
       // A GUI-originated change: recompile now, skipping the typing debounce.
       if (timer !== undefined) {
         clearTimeout(timer);
@@ -102,6 +125,9 @@ let lastResult: CompileResult | null = null;
 let lastLoopSig = '';
 
 function recompile(force = false): void {
+  // Every path that changes the document ends here, so this is the one place
+  // the file behind it has to be told. It ignores text it already has.
+  docFile.changed(editor.value);
   const result = compile(editor.value, currentSampleRate());
   lastResult = result;
 
@@ -424,3 +450,20 @@ selectView('gui');
 sizeScope();
 recompile(true);
 renderStatus();
+
+// Asked for unconditionally: the answer is what decides whether this session is
+// backed by a file. Nothing is served in the published app, and `start()`
+// resolves null there without the boot above having waited for it.
+void docFile.start().then((text) => {
+  if (text === null) return;
+  writeEditor(text);
+  recompile(true);
+  renderMetaFile();
+});
+
+function renderMetaFile(): void {
+  const name = docFile.path?.split('/').pop();
+  if (name) document.title = `${name} — Sheliak`;
+  const head = document.querySelector('.pane-head span');
+  if (name && head) head.textContent = name;
+}

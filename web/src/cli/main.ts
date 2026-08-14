@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { check, failed, formatJson, formatText, type CheckOptions } from './check.ts';
 import { create } from './scaffold.ts';
 import { describeRender, render, type RenderOptions } from './render.ts';
+import { serve } from './serve.ts';
 import { version } from '../../package.json';
 
 type Format = 'text' | 'json';
@@ -28,7 +29,7 @@ export interface Outcome {
   code: number;
 }
 
-export function run(argv: string[]): Outcome {
+export async function run(argv: string[]): Promise<Outcome> {
   switch (argv[0]) {
     case 'new':
       return cmdNew(argv.slice(1));
@@ -36,6 +37,8 @@ export function run(argv: string[]): Outcome {
       return cmdCheck(argv.slice(1));
     case 'render':
       return cmdRender(argv.slice(1));
+    case 'serve':
+      return cmdServe(argv.slice(1));
     case '--version':
     case '-V':
       return { out: `sheliak ${version}`, err: '', code: 0 };
@@ -159,6 +162,46 @@ function cmdRender(args: string[]): Outcome {
 }
 
 /**
+ * Unlike every other command this one does not finish: it prints where the app
+ * is and then stays up until the process is interrupted. The promise it returns
+ * deliberately never settles — the dev server holds the event loop open, and
+ * there is no outcome to report until the user ends it.
+ */
+async function cmdServe(args: string[]): Promise<Outcome> {
+  let input: string | undefined;
+  let port = 4321;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-p' || arg === '--port') {
+      const n = Number(args[++i]);
+      if (!Number.isInteger(n) || n < 1 || n > 65535) return usage('-p requires a port number');
+      port = n;
+    } else if (!arg.startsWith('-')) {
+      if (input !== undefined) return usage(`unknown argument: ${arg}`);
+      input = arg;
+    } else {
+      return usage(`unknown argument: ${arg}`);
+    }
+  }
+  if (input === undefined) return usage('a file to serve is required');
+
+  let running;
+  try {
+    running = await serve(input, { port });
+  } catch (e) {
+    return { out: '', err: `error: ${e instanceof Error ? e.message : String(e)}`, code: 1 };
+  }
+  console.log(`serving ${input} at ${running.url}`);
+  console.log('edit the file in your editor, or the page — both write to it. Ctrl-C to stop.');
+  const stop = () => {
+    void running.close().then(() => process.exit(0));
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
+  return new Promise<Outcome>(() => {});
+}
+
+/**
  * `2s`, `500ms`. A bare number is rejected here for the same reason it is
  * rejected in the notation: seconds and milliseconds are three orders of
  * magnitude apart and look identical without a unit.
@@ -177,7 +220,7 @@ export function parseDuration(text: string | undefined): number | undefined {
  * name", not as "your file is wrong".
  */
 function unknownCommand(given: string): string {
-  const commands = ['new', 'check', 'render', 'help'];
+  const commands = ['new', 'check', 'render', 'serve', 'help'];
   const close = commands
     .map((c) => ({ d: editDistance(given, c), c }))
     .filter((x) => x.d <= 2)
@@ -212,6 +255,7 @@ Usage:
   sheliak check <file.md>... [--strict] [--format text|json]
   sheliak render <file.md> [-o <out.wav>] [--loops <n>] [--tail <2s>]
                  [--sample-rate <hz>] [--wasm <dsp.wasm>]
+  sheliak serve <file.md> [-p <port>]
 
   new     write the smallest song that makes a sound — one synth fence, one
           phrase and the loop that binds them — or, with --empty, a blank file
@@ -226,6 +270,12 @@ Usage:
           heard. Refuses a document that does not compile rather than writing
           one with a track missing from it. Needs the DSP core built
           (./scripts/build-wasm.sh)
+  serve   open the app on that file (default port 4321). Saving it in your own
+          editor reloads the sound without stopping the transport, and the
+          step sequencer and parameter panel write their edits back to the
+          same file — which is what makes the document, and not the browser
+          tab, the thing your song lives in. Runs the app from a working copy,
+          so unlike the others it needs the repository
 
   --strict       also exit non-zero on the warnings, for a project that wants
                  no unbound track to reach main

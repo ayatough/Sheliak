@@ -28,6 +28,8 @@ cd web && npm run build:cli  # bundle the CLI -> web/dist-cli/sheliak.mjs
 
 ./scripts/sheliak new song.md                 # start a song
 ./scripts/sheliak check song.md               # compile it and report every error
+./scripts/sheliak render song.md -o out.wav   # render it offline (needs the wasm)
+./scripts/sheliak serve song.md               # the app, pointed at that file
 
 cargo test --manifest-path dsp/Cargo.toml     # offline DSP verification
 ./scripts/build-wasm.sh                       # rebuild the wasm after a Rust change
@@ -97,6 +99,7 @@ web/
   src/audio/offline.ts the same scheduling without an AudioContext, for the
                        end-to-end test and `sheliak render`
   src/cli/             the `sheliak` command, over the same parser
+  src/docFile.ts       the document when it is a file, under `sheliak serve`
 scripts/             build helpers
 docs/                architecture, syntax, roadmap, workstreams; ja/ translations
 ```
