@@ -68,14 +68,22 @@ if grep -q "^## \[$version\]" CHANGELOG.md; then
   echo "  CHANGELOG.md already has a [$version] section"
 else
   python3 - "$version" "$today" <<'PY'
+import re
 import sys
+
 version, today = sys.argv[1], sys.argv[2]
 path = 'CHANGELOG.md'
 text = open(path).read()
-head = '## [Unreleased]'
-if head not in text:
-    sys.exit(f'error: {path} has no {head} section to close')
-text = text.replace(head, f'## [Unreleased]\n\n## [{version}] - {today}', 1)
+
+# Anchored to the start of a line, and required to be the only such line: the
+# preamble talks *about* `## [Unreleased]`, and a plain substring replace
+# rewrote that sentence instead of the heading.
+heading = re.compile(r'^## \[Unreleased\]$', re.M)
+found = heading.findall(text)
+if len(found) != 1:
+    sys.exit(f'error: {path} has {len(found)} `## [Unreleased]` headings, expected exactly 1')
+
+text = heading.sub(f'## [Unreleased]\n\n## [{version}] - {today}', text, count=1)
 open(path, 'w').write(text)
 print('  closed CHANGELOG.md [Unreleased] -> [%s]' % version)
 PY
