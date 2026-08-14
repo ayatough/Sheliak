@@ -26,6 +26,8 @@ import {
 } from './ir.ts';
 import {
   FX_ALIASES,
+  FX_NAMESPACE,
+  isNamespacedFx,
   FX_KEYS,
   DIST_MODES,
   NOISE_COLORS,
@@ -187,9 +189,15 @@ function readFxList(node: YNode, bpm: number, sink: ErrorSink): FxInput[] {
     if (rawType === undefined) continue;
     const type = FX_ALIASES[rawType];
     if (type === undefined) {
+      // Listing the built-ins is no help to someone who wrote a namespaced id:
+      // they were not looking for `reverb`, and the answer they need is that
+      // the engine cannot load anything from outside itself yet.
       sink.push(
         nodePos(typeEntry.value),
-        `unknown effect type "${rawType}" (expected one of: ${Object.keys(FX_ALIASES).join(', ')})`,
+        isNamespacedFx(rawType)
+          ? `effect "${rawType}" names a plugin, and Sheliak does not host plugins yet — ` +
+              `"${FX_NAMESPACE}" in an effect type is reserved for them`
+          : `unknown effect type "${rawType}" (expected one of: ${Object.keys(FX_ALIASES).join(', ')})`,
       );
       continue;
     }

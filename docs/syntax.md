@@ -176,6 +176,12 @@ fx:
 `distortion` and `mbcomp` are accepted as aliases for `dist` and `comp`. `ratio`
 and `stages` may be bare numbers; EQ gains and compressor thresholds require `dB`.
 
+**A `:` in an effect type is reserved.** Built-in effects are bare names and that
+set will grow; an id with a colon in it is how an effect from outside the engine
+will be named, so it can never be a built-in whatever gets added later. Nothing
+hosts plugins yet, and writing one is an error that says so rather than listing
+the built-ins you were not looking for.
+
 ### `voice`
 
 ```yaml

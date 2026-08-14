@@ -728,10 +728,23 @@ plugin:com.example.tape:
   bias:  0.3
 ```
 
+**Only one piece of this has landed, and deliberately so: the namespace is
+reserved.** `:` in an effect type is rejected with a message that says Sheliak
+does not host plugins yet, rather than listing the eight built-ins the writer
+was not looking for. That much is worth doing now because it is a promise about
+spelling — a built-in added later can never collide with a plugin id — and
+un-reserving it afterwards would be a breaking change.
+
+The rest waits for a host on purpose. `syntax.md` describes what runs rather
+than what is planned, and notation for loading something that cannot be loaded
+is notation that has never been executed: the parameter names, the resolution to
+CLAP's parameter ids and the failure paths would all be guesses. Build §8 or §9's
+second half first, then write the fence against a plugin that actually loads.
+
 Rules that follow from the rest of this document:
 
 - **Namespaced ids.** Built-ins keep their bare names; external plugins are
-  namespaced so a plugin can never shadow an engine effect.
+  namespaced so a plugin can never shadow an engine effect. **Reserved.**
 - **Parameters are written by name, resolved to CLAP's stable `u32` ids** at
   load. A renamed parameter must fail loudly rather than silently landing on a
   neighbouring id.

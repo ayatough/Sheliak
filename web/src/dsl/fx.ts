@@ -336,6 +336,24 @@ export const FX_ALIASES: Record<string, FxType> = Object.fromEntries(
   FX_TYPES.flatMap((t) => FX_DESCRIPTORS[t].aliases.map((a) => [a, t] as const)),
 );
 
+/**
+ * Separates a namespace from a name in an effect id.
+ *
+ * Built-in effects are bare names — `reverb`, `comp` — and that set is allowed
+ * to grow. An effect that comes from outside the engine has to be named without
+ * risking a collision with a built-in that does not exist yet, so the separator
+ * is reserved now, before anything uses it: an id containing one is never a
+ * built-in, whatever gets added later. Nothing hosts plugins yet
+ * (docs/workstreams.md §8, §9); reserving the spelling costs nothing and
+ * un-reserving it later would be a breaking change.
+ */
+export const FX_NAMESPACE = ':';
+
+/** Is this id claiming to come from outside the built-in set? */
+export function isNamespacedFx(id: string): boolean {
+  return id.includes(FX_NAMESPACE);
+}
+
 /** Allowed DSL keys per effect (`type` is added by the parser). */
 export const FX_KEYS: Record<FxType, string[]> = fromTypes((t) =>
   descOf(t).params.map((p) => p.key),

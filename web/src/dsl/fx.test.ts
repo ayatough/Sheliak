@@ -346,6 +346,16 @@ describe('fx chain — errors', () => {
     expect(r.errors[0]!.message).toMatch(/appears more than once/);
   });
 
+  it('tells someone who named a plugin what is actually wrong', () => {
+    // Listing the eight built-ins would be no answer at all here: they were not
+    // looking for `reverb`. The separator is reserved before anything uses it,
+    // so that a built-in added later can never collide with a plugin id.
+    const r = parseSynth('fx:\n  - { type: plugin:com.example.tape }', {}, { bodyStartLine: 1, bpm: BPM });
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]!.message).toMatch(/does not host plugins yet/);
+    expect(r.errors[0]!.message).not.toMatch(/expected one of/);
+  });
+
   it('rejects an unknown effect type', () => {
     const r = parse('fx:\n  - { type: bitcrush }');
     expect(r.errors[0]!.message).toMatch(/unknown effect type "bitcrush"/);
