@@ -899,9 +899,31 @@ If any slot can be any type, the options are:
 | Keep one instance per type, let it appear in several slots | Cheap, and a lie: the two "reverbs" would share one tail |
 | Allocate on demand | Forbidden. `init()` is the only place that may allocate |
 
-Nothing here can be picked from an armchair, because the answer depends on
-numbers nobody has measured: the actual bytes per effect at the maximum sample
-rate, dominated by the delay lines and the reverb's comb banks.
+**The numbers now exist.** `dsp/tests/footprint.rs` measures them; run it with
+`cargo test --test footprint -- --nocapture`. At 96 kHz, which is the worst case
+a browser is likely to hand us:
+
+| Effect | Heap held |
+|---|---|
+| dist, eq, phaser, mbcomp | **nothing** — fixed arrays, all of it in the struct |
+| flanger | 9 KiB |
+| chorus | 12 KiB |
+| reverb | 455 KiB |
+| delay | 1500 KiB |
+| one chain (one of each) | 1978 KiB |
+| the whole `MultiEngine`, 8 tracks | 21.4 MiB |
+
+So a per-slot instance able to become any type costs 8 x 1500 KiB = 11.7 MiB per
+track, 94 MiB across eight tracks — against 15 MiB for the chains today. Six
+times, for two reverbs.
+
+**And the measurement points at a better option than the four in the table.**
+Half the effects allocate nothing at all; the entire cost is delay lines and
+comb banks, in four types. A per-slot design does not have to give every slot a
+delay line — it can give every slot a *place to put one* and bound how many
+delay-class effects a track may hold, which is a policy the notation can state
+and the parser can enforce. That is worth designing before accepting a sixfold
+footprint or giving up on duplicates.
 
 ### So A4 splits in two
 
@@ -913,9 +935,9 @@ rate, dominated by the delay lines and the reverb's comb banks.
   block every compile, so it costs nothing there — but a test that permuted
   `FX_ORDER` over one shared set of blocks was expressing something the layout
   no longer supports, and had to be rebuilt rather than patched.
-- **A4b — duplicate instances of a type.** Blocked on measuring per-effect
-  memory first, and then on a decision that has a real cost attached. **The
-  first deliverable of A4b is the measurement, not a design.**
+- **A4b — duplicate instances of a type.** The measurement is done and lives in
+  `dsp/tests/footprint.rs`; what is left is the decision it informs, and the
+  bounded-delay-lines idea above is the first thing to cost out.
 
 Splitting them matters because A4a unblocks the thing this stream is for —
 effects that are not the eight compiled in — while A4b only buys two reverbs.
