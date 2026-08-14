@@ -27,12 +27,25 @@
 
 use std::process::ExitCode;
 
+use sheliak_render::clap_host;
+
 use serde::Deserialize;
 use sheliak_dsp::multi::MultiEngine;
 use sheliak_dsp::params::PARAM_COUNT;
 
 /// The render quantum, as the worklet is called with.
 const BLOCK: usize = 128;
+
+const HELP: &str = "usage: sheliak-render <job.json> -o <out.wav> [--clap <plugin.clap>]
+
+  <job.json>          from `sheliak render <song.md> --emit-job <job.json>`
+  -o, --out <file>    where to write the WAV
+  --clap <file>       run the finished mix through a CLAP plugin
+  --clap-id <id>      which plugin, when the bundle carries more than one
+  --list-clap <file>  list what a bundle carries, and exit
+
+A `.clap` is a dynamic library, which is why this exists at all: the browser
+renderer cannot load one. See docs/workstreams.md \u{a7}9.";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -259,6 +272,9 @@ fn run() -> Result<String, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut job_path = None;
     let mut out = None;
+    let mut clap_path: Option<String> = None;
+    let mut clap_id: Option<String> = None;
+    let mut list_clap: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -266,17 +282,39 @@ fn run() -> Result<String, String> {
                 i += 1;
                 out = args.get(i).cloned();
             }
+            "--clap" => {
+                i += 1;
+                clap_path = args.get(i).cloned();
+            }
+            "--clap-id" => {
+                i += 1;
+                clap_id = args.get(i).cloned();
+            }
+            "--list-clap" => {
+                i += 1;
+                list_clap = args.get(i).cloned();
+            }
             "-h" | "--help" => {
-                return Ok("usage: sheliak-render <job.json> -o <out.wav>\n\
-                           \n\
-                           The job comes from `sheliak render <song.md> --emit-job <job.json>`."
-                    .into())
+                return Ok(HELP.into());
             }
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             other => job_path = Some(other.to_string()),
         }
         i += 1;
     }
+    // Listing is a question about a file, not a render: it needs no job.
+    if let Some(path) = list_clap {
+        let found = clap_host::describe(&path)?;
+        if found.is_empty() {
+            return Ok(format!("{path} declares no plugins"));
+        }
+        let mut report = format!("{path}:");
+        for (id, name) in found {
+            report.push_str(&format!("\n  {id}  {name}"));
+        }
+        return Ok(report);
+    }
+
     let job_path = job_path.ok_or("no job file given (try --help)")?;
     let out = out.ok_or("no output file given: -o <out.wav>")?;
 
@@ -317,6 +355,15 @@ fn run() -> Result<String, String> {
         }
     }
 
+    // The plugin sees the finished mix. Stems are left alone deliberately: they
+    // are what each track produced, and a master-bus effect is not part of that.
+    let mut hosted = None;
+    if let Some(path) = clap_path {
+        let mut plugin = clap_host::HostedPlugin::load(&path, clap_id.as_deref(), job.sample_rate)?;
+        plugin.process(&mut l, &mut r)?;
+        hosted = Some(format!("{} ({})", plugin.name, plugin.id));
+    }
+
     std::fs::write(&out, encode_wav(&l, &r, job.sample_rate))
         .map_err(|e| format!("cannot write {out}: {e}"))?;
 
@@ -327,6 +374,9 @@ fn run() -> Result<String, String> {
         if job.tracks.len() == 1 { "" } else { "s" },
         20.0 * peak_of(&l, &r).max(1.0e-9).log10(),
     );
+    if let Some(plugin) = hosted {
+        report.push_str(&format!("\n      through {plugin}"));
+    }
     for track in &job.tracks {
         let Some((_, sl, sr)) = stems.iter().find(|(t, _, _)| *t == track.track) else {
             continue;

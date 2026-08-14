@@ -36,6 +36,13 @@ cd web && npm run build:cli  # bundle the CLI -> web/dist-cli/sheliak.mjs
 ./render/target/release/sheliak-render job.json -o out.wav   # synthesize natively
 ./scripts/check-render-parity.sh song.md      # how far the two builds disagree
 
+# CLAP plugins, hosted natively (a .clap cannot be loaded in a browser):
+./render/target/release/sheliak-render --list-clap /usr/lib/clap/x.clap
+./render/target/release/sheliak-render job.json -o out.wav --clap /usr/lib/clap/x.clap
+# The plugin tests skip when none is installed. On Debian/Ubuntu:
+#   apt-get install dragonfly-reverb-clap lsp-plugins-clap
+# or point SHELIAK_TEST_CLAP at one.
+
 cargo test --manifest-path dsp/Cargo.toml     # offline DSP verification
 cargo test --manifest-path render/Cargo.toml  # the native renderer's own checks
 ./scripts/build-wasm.sh                       # rebuild the wasm after a Rust change

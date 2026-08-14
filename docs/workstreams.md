@@ -735,11 +735,13 @@ was not looking for. That much is worth doing now because it is a promise about
 spelling — a built-in added later can never collide with a plugin id — and
 un-reserving it afterwards would be a breaking change.
 
-The rest waits for a host on purpose. `syntax.md` describes what runs rather
-than what is planned, and notation for loading something that cannot be loaded
-is notation that has never been executed: the parameter names, the resolution to
-CLAP's parameter ids and the failure paths would all be guesses. Build §8 or §9's
-second half first, then write the fence against a plugin that actually loads.
+The rest waited for a host on purpose — notation for loading something that
+cannot be loaded has never been executed, so the parameter names, the resolution
+to CLAP's parameter ids and the failure paths would all have been guesses.
+**That host now exists** (§9), so §7 is unblocked and the next piece of it can be
+written against Dragonfly Reverb and LSP rather than against an idea. The first
+question it has to answer is the one the host left open: a plugin currently runs
+at its defaults, because the fence cannot yet name a parameter.
 
 Rules that follow from the rest of this document:
 
@@ -836,6 +838,38 @@ Making them agree exactly would mean pinning the transcendental functions — a
 shared software libm rather than each target's own. That is a real piece of work
 and it should be a decision, not a side effect of wanting previews.
 
+### It hosts a real plugin
+
+`--clap <bundle.clap>` runs the finished mix through a CLAP plugin.
+`--list-clap` prints what a bundle carries. Checked against two unrelated
+vendors, both installed from apt on the development container:
+
+| Plugin | Result |
+|---|---|
+| Dragonfly Hall Reverb (`michaelwillis.dragonfly.hall`) | loads, activates, processes; 95% of samples changed |
+| LSP Limiter Stereo (`in.lsp-plug.limiter_stereo`), from a bundle of 176 | same, and picked out of the bundle by id |
+
+Three things that came out of doing it rather than planning it:
+
+- **Both plugins render bit-identically across runs.** The format guarantees
+  nothing of the sort — a plugin may read a clock or use an unseeded RNG, and no
+  host can stop it — so this is a measurement, and `render/tests/clap.rs` keeps
+  making it. That is exactly the evidence §4's `pinned` class needs: it says a
+  render is reproducible against *that build of that plugin*, and for these two
+  it actually is.
+- **Loading is `unsafe`, and correctly so.** `PluginEntry::load` runs an
+  initialiser from a binary outside this repository. clack marks it unsafe
+  because no wrapper can make it otherwise, and that is worth keeping visible
+  rather than wrapping away: hosting a plugin is a decision about trust, not
+  only about audio.
+- **Parameters are untouched, so plugins run at their defaults.** There is
+  nowhere to write them down yet; §7's fence is what fixes that, and it is now
+  unblocked — it can be written against a plugin that really loads instead of
+  against a guess.
+
+Latency is not compensated. For a reverb that is nothing; for a look-ahead
+limiter it is audible, and it belongs with the notation rather than here.
+
 Offline rendering first, not live playback:
 
 - commercial plugins exist natively today, so this path delivers the actual
@@ -910,7 +944,7 @@ is a request that conflicts with constraints this project chose deliberately, an
 | §6 descriptors and generation | §5 | With §5 |
 | §4 reproducibility classes and lockfile | Stream 2 frontmatter | Design now, land with frontmatter |
 | §7 generalized `fx` fence | §5, §6 | After |
-| §9 native render path | §5 (for the plugin interface); nothing else | **first half landed** |
+| §9 native render path | §5 (for the plugin interface); nothing else | **landed**: renders natively and hosts a CLAP plugin |
 | §8 `.wclap` host in the browser | §5, §7 | After |
 | §10 exporting a patch as a plugin | A4 (the layout must have stopped moving) | After |
 
