@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-label="Sheliak">
+<defs>
+<radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="1160" cy="360" r="520">
+<stop offset="0" stop-color="#E5A900" stop-opacity=".14"/>
+<stop offset="1" stop-color="#E5A900" stop-opacity="0"/></radialGradient>
+<linearGradient id="fade" gradientUnits="userSpaceOnUse" x1="0" y1="120" x2="0" y2="760">
+<stop offset="0" stop-color="#E5A900" stop-opacity="0"/>
+<stop offset=".45" stop-color="#E5A900" stop-opacity=".18"/>
+<stop offset="1" stop-color="#E5A900" stop-opacity="0"/></linearGradient>
+<linearGradient id="rule" gradientUnits="userSpaceOnUse" x1="240" y1="0" x2="1360" y2="0"><stop offset="0" stop-color="#E5A900" stop-opacity="0"/><stop offset=".5" stop-color="#E5A900" stop-opacity=".7"/><stop offset="1" stop-color="#E5A900" stop-opacity="0"/></linearGradient>
+</defs>
+<rect width="1600" height="900" fill="#0A0C0B"/>
+<rect width="1600" height="900" fill="url(#glow)"/>
+<g stroke="url(#fade)" stroke-width="3">
+<path d="M700 120V760"/><path d="M784 120V760"/><path d="M868 120V760"/><path d="M952 120V760"/><path d="M1036 120V760"/><path d="M1120 120V760"/><path d="M1204 120V760"/><path d="M1288 120V760"/><path d="M1372 120V760"/><path d="M1456 120V760"/><path d="M1540 120V760"/>
+</g>
+<g fill="#E5A900" opacity=".9">
+<rect x="784" y="356" width="34" height="92" rx="17"/><rect x="868" y="300" width="34" height="92" rx="17"/><rect x="952" y="428" width="34" height="92" rx="17"/><rect x="1120" y="232" width="34" height="148" rx="17"/><rect x="1288" y="392" width="34" height="92" rx="17"/><rect x="1372" y="336" width="34" height="92" rx="17"/>
+</g>
+<path transform="translate(1140 118) scale(.42)" d="M0 -96C6 -26 26 -6 74 0C26 6 6 26 0 96C-6 26 -26 6 -74 0C-26 -6 -6 -26 0 -96Z"
+ fill="#E5A900"/>
+<path d="M240 786H1360" stroke="url(#rule)" stroke-width="3"/>
+<path d="M420 812H1180" stroke="url(#rule)" stroke-width="2" opacity=".55"/>
+</svg>

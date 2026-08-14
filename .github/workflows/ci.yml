@@ -62,6 +62,15 @@ jobs:
         run: npm run build
         working-directory: web
 
+      # The mark is embedded in eight SVGs. Regenerating them is the only thing
+      # that keeps those copies identical, so check that whoever last touched the
+      # artwork actually re-ran the script. The PNGs are left out: they need a
+      # browser, and they are committed.
+      - name: brand assets are up to date
+        run: |
+          node scripts/build-brand.mjs
+          git diff --exit-code -- assets/brand web/public/favicon.svg
+
   versions:
     name: version consistency
     runs-on: ubuntu-latest

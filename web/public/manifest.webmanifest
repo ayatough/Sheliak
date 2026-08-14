@@ -1,0 +1,15 @@
+{
+  "name": "Sheliak",
+  "short_name": "Sheliak",
+  "description": "Songs that live in your repository: synth patches and note data in Markdown, played by a Rust DSP core compiled to WebAssembly.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#0e1014",
+  "theme_color": "#0e1014",
+  "icons": [
+    { "src": "favicon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
+    { "src": "icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}

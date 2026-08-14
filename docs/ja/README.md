@@ -1,9 +1,14 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../../assets/brand/sheliak-banner-dark.svg">
+  <img alt="Sheliak — songs that live in your repository" src="../../assets/brand/sheliak-banner-light.svg">
+</picture>
+
 # Sheliak（日本語）
 
 > このディレクトリは日本語話者向けの補助資料です。**正式なドキュメントは英語版**で、
 > 内容が食い違う場合は英語版が正です。
 >
-> [README](../../README.md) · [記法](../syntax.md) · [アーキテクチャ](../architecture.md) · [開発ガイド](../development.md) · [ロードマップ](../roadmap.md) · [作業ストリーム](../workstreams.md) · [エージェント向け](../../AGENTS.md)
+> [README](../../README.md) · [記法](../syntax.md) · [アーキテクチャ](../architecture.md) · [開発ガイド](../development.md) · [ロードマップ](../roadmap.md) · [作業ストリーム](../workstreams.md) · [エージェント向け](../../AGENTS.md) · [ブランド](../../assets/brand/README.md)
 
 ## 一言でいうと
 

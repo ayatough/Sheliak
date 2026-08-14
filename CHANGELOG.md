@@ -82,6 +82,23 @@ first tag will close this section.
   documents and operation sequences checks that applying an operation to the
   text and to the parsed model agree, including when both refuse.
 
+- **A visual identity, generated rather than drawn.** A lyre — an elliptical arc
+  whose stroke tapers to nothing at both ends — cradling β Lyrae, with five
+  strings inside it lit one segment each as an arpeggio. `scripts/build-brand.mjs`
+  is the source: it emits all fourteen SVGs under
+  [assets/brand/](assets/brand/README.md) and the icons the web app serves, so the
+  mark cannot drift between the eight files it appears in. CI re-runs it and fails
+  if the committed output differs. The wordmark is drawn as monoline paths rather
+  than set in a typeface, so no asset depends on a font being installed — which
+  also means the typeface can still be chosen later without redrawing anything.
+  The palette gains `#B07E00`, the gold for light backgrounds, because the brand
+  gold sits at 1.9:1 on the cream and fails even the 3:1 threshold for graphics.
+- **The app has a favicon, an icon set and a link preview.** `web/index.html`
+  carries a description, `theme-color`, an SVG favicon, an Apple touch icon, a web
+  manifest and Open Graph and Twitter card tags pointing at a 1200×630 image; the
+  title says what Sheliak is rather than what it is built from. Nothing about the
+  audio changed.
+
 ### Changed
 - **Notes moved out of the `loop` fence.** `lead: C4 . . .` no longer parses;
   the same music is written as a `phrase` grid and the loop line names it. The

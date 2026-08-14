@@ -41,6 +41,10 @@ is the whole of the state. See [README](README.md) for the user view,
 7. **Do not weaken a test to make it pass.** If a quality gate fails, either the
    change is wrong or the expectation genuinely moved — and if it moved, say so
    in the commit message.
+8. **`assets/brand/*.svg` and `web/public/favicon.svg` are build output.** The
+   mark is embedded in eight of those files; hand-editing one is how they drift
+   apart. Change `scripts/build-brand.mjs`, re-run it, commit both. CI re-runs the
+   script and fails on any difference.
 
 ## Definition of done
 
@@ -54,6 +58,13 @@ cargo fmt --manifest-path dsp/Cargo.toml --all -- --check
 
 ./scripts/build-wasm.sh                              # the wasm build is a gate of its own
 cd web && npm ci && npm test && npm run build        # vitest incl. the wasm end-to-end test
+```
+
+If you touched the artwork, also:
+
+```bash
+node scripts/build-brand.mjs --png                   # needs Chrome/Chromium for the PNGs
+git diff --exit-code -- assets/brand web/public      # nothing left unregenerated
 ```
 
 `npm run build` runs `tsc --noEmit` first, so a type error fails the build rather
@@ -116,6 +127,8 @@ kick drum or a burst of noise. Three consequences:
 | `web/public/worklet.js` | The AudioWorkletProcessor | Scheduling, event dispatch |
 | `web/src/shared/params.ts` | Parameter block layout — **contract** | Only alongside `params.rs` |
 | `web/src/defaultDoc.ts` | The document the editor opens with | A DSL feature needs showing |
+| `scripts/build-brand.mjs` | Every logo, icon and social image — **source** | The artwork changes |
+| `assets/brand/`, `web/public/*.png`, `favicon.svg` | Generated artwork | Never by hand |
 
 `web/public/worklet.js` is plain JavaScript, not TypeScript, and lives in
 `public/` rather than `src/`. That is deliberate: an AudioWorklet module is loaded
