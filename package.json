@@ -1,0 +1,29 @@
+{
+  "name": "sheliak",
+  "version": "0.1.0",
+  "description": "Songs that live in your repository — the CLI that starts one and reads one back",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayatough/Sheliak.git"
+  },
+  "homepage": "https://github.com/ayatough/Sheliak#the-cli",
+  "type": "module",
+  "bin": {
+    "sheliak": "web/dist-cli/sheliak.mjs"
+  },
+  "files": [
+    "web/dist-cli",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepare": "vite build --config web/vite.cli.config.ts"
+  },
+  "devDependencies": {
+    "vite": "^5.4.10"
+  }
+}

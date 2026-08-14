@@ -41,6 +41,57 @@ cargo test --manifest-path dsp/Cargo.toml   # 決定性・エイリアス・DC�
 cd web && npm test                          # パーサ・GUI・wasm 結合テスト
 ```
 
+コマンドライン（曲の作成と検査）。clone も Rust ツールチェーンも不要で、Node.js 20 以降だけ:
+
+```bash
+npx github:ayatough/Sheliak new song.md      # 音が鳴る最小の曲を書き出す
+npx github:ayatough/Sheliak check song.md    # ブラウザと同じ compile() で検査し、行:列 で報告
+```
+
+`sheliak` を常設コマンドにするなら、作業コピーから link します:
+
+```bash
+git clone https://github.com/ayatough/Sheliak && cd Sheliak
+npm install && npm link
+```
+
+`npm install -g <git url>` だけは動きません。グローバルインストールでは npm が
+`prepare` の前に依存を入れないためで、CLI は `prepare` でバンドルされます。npm への
+publish（＝ビルド済みの tarball を配る）が本来の解決で、それは最初のリリースの仕事です。
+
+`fmt` は phrase グリッドを正規化します。ビート定規・行順・グループタグ・小節線・
+ラベル幅はすべて**導出**されるので、手書きの定規がグリッドと食い違うことがなくなります。
+phrase の外（散文・synth フェンス・コメント・整列）はバイト単位でそのまま残ります。
+`--check` は書き込まず、変わる箇所があれば非ゼロで終了します（`cargo fmt --check` と同じ用途）。
+
+`render` はループを WAV に書き出します。ブラウザと同じ wasm・同じサンプル精度の
+スケジューリングを使うので、鳴っていたものがそのままファイルになります:
+
+```bash
+sheliak render song.md -o song.wav --loops 4 --tail 2s
+```
+
+このコマンドだけは DSP コアのビルド（`./scripts/build-wasm.sh`）が必要です。cargo の
+成果物なので、npm install では作れません。
+
+`serve` はコピペを消すコマンドです。自分のファイルを開いた状態でアプリが立ち上がり、
+**エディタで保存すると再生を止めずに鳴り直し**、GUI（ステップシーケンサ・パラメータパネル）の
+操作は同じファイルに書き戻されます。曲が住んでいる場所がブラウザのタブではなくファイルになります。
+
+```bash
+sheliak serve song.md          # http://localhost:4321
+```
+
+`render` と同じく DSP コアのビルドが必要で、さらにアプリ本体を作業コピーから動かすため
+リポジトリが必要です（`new` と `check` は不要）。
+
+作業コピー内では `./scripts/sheliak` が編集中のソースを使い、古ければ自動で再ビルドします。
+
+`new` は `synth` フェンス1つ・`phrase` 1つ・両者を結ぶ `loop` だけを書きます。既存の
+ファイルを上書きすることはありません。`check` はエラーがあれば非ゼロで終了するので CI に
+かけられ、コンパイルが通っても鳴らないもの——どの `loop` 行にも束ねられていないトラックと、
+どこからも参照されない `phrase`——は警告として報告します。
+
 ## このディレクトリの中身
 
 英語版が整備される前に日本語で書かれた設計資料です。翻訳ではなく原文なので、

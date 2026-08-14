@@ -1,83 +1,25 @@
 // End-to-end integration: the real dsp.wasm driven with params produced by the
 // DSL compiler, scheduled the same way worklet.js does. Requires
 // public/dsp.wasm (built by ../scripts/build-wasm.sh); skipped when absent.
+//
+// The scheduling itself lives in `audio/offline.ts`, because `sheliak render`
+// needs the same thing and a second copy of the ABI mirror is exactly the drift
+// this test exists to catch. What is tested here is the pairing: this document,
+// through that renderer, into the binary the browser loads.
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compile, type CompileResult } from './dsl/compile.ts';
-import type { LoopIR } from './dsl/loop.ts';
+import { compile } from './dsl/compile.ts';
+import { instantiateDsp, renderLoop } from './audio/offline.ts';
 import { DEFAULT_DOC } from './defaultDoc.ts';
-import { PARAM_COUNT } from './shared/params.ts';
 
 const WASM_PATH = resolve(dirname(fileURLToPath(import.meta.url)), '../public/dsp.wasm');
 const SR = 48000;
-const BLOCK = 128;
 
-// The ABI in docs/architecture.md: params_ptr / apply_patch / note_on / note_off
-// are track-indexed, and note_on carries a per-note glide and a legato flag.
-// This mirror has to keep matching worklet.js — a JS call with the arguments
-// missing passes 0 for both, which reads as "no glide" rather than "use the
-// patch's", so the drift would be silent for every patch whose glide is zero.
-interface DspExports {
-  memory: WebAssembly.Memory;
-  init(sampleRate: number): void;
-  params_ptr(track: number): number;
-  apply_patch(track: number): void;
-  note_on(track: number, note: number, velocity: number, glideS: number, legato: number): void;
-  note_off(track: number, note: number): void;
-  all_notes_off(): void;
-  process(nframes: number): void;
-  out_l_ptr(): number;
-  out_r_ptr(): number;
-}
-
-function instantiate(): DspExports {
-  const bytes = readFileSync(WASM_PATH);
-  const module = new WebAssembly.Module(bytes);
-  const instance = new WebAssembly.Instance(module, {});
-  return instance.exports as unknown as DspExports;
-}
-
-/**
- * Render `total` samples, applying every compiled track and dispatching the
- * merged event list exactly the way worklet.js does.
- */
-function renderLoop(dsp: DspExports, result: CompileResult, loop: LoopIR, total: number): { l: Float32Array; r: Float32Array } {
-  dsp.init(SR);
-  for (const track of result.tracks) {
-    new Float32Array(dsp.memory.buffer, dsp.params_ptr(track.track), PARAM_COUNT).set(track.params);
-    dsp.apply_patch(track.track);
-  }
-
-  const l = new Float32Array(total);
-  const r = new Float32Array(total);
-  let counter = 0;
-  let evIdx = 0;
-  let written = 0;
-  while (written < total) {
-    while (evIdx < loop.events.length && loop.events[evIdx]!.offsetSamples <= counter) {
-      const ev = loop.events[evIdx++]!;
-      // -1 / 0, exactly as worklet.js sends them: use the patch's glide, no legato.
-      if (ev.kind === 0) dsp.note_on(ev.track, ev.note, ev.velocity, -1, 0);
-      else dsp.note_off(ev.track, ev.note);
-    }
-    let boundary = loop.lengthSamples;
-    if (evIdx < loop.events.length) boundary = Math.min(boundary, loop.events[evIdx]!.offsetSamples);
-    let n = Math.min(BLOCK, total - written, boundary - counter);
-    if (n <= 0) n = 1;
-    dsp.process(n);
-    l.set(new Float32Array(dsp.memory.buffer, dsp.out_l_ptr(), n), written);
-    r.set(new Float32Array(dsp.memory.buffer, dsp.out_r_ptr(), n), written);
-    written += n;
-    counter += n;
-    while (counter >= loop.lengthSamples) {
-      counter -= loop.lengthSamples;
-      evIdx = 0;
-    }
-  }
-  return { l, r };
+function instantiate() {
+  return instantiateDsp(readFileSync(WASM_PATH));
 }
 
 describe.skipIf(!existsSync(WASM_PATH))('dsp.wasm end-to-end', () => {
@@ -90,7 +32,7 @@ describe.skipIf(!existsSync(WASM_PATH))('dsp.wasm end-to-end', () => {
     expect(new Set(result.loop!.events.map((e) => e.track)).size).toBe(4);
 
     const total = SR; // 1 second
-    const { l, r } = renderLoop(instantiate(), result, result.loop!, total);
+    const { l, r } = renderLoop(instantiate(), result.tracks, result.loop!, total, SR);
 
     let peak = 0;
     let sum = 0;
@@ -116,8 +58,8 @@ describe.skipIf(!existsSync(WASM_PATH))('dsp.wasm end-to-end', () => {
   it('is bit-exact across two independent renders (same DSL + seed)', () => {
     const result = compile(DEFAULT_DOC, SR);
     const total = SR / 2;
-    const a = renderLoop(instantiate(), result, result.loop!, total);
-    const b = renderLoop(instantiate(), result, result.loop!, total);
+    const a = renderLoop(instantiate(), result.tracks, result.loop!, total, SR);
+    const b = renderLoop(instantiate(), result.tracks, result.loop!, total, SR);
     for (let i = 0; i < total; i++) {
       expect(a.l[i]).toBe(b.l[i]);
       expect(a.r[i]).toBe(b.r[i]);

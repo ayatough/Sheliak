@@ -255,3 +255,34 @@ describe('gliss', () => {
     });
   });
 });
+
+describe('one mistake, one report', () => {
+  it('does not add "no usable rows" on top of the rows that failed', () => {
+    // Reporting it at the fence as well turns one mistake into two, and the
+    // extra one names a line that cannot be fixed — the fixable ones are the
+    // rows underneath it.
+    const r = parsePhrase('grid:\n  1 |o-.|\n  5 |o-.|', { id: 'p', res: '1/16', bars: '1' });
+    expect(r.phrase).toBeNull();
+    expect(r.errors.map((e) => e.message)).toEqual([
+      expect.stringContaining('row "1" has 3 cells'),
+      expect.stringContaining('row "5" has 3 cells'),
+    ]);
+  });
+
+  it('never fails a phrase without saying why', () => {
+    // The invariant the suppression above must not break: however a grid ends
+    // up with no rows, something has to have been reported about it.
+    const grids = [
+      '  not a row line',
+      '  1 |o-.|',
+      '  |o---............|',
+      "  bad label |o---............|",
+      '  1 o---............',
+    ];
+    for (const grid of grids) {
+      const r = parsePhrase(`grid:\n${grid}`, { id: 'p', res: '1/16', bars: '1' });
+      expect(r.phrase).toBeNull();
+      expect(r.errors.length, `no diagnostic for: ${grid}`).toBeGreaterThan(0);
+    }
+  });
+});

@@ -101,8 +101,71 @@ first tag will close this section.
 - **A link to the running app.** The README, its Japanese counterpart and the
   build instructions now point at <https://ayatough.github.io/Sheliak/>, which
   `deploy.yml` has been publishing since before anything said so.
+- **A command line: `sheliak new` and `sheliak check`.** `new` writes the
+  smallest song that makes a sound — one `synth` fence, one `phrase`, and the
+  `loop` binding them — and never overwrites a file that exists; `--empty`
+  writes a blank one. `check` runs the same `compile()` the browser runs and
+  reports every error by line and column, exiting non-zero so a song can be
+  gated in CI; it also warns about the two things a clean compile still leaves
+  silent, a track no loop line binds and a phrase nothing plays, with `--strict`
+  to fail on those and `--format json` for a caller that will act on the
+  findings. Until now a syntax error could only be found by pasting the document
+  into the browser. It is a Node program over the TypeScript parser rather than
+  a second binary beside the DSP core, because a Rust CLI would mean parsing the
+  notation twice. `npx github:ayatough/Sheliak check song.md` runs it with no
+  clone and no Rust toolchain — Node.js 20 or newer is the only requirement —
+  and `npm install && npm link` in a working copy puts `sheliak` on your `PATH`.
+  There is a manifest at the repository root purely so those two have something
+  to resolve: npm cannot install from a subdirectory of a git repository, and
+  the CLI's package is `web/`. `npm install -g <git url>` is the one way in that
+  does not work, because npm does not install dependencies before running a
+  global package's `prepare`; publishing to npm is what fixes it. Inside a
+  working copy `./scripts/sheliak` runs the CLI against the sources you are
+  editing, rebuilding the bundle when it is stale.
+- **`sheliak render` writes the song to a WAV.** The same `dsp.wasm`, the same
+  sample-accurate scheduling as the AudioWorklet, off the audio thread — so the
+  file is what the browser plays, and the same document and seed produce the
+  same bytes on any machine. `--loops` repeats, `--tail 2s` renders the decay
+  after the last note is released (off by default, so one loop is exactly
+  loop-length and still loops seamlessly), `--sample-rate` picks the rate
+  musical time resolves against. It refuses a document that does not compile
+  rather than writing one with a track silently missing. The scheduling moved
+  out of the end-to-end test into `web/src/audio/offline.ts` so that the test
+  and the renderer cannot drift apart; a second copy of the ABI mirror is
+  exactly what that test exists to catch.
+- **`sheliak serve` points the app at a file.** The app opened a document
+  compiled into the bundle and kept the song in a textarea, so nothing survived
+  a reload and auditioning meant copy-paste. `serve song.md` runs the dev server
+  on your file: saving it in your own editor reloads the sound without stopping
+  the transport, and the step sequencer and parameter panel write their edits
+  back to the same file. Both directions are guarded by one rule — text equal to
+  what was last exchanged is not a change — which is what stops a write coming
+  back through the watcher as a change to apply, and what makes a queued browser
+  edit yield to an external save rather than undoing it. Without `serve` nothing
+  answers the endpoint, and the app behaves exactly as before.
+- **`sheliak fmt` gives one structure one spelling, across a whole document.**
+  The formatter already existed for a single fence body — it is what lets a GUI
+  gesture and a text edit be provably the same operation — but nothing ran it
+  over a file. The beat ruler, row order, group tags, bar lines and label
+  alignment are derived rather than typed, so a grid can no longer disagree with
+  the ruler above it. Prose, `synth` fences, comments and every alignment outside
+  a phrase survive byte-for-byte, and `--check` writes nothing and exits non-zero
+  if anything would change. A document with a phrase that does not parse is left
+  alone entirely rather than half-formatted.
 
 ### Changed
+- **One mistake is reported once.** A miscounted phrase row used to produce
+  four errors: one per row, plus `undefined phrase "verse"` on the loop line —
+  which was false, since the phrase is declared and simply failed to parse, and
+  was the loudest of the four. The loop now knows which ids the document
+  *declares*, not only which ones parsed, exactly as it already knew about
+  `synth` fences that failed; a line naming a declared-but-broken phrase reports
+  nothing and still invalidates the loop, so the transport keeps the last valid
+  arrangement rather than dropping a track mid-edit. A phrase whose rows all
+  failed no longer adds `phrase has no usable rows` at the fence on top of the
+  row errors that explain it, and `sheliak check` no longer reports unbound
+  tracks and unused phrases on a document that has errors — every one of those
+  was the fallout of the error, not a second thing to fix.
 - **The interface wears the brand palette.** The editor was a cool near-black with
   a teal accent, which shared nothing with the mark on its own tab. It is now the
   warm near-black and the gold: `#0A0C0B` behind, `#111411` panels, `#E5A900` on

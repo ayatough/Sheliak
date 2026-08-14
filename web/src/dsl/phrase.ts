@@ -228,6 +228,7 @@ export function parsePhrase(
   let pipeCols: number[] | null = null;
   let pipeRow = 0;
 
+  const errorsBeforeRows = sink.errors.length;
   for (const line of gridLines) {
     const parsed = parseRowLine(line.text, line.n, sink);
     if (!parsed) continue;
@@ -276,7 +277,15 @@ export function parsePhrase(
   }
 
   if (rows.length === 0) {
-    sink.push(fencePos, 'phrase has no usable rows');
+    // Only when nothing else already said why. Every row having its own error
+    // is the usual way to get here, and repeating it at the fence turns one
+    // mistake into two reports — the second of which names a line that cannot
+    // be fixed, because the fixable ones are underneath it.
+    // A backstop: every way a row is rejected today reports where, so this is
+    // unreachable. It stays because the alternative to an unreachable message
+    // is a phrase that fails with no diagnostic at all the day a new rejection
+    // forgets to push one — and the test below is the invariant, not this line.
+    if (sink.errors.length === errorsBeforeRows) sink.push(fencePos, 'phrase has no usable rows');
     return { phrase: null, errors: sink.errors };
   }
 

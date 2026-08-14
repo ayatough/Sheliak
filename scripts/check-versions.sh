@@ -20,6 +20,11 @@ lock=$(awk '/^name = "sheliak-dsp"$/{found=1; next} found && /^version = /{print
 
 pkg=$(grep -m1 '"version"' web/package.json | cut -d'"' -f4)
 
+# The root manifest exists only so `npm i -g <this repo>` has something to
+# install; it carries a version because npm requires one, which makes it one
+# more copy to keep honest.
+root_pkg=$(grep -m1 '"version"' package.json | cut -d'"' -f4)
+
 # The topmost *released* heading. `[Unreleased]` sits above it and is skipped by
 # requiring a digit, so this is the version the changelog last closed. Empty
 # until the first release, which is not a disagreement — it is a project that
@@ -45,9 +50,24 @@ report() { # label, found
 
 echo "manifest (dsp/Cargo.toml): $manifest"
 report 'dsp/Cargo.lock' "$lock"
+report 'package.json' "$root_pkg"
 report 'web/package.json' "$pkg"
 report 'README.md' "$readme"
 report 'docs/roadmap.md' "$roadmap"
+
+# The root manifest bundles the CLI itself rather than shelling out to the web
+# package — npm-inside-npm inherits `--global` from the install that triggered
+# it, which is how a global install ends up trying to install the package into
+# itself. The cost is that Vite is named in two manifests, and nothing but this
+# keeps the two ranges the same.
+root_vite=$(grep -m1 '"vite": "' package.json | cut -d'"' -f4)
+web_vite=$(grep -m1 '"vite": "' web/package.json | cut -d'"' -f4)
+if [ "$root_vite" = "$web_vite" ]; then
+  printf '  ok    %-24s %s\n' 'vite range (both)' "$root_vite"
+else
+  printf '  FAIL  %-24s %s (web/package.json has %s)\n' 'vite range' "$root_vite" "$web_vite"
+  fail=1
+fi
 
 if [ -z "$changelog" ]; then
   printf '  skip  %-24s no released section yet\n' 'CHANGELOG.md'

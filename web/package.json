@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:cli": "vite build --config vite.cli.config.ts",
+    "prepare": "npm run build:cli"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

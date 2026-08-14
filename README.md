@@ -115,6 +115,7 @@ all happen on the TypeScript side.
 | **A master effect chain** | Distortion, EQ, chorus, phaser, flanger, delay, reverb and a 3-band compressor, in the order you write them |
 | **Eight tracks** | One per `synth` fence, each with its own voices and effects |
 | **A GUI that writes text** | The step sequencer and parameter panel edit the document itself, one token at a time, leaving comments and alignment untouched |
+| **A CLI** | `new` starts a song, `check` reads one back with every error by line and column, `fmt` makes one structure have one spelling, `render` writes a WAV, and `serve` opens the app on a file so your editor and the GUI edit the same document |
 | **Bit-identical renders** | Same document, same seed, same samples — enforced by an offline test |
 | **No binary but the source material** | Wavetables are generated procedurally; nothing about a song is opaque |
 
@@ -133,10 +134,107 @@ npm run dev                 # development server
 npm run build               # production build
 ```
 
-There is no installable binary yet: Sheliak runs in a browser. The published
-build is at **<https://ayatough.github.io/Sheliak/>**, deployed by
+The sound is in a browser: there is no native player yet. The published build is
+at **<https://ayatough.github.io/Sheliak/>**, deployed by
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) once CI has passed
 on `main`. See [docs/development.md](docs/development.md) for the full guide.
+
+## The CLI
+
+`sheliak` starts a song and reads one back without opening anything. No clone
+and no Rust toolchain — Node.js 20 or newer is the only requirement:
+
+```bash
+npx github:ayatough/Sheliak new song.md      # the smallest song that makes a sound
+npx github:ayatough/Sheliak check song.md    # every error, by line and column
+```
+
+`fmt` rewrites every phrase grid canonically. The beat ruler, the row order, the
+group tags, the bar lines and the label alignment are all *derived* rather than
+typed, so a grid cannot silently disagree with the ruler above it — which it can
+today, because both are written by hand:
+
+```diff
+-  # ruler is a lie
+-  5    |a---a---|
++  #    1234 1234
++  5   |o---|o---|
+```
+
+Prose, `synth` fences, comments and every alignment outside a phrase survive
+byte-for-byte. `--check` writes nothing and exits non-zero if anything would
+change, the way `cargo fmt --check` gates a repository.
+
+`render` writes the loop to a WAV, with the same wasm and the same
+sample-accurate scheduling the browser uses — so the file is what you heard, and
+two machines given the same document and seed write the same bytes:
+
+```bash
+sheliak render song.md -o song.wav --loops 4 --tail 2s
+# wrote song.wav — 8.00s · 4 tracks · 126bpm · peak -3.2 dBFS
+```
+
+It refuses a document that does not compile rather than writing one with a track
+silently missing from it. `--tail` is off by default, so one loop is exactly
+loop-length and still loops seamlessly; a reverb that should ring out wants it.
+This is the one command that needs the DSP core built (`./scripts/build-wasm.sh`),
+because that comes out of cargo and no npm install can produce it.
+
+`serve` is the one that removes the copy-paste. It opens the app on your file:
+save it in your own editor and the sound reloads without stopping the transport,
+and the step sequencer and parameter panel write their edits back to the same
+file. The document, not the browser tab, is where the song lives.
+
+```bash
+sheliak serve song.md          # http://localhost:4321
+```
+
+Like `render` it needs the DSP core built, and unlike `new` and `check` it runs
+the app out of a working copy, so it needs the repository.
+
+For `sheliak` as a command that stays, link it from a working copy:
+
+```bash
+git clone https://github.com/ayatough/Sheliak && cd Sheliak
+npm install && npm link      # `sheliak` on your PATH, built as it installs
+```
+
+`npm install -g <git url>` is the one way in that does **not** work, and it is
+worth saying why: npm does not install a package's dependencies before running
+its `prepare` when the install is global, and the CLI is bundled by `prepare`.
+Publishing to npm is what fixes that — the registry tarball ships the bundle
+already built — and that is a job for the first release, which has not happened.
+
+It is a Node program rather than a second binary beside the DSP core, because
+the notation is parsed in TypeScript and the Rust side does not know the DSL — a
+second parser would be a second copy of the contract to keep in step. The cost
+of that is this: there is no single self-contained executable to `curl` yet, so
+the machine running `sheliak` needs Node the way the machine running the app
+needs a browser.
+
+`new` writes one `synth` fence, one `phrase` and the `loop` that binds them —
+short enough to read in full, so that everything left out is visibly taking a
+default. `--empty` writes a blank file instead, and neither ever overwrites a
+file that is already there.
+
+`check` compiles the document exactly as the browser does and exits non-zero on
+any error, so a repository of songs can be gated in CI the way a repository of
+code is. It also reports the two things compiling cannot call an error, because
+both are legal and both are silent — a track no loop line binds, and a phrase
+nothing plays:
+
+```
+song.md — 2 tracks of 3 · 4 phrases · 126bpm · 1 bar
+  song.md:12:32  error    bare numbers are not allowed for "level" — expected a gain in dB (e.g. -6dB)
+  song.md:41:1   warning  phrase `bridge` is never bound by a loop line, so it never plays
+```
+
+`--strict` fails on the warnings too, and `--format json` emits the same run as
+records for something that is going to act on them rather than read them.
+
+From a working copy, `./scripts/sheliak` runs the same commands against the
+sources you are editing, rebuilding the bundle whenever it is out of date — so a
+clone never checks a song against a stale copy of the checker.
 
 ## Test
 
@@ -159,7 +257,8 @@ changing.
 - **Working:** the `synth`, `phrase` and `loop` fences, hot reload, eight tracks,
   the wavetable engine, filter, envelopes, LFO, modulation matrix, noise, the
   eight-effect master chain, the two-way-synced step sequencer and parameter
-  panel, offline verification, and a GitHub Pages deployment
+  panel, the `sheliak` command line (`new`, `check`, `fmt`, `render`, `serve`), offline
+  verification, and a GitHub Pages deployment
 - **Next:** the note-event ABI (Track B of
   [docs/workstreams.md](docs/workstreams.md)) — `note_on` gains a glide time and
   a legato flag, which is what makes a written `gliss` actually slide
