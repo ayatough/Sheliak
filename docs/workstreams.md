@@ -495,7 +495,10 @@ depends on it and every day it is postponed makes it a larger breaking change.
 
 # Stream 3 — Plugins
 
-**Status:** Track A is under way — the effect boundary (§5), the descriptors
+**Status:** §9 has landed — the native renderer hosts a real CLAP effect, checked
+against Dragonfly Reverb and LSP. **Two tracks are live and share no file: E is
+instrument hosting in `render/` (the hard one, §13), F is the notation in
+`web/` (§7).** Track A is done — the effect boundary (§5), the descriptors
 (§6) and the panel built from them (A1–A3) have landed, along with a test that
 makes the two halves of the parameter contract check each other. None of it
 commits the project to a plugin format; all of it is worth having anyway. A4 is
@@ -1040,10 +1043,76 @@ it. A4 is about making the *built-in* set open-ended; the plugin transport is
 its own design, and §7's notation is deliberately silent on where the numbers
 travel.
 
+## 13. Instrument plugins, and what is already known about them
+
+Track E's specification. §9 hosts a plugin **on the mix**; this is the other
+kind, where a plugin *is* a track's voice and Sheliak's engine does not run for
+it at all.
+
+### What is already established
+
+Do not re-derive these. They cost a morning, and are written down for that reason.
+
+- **Two instruments are installable and are the test subjects.**
+  `apt-get install dpf-plugins-clap` gives `Kars.clap`
+  (`studio.kx.distrho.Kars`, Karplus-Strong) and `Nekobi.clap`
+  (`studio.kx.distrho.Nekobi`, a 303). Effects to compare against come from
+  `dragonfly-reverb-clap` and `lsp-plugins-clap`.
+- **An instrument is identifiable before it is instantiated.** The descriptor's
+  features contain `instrument`; an effect's contain `audio-effect`.
+  `--list-clap` prints them.
+- **The declared ports, measured:**
+
+  | | audio in | audio out | note in |
+  |---|---|---|---|
+  | Kars, Nekobi | **0** | 1 | 1 |
+  | Dragonfly, MVerb | 1 | 1 | extension absent |
+
+- **The host currently lies about ports, and it matters.** `process` always
+  presents one stereo input port. Give that to a plugin declaring zero inputs
+  and DPF trips `"firstEventFrame >= totalFramesUsed"` with an uninitialised
+  frame count. `HostedPlugin::load` refuses instruments for exactly this reason;
+  lifting that refusal without building the port layout from
+  `clap_plugin_audio_ports` will reproduce the crash.
+- **Nothing is sent in.** `process` passes `InputEvents::empty()`. That is the
+  hole: an instrument with no notes is silent, which is what both currently are.
+
+### What the work is
+
+1. **Build the audio port layout from what the plugin declares** rather than
+   assuming stereo in and out. This is the prerequisite; the refusal comes off
+   only after it.
+2. **Query `clap_plugin_note_ports`** for the dialect the plugin wants — CLAP's
+   own note events or MIDI — and send what it asked for. Do not assume.
+3. **Send the track's notes, sample-accurately.** The job already carries them
+   with sample offsets. Note that this is a *different* shape from how the
+   engine is driven: Sheliak's own path splits the block at every event
+   boundary, whereas CLAP events carry a frame offset *within* the block, so a
+   plugin track wants whole blocks with a list of timed events attached.
+   Simpler, not harder — but it is not the same loop, and sharing one will hurt.
+4. **Let a track be a plugin.** Behind a flag — say `--clap-instrument <path>
+   --clap-track <n>` — that track's notes go to the plugin and its engine voice
+   does not run. The mix is the plugin's output plus the other tracks.
+5. **Measure determinism**, as `tests/clap.rs` already does for effects: same
+   job twice, same bytes. An instrument carries more state than an effect and is
+   a better test of it.
+
+### What to leave alone
+
+- **Parameters.** A plugin runs at its defaults until Track F can name one.
+  Wiring `clap_host_params` before the notation exists means guessing what the
+  notation will want.
+- **Latency compensation.** Real, and it belongs with the notation.
+- **The `.clap` bundle-as-directory case.** `ProM.clap` in `dpf-plugins-clap` is
+  a directory rather than a library, and the loader fails on it with "Is a
+  directory". Worth fixing, not worth blocking on.
+- **Live playback.** Offline rendering only, as everywhere else in §9.
+
 ## Splitting the work
 
-Four tracks. **A and C can run concurrently from the start; B waits on Stream 2's
-frontmatter; D waits on A.** Do not put two agents inside Track A — it is the
+Six tracks. **E and F are the two to run now, and they share no file** — E is
+the renderer and F is the notation. A and C have landed; B waits on Stream 2's
+frontmatter; D waits on the shared-memory question in §8. Do not put two agents inside Track A — it is the
 parameter contract, and that is the file pair AGENTS.md names as the contention
 hotspot.
 
@@ -1121,6 +1190,31 @@ notation's shape in Rust — exactly the thing §9 exists to avoid.
 
 What remains is `clack-host` on top.
 
+### Track E — instrument plugins (§13) — **hard, and the one to hand out**
+
+**Owns** `render/` entirely — `src/clap_host.rs`, `src/main.rs`, `tests/clap.rs`,
+`Cargo.toml`.
+**Does not touch** `web/`, `dsp/`, `docs/syntax.md`. The notation for naming a
+plugin is Track F and it is deliberately not a dependency: drive this from CLI
+flags, the way the effect host was proved before any fence existed.
+
+This is the hardest track in the stream, and §13 is its specification —
+including the reconnaissance already done, so that it does not need repeating.
+
+Finished when `sheliak-render` can render a document in which one track's notes
+are played by a CLAP instrument instead of by Sheliak's engine, verified against
+both Kars and Nekobi, with the same render twice giving the same bytes.
+
+### Track F — the notation for plugins (§7)
+
+**Owns** `web/src/dsl/`, `web/src/cli/job.ts`, `docs/syntax.md`.
+**Does not touch** `render/`, `dsp/`.
+
+How a document names a plugin and its parameters, and how the render job carries
+it. Runs concurrently with Track E and shares no file with it. The job schema is
+the crossing: this track adds fields, Track E reads them once both have landed,
+and until then Track E uses flags.
+
 ### Track D — the `.wclap` host (§8), and the exporter (§10)
 
 **Owns** `web/public/worklet.js`, `web/src/audio/`, the host module, the WCLAP
@@ -1149,6 +1243,8 @@ Sheliak being able to host anything — and this track becomes the exporter alon
 | `docs/architecture.md` | A owns the FX and parameter tables, B owns determinism | Disjoint sections, one file — coordinate the commit |
 | `web/src/integration.test.ts` | Track D | It mirrors `worklet.js`. A mirror belongs to the thing it mirrors |
 | `web/src/dsl/errors.ts` | Track A | §7's failure path |
+| `render/` | Track E, exclusively | Nobody else opens the renderer while E has it |
+| `web/src/cli/job.ts` | Track F | E reads the schema; F writes it |
 | `CHANGELOG.md` | all | Append-only, still a conflict if simultaneous |
 | this file | whoever finishes a track | Move its status line |
 
