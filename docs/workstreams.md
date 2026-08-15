@@ -780,13 +780,28 @@ you debugging two unknowns at once.
 
 Three risks worth knowing before starting:
 
-- **Shared memory collides with a decision already made.** The draft allows a
-  module to *import* its memory, which must be shared — and `SharedArrayBuffer`
-  needs COOP/COEP, which Sheliak deliberately avoids because it breaks embedding
-  and because posting a compiled `Module` to the worklet silently fails without
-  it. **Sheliak can host only WCLAPs that export their own memory.** Confirm this
-  against the draft before building on it; if the draft moves to requiring shared
-  memory, this track stops and the native path (§9) is the whole answer.
+- **Shared memory: settled, and the answer is that this works.** The draft's
+  wording is *"a WCLAP must import memory (which must be shared) **or** export
+  memory (which may be shared)"* — an either/or, and the second branch does not
+  have to be shared. So a module that exports its own ordinary memory is
+  spec-compliant, and that is precisely the shape Sheliak can host.
+
+  Verified against the strongest evidence available rather than by reading:
+  **`web/public/dsp.wasm` is already that module.** It imports nothing, exports
+  its own memory, that memory is a plain `ArrayBuffer` rather than a
+  `SharedArrayBuffer`, and it has been running in an AudioWorklet without
+  cross-origin isolation since v0.1. The thing this track was afraid of is
+  something the project has been doing all along.
+
+  What remains is a **restriction, not a blocker**: Sheliak cannot host a WCLAP
+  that takes the *import* branch, because a shared memory is a
+  `SharedArrayBuffer` and constructing one in a browser needs COOP/COEP, which
+  this project avoids because it breaks embedding. That is a property of which
+  plugins can be hosted, and it is worth stating to anyone building one — a
+  plugin compiled the way `dsp.wasm` is compiled qualifies without trying.
+  (The refusal itself is a browser policy and cannot be exercised from Node;
+  what was checked here is that the permitted branch works and that the other
+  branch really does produce a `SharedArrayBuffer`.)
 - **The WASI surface is thin.** The reference host implements "the very basics"
   and 32-bit only. Expect to implement enough WASI to keep plugins from trapping,
   and expect that to be where the time goes.
@@ -1145,7 +1160,7 @@ Still true after landing: none of these were touched.
 
 Six tracks. **F is the one to run now** — the notation, which E deliberately
 did not wait for. A, C and E have landed; B waits on Stream 2's
-frontmatter; D waits on the shared-memory question in §8. Do not put two agents inside Track A — it is the
+frontmatter; D is unblocked (§8) and is the next thing worth doing. Do not put two agents inside Track A — it is the
 parameter contract, and that is the file pair AGENTS.md names as the contention
 hotspot.
 
@@ -1253,6 +1268,12 @@ the crossing: this track adds fields, Track E reads them once both have landed,
 and until then Track E uses flags.
 
 ### Track D — the `.wclap` host (§8), and the exporter (§10)
+
+**Unblocked.** The shared-memory question that could have invalidated this track
+is answered in §8: the export branch of the draft is what Sheliak already does,
+and hosting is a matter of building the host rather than of whether one is
+possible. The restriction to plugins that export their own memory is a
+documented property, not a wall.
 
 **Owns** `web/public/worklet.js`, `web/src/audio/`, the host module, the WCLAP
 build recipe and the patch exporter.
