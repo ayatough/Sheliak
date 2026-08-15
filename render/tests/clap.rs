@@ -59,19 +59,62 @@ fn a_bundle_lists_what_it_carries() {
     let path = plugin_or_skip!();
     let found = describe(path.to_str().unwrap()).expect("the bundle should load");
     assert!(!found.is_empty(), "{path:?} declared no plugins");
-    for (id, name) in &found {
+    for plugin in &found {
         // A plugin with no id cannot be named by a document, which is what §7
         // will eventually have to write down.
         assert!(
-            !id.is_empty(),
-            "a plugin in {path:?} has no id (name: {name})"
+            !plugin.id.is_empty(),
+            "a plugin in {path:?} has no id (name: {})",
+            plugin.name
         );
     }
 }
 
+/// An effect to test with. Instruments are refused on purpose (see below), so
+/// the effect tests need one that takes audio in.
+fn an_effect() -> Option<PathBuf> {
+    let path = a_plugin()?;
+    let described = describe(path.to_str().unwrap()).ok()?;
+    described.iter().any(|p| !p.is_instrument()).then_some(path)
+}
+
+macro_rules! effect_or_skip {
+    () => {
+        match an_effect() {
+            Some(path) => path,
+            None => {
+                eprintln!("no CLAP effect installed — skipping.");
+                return;
+            }
+        }
+    };
+}
+
+#[test]
+fn an_instrument_is_refused_rather_than_fed_an_input_it_never_declared() {
+    // An instrument declares zero audio inputs. Handing one an input port
+    // anyway is a protocol violation, and DPF's Kars proves it is not a
+    // harmless one: it trips an internal assertion and reports uninitialised
+    // frame counts. Until the renderer can drive an instrument from notes,
+    // refusing by name beats corrupting it quietly.
+    let path = std::path::Path::new("/usr/lib/clap/Kars.clap");
+    if !path.exists() {
+        eprintln!("Kars not installed — skipping. apt-get install dpf-plugins-clap");
+        return;
+    }
+    let error = match HostedPlugin::load(path.to_str().unwrap(), None, SR) {
+        Err(error) => error,
+        Ok(_) => panic!("an instrument loaded as a mix effect"),
+    };
+    assert!(
+        error.contains("instrument"),
+        "the error should say what it is, got: {error}"
+    );
+}
+
 #[test]
 fn a_plugin_loads_activates_and_processes() {
-    let path = plugin_or_skip!();
+    let path = effect_or_skip!();
     let mut plugin =
         HostedPlugin::load(path.to_str().unwrap(), None, SR).expect("the plugin should activate");
     assert!(!plugin.id.is_empty());
@@ -95,7 +138,7 @@ fn a_plugin_loads_activates_and_processes() {
 
 #[test]
 fn the_same_plugin_twice_gives_the_same_audio() {
-    let path = plugin_or_skip!();
+    let path = effect_or_skip!();
     let run = || {
         let mut plugin = HostedPlugin::load(path.to_str().unwrap(), None, SR).unwrap();
         let (mut l, mut r) = a_signal(SR as usize / 4);
@@ -119,7 +162,7 @@ fn the_same_plugin_twice_gives_the_same_audio() {
 
 #[test]
 fn asking_for_a_plugin_that_is_not_there_fails_by_name() {
-    let path = plugin_or_skip!();
+    let path = effect_or_skip!();
     // `expect_err` would need HostedPlugin: Debug, and a loaded plugin is not a
     // thing worth teaching to print itself.
     let error = match HostedPlugin::load(path.to_str().unwrap(), Some("com.example.nope"), SR) {

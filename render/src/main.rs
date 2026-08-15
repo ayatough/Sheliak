@@ -309,8 +309,21 @@ fn run() -> Result<String, String> {
             return Ok(format!("{path} declares no plugins"));
         }
         let mut report = format!("{path}:");
-        for (id, name) in found {
-            report.push_str(&format!("\n  {id}  {name}"));
+        for plugin in found {
+            // The features are what say whether a host has to send it notes or
+            // audio, so they are the useful half of a listing rather than trivia.
+            let kind = if plugin.is_instrument() {
+                "  [instrument — not supported yet]"
+            } else {
+                ""
+            };
+            report.push_str(&format!(
+                "\n  {}  {}{}\n      {}",
+                plugin.id,
+                plugin.name,
+                kind,
+                plugin.features.join(", ")
+            ));
         }
         return Ok(report);
     }

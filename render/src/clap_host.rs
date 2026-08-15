@@ -24,6 +24,8 @@
 //! they will be written as parameters and never as an opaque state blob, and
 //! until the fence can carry them, defaults are the honest thing to use.
 
+use clack_extensions::audio_ports::PluginAudioPorts;
+use clack_extensions::note_ports::PluginNotePorts;
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::prelude::*;
 
@@ -67,8 +69,38 @@ pub struct HostedPlugin {
     _entry: PluginEntry,
 }
 
+/// What one plugin says about itself, without being instantiated.
+pub struct Described {
+    pub id: String,
+    pub name: String,
+    /// CLAP's own words for what it is. `instrument` and `audio-effect` are the
+    /// two that decide how a host has to drive it.
+    pub features: Vec<String>,
+}
+
+impl Described {
+    /// Does it make sound from notes rather than from audio?
+    pub fn is_instrument(&self) -> bool {
+        self.features.iter().any(|f| f == "instrument")
+    }
+}
+
+/// What a plugin needs from the host once it has been instantiated.
+///
+/// This is not decoration. An instrument declares **zero** audio inputs, and
+/// handing one an input port anyway is a protocol violation that a plugin is
+/// entitled to crash on — DPF's `Kars` trips an assertion and writes garbage.
+/// A host that assumes stereo-in/stereo-out works only by luck.
+pub struct Ports {
+    pub audio_in: u32,
+    pub audio_out: u32,
+    /// `None` when the plugin does not implement the note-ports extension,
+    /// which is how an effect says it wants no notes.
+    pub note_in: Option<u32>,
+}
+
 /// Everything a `.clap` bundle offers, for `--list-clap`.
-pub fn describe(path: &str) -> Result<Vec<(String, String)>, String> {
+pub fn describe(path: &str) -> Result<Vec<Described>, String> {
     // SAFETY: none available. Loading a `.clap` runs its initialiser, which is
     // arbitrary native code from outside this repository; clack marks it unsafe
     // because no wrapper can make that safe. The user named the file.
@@ -79,16 +111,19 @@ pub fn describe(path: &str) -> Result<Vec<(String, String)>, String> {
         .ok_or_else(|| format!("{path} has no plugin factory — it is not a CLAP bundle"))?;
     Ok(factory
         .plugin_descriptors()
-        .map(|d| {
-            let id = d
+        .map(|d| Described {
+            id: d
                 .id()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let name = d
+                .unwrap_or_default(),
+            name: d
                 .name()
                 .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            (id, name)
+                .unwrap_or_default(),
+            features: d
+                .features()
+                .map(|f| f.to_string_lossy().into_owned())
+                .collect(),
         })
         .collect())
 }
@@ -156,13 +191,50 @@ impl HostedPlugin {
             .activate(|_, _| (), config)
             .map_err(|e| format!("cannot activate {name}: {e}"))?;
 
-        Ok(HostedPlugin {
+        let refused = name.clone();
+        let mut hosted = HostedPlugin {
             name,
             id: id.to_string_lossy().into_owned(),
             processor: Some(processor.into()),
             instance,
             _entry: entry,
-        })
+        };
+
+        // An instrument has no audio input, and `process` below always presents
+        // one. Feeding a port a plugin never declared is a protocol violation
+        // rather than a harmless extra: DPF's Kars trips an internal assertion
+        // and writes uninitialised frame counts. Refusing is the honest answer
+        // until the renderer can drive an instrument properly — notes and all —
+        // which is its own piece of work (workstreams.md, Track E).
+        let ports = hosted.ports();
+        if ports.audio_in == 0 {
+            return Err(format!(
+                "{refused} is an instrument: it declares no audio input, {} note input(s), \
+                 and this renderer can only put a plugin *on* the mix. \
+                 Driving one from the document's notes is not implemented yet.",
+                ports.note_in.unwrap_or(0)
+            ));
+        }
+        Ok(hosted)
+    }
+
+    /// What this plugin declares it wants. Queried after instantiation because
+    /// the extensions are only reachable through a live instance.
+    pub fn ports(&mut self) -> Ports {
+        let audio = self
+            .instance
+            .plugin_handle()
+            .get_extension::<PluginAudioPorts>();
+        let notes = self
+            .instance
+            .plugin_handle()
+            .get_extension::<PluginNotePorts>();
+        let mut handle = self.instance.plugin_handle();
+        Ports {
+            audio_in: audio.map(|e| e.count(&mut handle, true)).unwrap_or(0),
+            audio_out: audio.map(|e| e.count(&mut handle, false)).unwrap_or(0),
+            note_in: notes.map(|e| e.count(&mut handle, true)),
+        }
     }
 
     /// Runs the whole mix through the plugin, in place.
