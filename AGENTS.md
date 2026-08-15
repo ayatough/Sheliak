@@ -77,6 +77,20 @@ cargo fmt --manifest-path dsp/Cargo.toml --all -- --check
 cd web && npm ci && npm test && npm run build        # vitest incl. the wasm end-to-end test
 ```
 
+If you touched `wclap/` (Sheliak's own effects as a CLAP plugin) or
+`web/src/audio/wclap.ts` (the browser's CLAP host), also:
+
+```bash
+cargo test --manifest-path wclap/Cargo.toml          # incl. plugin-vs-chain parity
+cargo clippy --manifest-path wclap/Cargo.toml --all-targets
+cargo fmt --manifest-path wclap/Cargo.toml --all -- --check
+./scripts/build-wclap.sh                             # also checks the wasm32 struct layouts
+```
+
+The bundle it writes is what `web/src/audio/wclap.test.ts` loads, the same way
+`integration.test.ts` loads `dsp.wasm`: without it those tests skip rather than
+fail, so run the script before believing a green suite.
+
 If you touched the artwork, also:
 
 ```bash

@@ -40,6 +40,20 @@ jobs:
       - name: build DSP core (wasm)
         run: ./scripts/build-wasm.sh
 
+      # The CLAP plugin Sheliak builds out of its own effects. Its native tests
+      # check the shell around the effect (the parity one asserts the plugin
+      # path is bit-identical to the chain); the wasm build additionally checks
+      # the struct layouts `web/src/audio/wclap.ts` hard-codes, because those
+      # assertions are `const` and only hold on a 32-bit target.
+      - name: clippy the CLAP plugin
+        run: cargo clippy --manifest-path wclap/Cargo.toml --all-targets
+
+      - name: test the CLAP plugin (native target)
+        run: cargo test --manifest-path wclap/Cargo.toml
+
+      - name: build the CLAP plugin (wclap bundle)
+        run: ./scripts/build-wclap.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

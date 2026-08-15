@@ -9,3 +9,7 @@
 /dist-release/
 /site/
 /render/target/
+
+# WCLAP bundle, built by scripts/build-wclap.sh
+/web/public/*.wclap/
+/wclap/target/

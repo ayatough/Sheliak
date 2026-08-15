@@ -88,7 +88,12 @@ pub(crate) fn set(s: &mut Smoother, v: f32, first: bool) {
 /// `new()` is deliberately not on the trait. It runs inside `init()`, it is the
 /// only place an effect may allocate, and it returns `Self` rather than a boxed
 /// trait object, so it stays an inherent constructor.
-pub(crate) trait Effect {
+///
+/// It is `pub` because the chain is no longer the only caller: `wclap/` drives
+/// one effect through the CLAP ABI, and a host outside this crate needs the
+/// same four methods the chain uses. Nothing about the boundary changes — the
+/// slice is still a block of numbers with no names in it.
+pub trait Effect {
     /// Reads this effect's parameter block. Called while audio runs, so it
     /// moves smoother targets rather than values — `first` snaps instead.
     fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool);

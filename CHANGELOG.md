@@ -13,6 +13,28 @@ policy.
 ## [Unreleased]
 
 ### Added
+- **Sheliak compiles a CLAP plugin, and hosts one in the browser.** Two halves
+  of the same experiment, and they meet in the middle:
+
+  `wclap/` is Sheliak's own distortion behind the CLAP C ABI, built for wasm32
+  by `./scripts/build-wclap.sh` into `web/public/sheliak.wclap/module.wasm`. It
+  imports nothing, exports its memory, a growable function table, `clap_entry`
+  and `malloc` — which is precisely what the WCLAP draft asks a module for, and
+  it takes two linker flags rather than a C toolchain to produce.
+
+  `web/src/audio/wclap.ts` is a CLAP host written from scratch in the language a
+  browser has: it lays the ABI's structs out at byte offsets inside the plugin's
+  own memory, installs JavaScript callbacks into the plugin's function table
+  through a generated bridge module, and renders blocks with parameter changes
+  landing on exact frames.
+
+  The reason for doing Sheliak's own effect first is that it can be checked:
+  **one block through the plugin is bit-identical to the same block through the
+  same effect in the engine's chain.** Running an effect as a plugin is not a
+  different effect.
+
+  Nothing in the app uses this yet — the worklet does not host plugins, and a
+  module that needs WASI is refused by name. See docs/workstreams.md §8.
 - **A track can be played by a CLAP plugin, named in the document.** A new
   ```` ```plugin ```` fence is a track like a ```` ```synth ```` fence is,
   taking an index in the same sequence and binding to a `loop` line the same

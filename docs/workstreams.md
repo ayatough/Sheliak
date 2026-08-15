@@ -778,6 +778,63 @@ testable against a known-good reference, offline, with an existing determinism
 check to compare against — a third-party plugin as the first test subject leaves
 you debugging two unknowns at once.
 
+### What is built
+
+Both halves exist and the loop is closed:
+
+- **The plugin.** `wclap/` is Sheliak's distortion behind the CLAP C ABI,
+  built by `scripts/build-wclap.sh` into `web/public/sheliak.wclap/module.wasm`
+  — 96 KiB, no imports at all. `wclap/tests/native.rs` drives it through the
+  entry point natively and asserts the thing that matters: **one block through
+  the plugin is bit-identical to the same block through `Dist` in the chain.**
+  Running an effect as a plugin is not a different effect.
+- **The host.** `web/src/audio/wclap.ts` instantiates a module, walks the
+  factory, creates a plugin, reads its parameters and ports, queues parameter
+  events at exact frames and renders. `web/src/audio/wclap.test.ts` runs it
+  against the real bundle: silence in gives silence out, `mix = 0` is a bypass
+  bit for bit, the same input twice gives the same output twice, and an event
+  queued for frame 64 changes the sound at frame 64 and not before.
+
+Four things were unknown when this section was written and are now answered:
+
+- **`clap_entry` as a global.** A `#[no_mangle] pub static` is enough. A Rust
+  static cannot initialise a *wasm global* to another static's address, which is
+  what was recorded as open — but it does not have to: wasm-ld exports a data
+  symbol as a global whose value is its address, which is exactly what the draft
+  asks for. Function pointers inside the static resolve to table indices at link
+  time and are callable through the exported table.
+- **The table has to be asked for twice.** `--export-table` exports it;
+  `--growable-table` removes its maximum. Without the second flag the table is
+  fixed-size, `table.grow` fails, and **no host callback can be installed at
+  all** — which is not a corner case, it is every plugin.
+- **`malloc` is not optional.** The draft's "export `malloc()` or something like
+  it" is the whole reason a host can work: JavaScript objects have no address a
+  plugin can read, so every `clap_host`, `clap_process`, audio buffer and event
+  the host builds has to live *inside the plugin's memory*. `wclap/src/alloc.rs`
+  is 30 lines. A plugin that does not export one cannot be hosted.
+- **JS functions reach the plugin through a bridge module.** `table.set` will
+  not take a plain JS function. `installCallbacks` builds a wasm module whose
+  entire content is imports re-exported — no code section — instantiates it with
+  the callbacks and puts the results in the plugin's table. That is how
+  `clap_host.get_extension` and the event-list vtables are provided.
+
+The struct offsets the host writes at are `const`-asserted against `clap-sys` in
+`wclap/src/layout.rs`, so a spec or binding change fails the build with the name
+of the field rather than corrupting memory in a worklet.
+
+### What is not built
+
+- **The worklet does not host plugins yet.** `wclap.ts` is TypeScript so the
+  test suite and `tsc` cover it; `public/worklet.js` is bundler-free plain JS.
+  Wiring the two needs the host bundled into the worklet's scope (a build step,
+  like `dsp.wasm` and the brand artwork) — the host itself is browser-ready and
+  uses no Node API.
+- **No WASI.** A module that imports anything is refused by name. That is honest
+  today and a wall tomorrow: a plugin built against a C sysroot imports
+  `wasi_snapshot_preview1`, and most will be.
+- **One plugin, one effect.** `MODELS` in `wclap/src/lib.rs` is a list; a second
+  effect is a descriptor, a parameter table and a constructor.
+
 Three risks worth knowing before starting:
 
 - **Shared memory: settled, and the answer is that this works.** The draft's
@@ -802,27 +859,33 @@ Three risks worth knowing before starting:
   (The refusal itself is a browser policy and cannot be exercised from Node;
   what was checked here is that the permitted branch works and that the other
   branch really does produce a `SharedArrayBuffer`.)
-- **The build side is solved, and it is one linker flag.** A `cdylib` built for
-  `wasm32-unknown-unknown` with `-C link-arg=--export-table` produces exactly
-  the three things the draft asks for and nothing else:
+- **The build side is solved, and it is two linker flags.** A `cdylib` built for
+  `wasm32-unknown-unknown` with `-C link-arg=--export-table -C
+  link-arg=--growable-table` produces exactly what the draft asks for and
+  nothing else:
 
   ```
   imports: []
-  exports: memory (memory), clap_entry (global),
-           __indirect_function_table (table), entry_ptr (function)
+  exports: memory (memory), __indirect_function_table (table),
+           clap_entry (global), malloc (function), free (function)
   ```
 
-  671 bytes for a stub. No wasi-sdk, no C toolchain, no sysroot — the crate is
-  already the shape Sheliak's own core is, which is the shape §8 needs. Anyone
-  building a plugin for Sheliak should start here rather than from the C++
-  reference host's build.
+  No wasi-sdk, no C toolchain, no sysroot — the crate is already the shape
+  Sheliak's own core is, which is the shape §8 needs. Anyone building a plugin
+  for Sheliak should start from `wclap/` rather than from the C++ reference
+  host's build.
 
-  **One detail is still open**: `clap_entry` has to be a global *holding the
-  address of* a static `clap_plugin_entry`, and a Rust `static` does not
-  initialise an exported global to another static's address at link time. The
-  probe exported a constant and a separate accessor function instead. Whoever
-  builds the first real module has to close that — a small linker or `#[used]`
-  question, not a design one.
+  One trap is worth repeating because it fails late and quietly: **without
+  `--growable-table` the module still looks right** — it exports a table, and a
+  host can read the plugin's own function pointers out of it — but the host
+  cannot add its own, so the first `table.grow` throws and nothing can be
+  created. The draft's word "growable" is load-bearing.
+
+  Linking `sheliak-dsp` into that cdylib needs `default-features = false`: a
+  `#[no_mangle]` symbol in an rlib is exported from whatever cdylib links it, so
+  the plugin would otherwise answer to `note_on` and `process` and carry the
+  whole engine (508 KiB against 96 KiB). The core's `extern "C"` face now lives
+  in `dsp/src/abi.rs` behind the default `abi` feature for exactly this reason.
 
 - **The WASI surface is thin.** The reference host implements "the very basics"
   and 32-bit only. Expect to implement enough WASI to keep plugins from trapping,
@@ -1291,28 +1354,30 @@ and until then Track E uses flags.
 
 ### Track D — the `.wclap` host (§8), and the exporter (§10)
 
-**Unblocked.** The shared-memory question that could have invalidated this track
-is answered in §8: the export branch of the draft is what Sheliak already does,
-and hosting is a matter of building the host rather than of whether one is
-possible. The restriction to plugins that export their own memory is a
-documented property, not a wall.
+**First deliverable landed.** One of Sheliak's own effects is compiled to a
+`.wclap` and round-tripped through a host written from scratch, with output
+matching the built-in version bit for bit — the deliverable this track was
+supposed to start with, and it did. See §8 for what that answered and what it
+did not. The build recipe turned out to be two linker flags rather than clang
+against a wasi-sdk sysroot: the crate was already the right shape.
 
-**Owns** `web/public/worklet.js`, `web/src/audio/`, the host module, the WCLAP
-build recipe and the patch exporter.
-**Does not touch** `web/src/dsl/`, `dsp/src/`.
+**Owns** `web/public/worklet.js`, `web/src/audio/`, `wclap/`, the WCLAP build
+recipe and the patch exporter.
+**Does not touch** `web/src/dsl/`, `dsp/src/` (the `abi` feature split was a
+one-off crossing, already made).
 
-Starts after A4. First deliverable is one of Sheliak's own effects compiled to a
-`.wclap` and round-tripped through the host with output matching the built-in
-version — not a third-party plugin. Confirm the shared-memory question in §8
-before writing code; it can invalidate the track.
+What is left, in the order it makes sense to do it:
 
-The build recipe that first deliverable needs — clang against the wasi-sdk
-sysroot, `libclang_rt.builtins-wasm32.a`, the WCLAP export conventions — is a
-few dozen lines of build configuration, not a compiler. It is also most of what
-§10's exporter requires, so land the two together: the exporter is the same
-recipe pointed at a whole patch instead of one effect. **If §8 is invalidated by
-the shared-memory question, §10 survives it** — exporting does not depend on
-Sheliak being able to host anything — and this track becomes the exporter alone.
+1. **Wire the host into the worklet.** The host is TypeScript and the worklet is
+   bundler-free plain JS; closing that gap is a build step, not a rewrite.
+2. **A panel from `clap_plugin_params`.** Once the browser can read a plugin's
+   parameters it can draw them, and `value_to_text` gives every control a label
+   Sheliak did not have to know.
+3. **WASI, when a plugin needs it.** A module that imports anything is refused
+   by name today. The reference host implements "the very basics"; expect that
+   to be where the time goes.
+4. **The exporter (§10)** is the same recipe pointed at a whole patch instead of
+   one effect, and does not depend on any of the above.
 
 ### Crossings
 
@@ -1332,9 +1397,14 @@ Sheliak being able to host anything — and this track becomes the exporter alon
 
 Not decided, and each of these is a place where the design above could be wrong:
 
-- **Does the draft permit a WCLAP that never imports shared memory?** §8 depends
-  on it, and Sheliak's no-COOP/COEP decision is not negotiable in the other
-  direction — embedding matters more than plugin hosting.
+- ~~**Does the draft permit a WCLAP that never imports shared memory?**~~
+  Answered, and yes — the wording is an either/or and the export branch is what
+  Sheliak already builds. See §8. The remaining shape of the question is which
+  *third-party* plugins take the import branch, which is not knowable in advance.
+- **Where does the WASI line sit?** A plugin built against a C sysroot imports
+  `wasi_snapshot_preview1`, and this host provides none of it. Is the answer a
+  shim big enough for real plugins, or a documented "Sheliak hosts modules that
+  import nothing", with everything else going through the native renderer?
 - **Does a plugin instance get its own parameter block, or a shared arena?** A4
   needs an answer and the answer shapes how much of the flat-block model survives.
 - **What is the sample-rate story for the native renderer?** The browser takes

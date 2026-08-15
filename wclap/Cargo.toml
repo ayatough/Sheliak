@@ -1,0 +1,25 @@
+[package]
+name = "sheliak-wclap"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Sheliak's own effects as a CLAP plugin, built for wasm32 (a WCLAP bundle)."
+
+[lib]
+# `cdylib` is the shippable artifact — `module.wasm` inside a `.wclap` bundle.
+# `rlib` is what `tests/` links against, so the whole entry point can be driven
+# natively, where a debugger and a backtrace still exist.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `default-features = false` drops the core's own `extern "C"` exports: a
+# `#[no_mangle]` symbol in an rlib is exported from the cdylib that links it,
+# and a CLAP module must not also answer to `note_on`.
+sheliak-dsp = { path = "../dsp", default-features = false }
+clap-sys = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

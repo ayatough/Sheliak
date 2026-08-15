@@ -6,6 +6,13 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The `extern "C"` exports in `src/abi.rs`. On by default, because the wasm
+# build is the point of this crate; off for a cdylib that links this one and
+# does not want `note_on` and `process` exported from *its* module too.
+default = ["abi"]
+abi = []
+
 [dependencies]
 rustfft = "6.4"
 
