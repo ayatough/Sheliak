@@ -1,13 +1,20 @@
 # Releasing
 
-Four commands. Run them in order; the third one is the point of no return.
+Three steps. Run them in order; the third one is the point of no return.
 
 ```bash
-./scripts/release.sh 0.2.0                        # 1. prepare, and run the gate
-git commit -am "Release v0.2.0" && git push origin main   # 2. publish the bump
-# wait for CI to go green on that commit
-git tag v0.2.0 && git push origin v0.2.0          # 3. cut it
+./scripts/release.sh 0.2.0                                 # 1. prepare, and run the gate
+git commit -am "Release v0.2.0" && git push origin main    # 2. publish the bump
+# wait for CI to go green on that commit, then cut it — either way:
+git tag v0.2.0 && git push origin v0.2.0                   # 3a. if you can push tags
+gh workflow run release.yml -f publish=true                # 3b. if you cannot
 ```
+
+**3b exists because pushing a tag is not always available** — a CI job, an
+agent, anyone whose credentials are scoped to branches. Dispatching the Release
+workflow with `publish=true` builds the tarball, then creates the tag *and* the
+release from the version already in the manifest, so no local git is involved.
+The two routes end in the same place; 3a is one command less.
 
 That is the whole procedure. The rest of this page is why, for when something
 goes wrong.
@@ -27,12 +34,17 @@ read in `git diff` before step 2.
 **2. Push the bump.** An ordinary commit on `main`. CI runs; Pages rebuilds
 `/next/` from it.
 
-**3. Wait for CI, then tag.** Pushing the tag starts
+**3. Wait for CI, then cut it.** Either route runs
 [`release.yml`](../.github/workflows/release.yml), which builds the tarball,
 extracts it somewhere unrelated to the repository, runs the CLI out of it, and
 only then creates the GitHub release and attaches the archive and its checksum.
-[`pages.yml`](../.github/workflows/pages.yml) then rebuilds the site's root from
-the tag's own tree.
+It refuses if that version is already released, and takes the release notes from
+that version's changelog section. [`pages.yml`](../.github/workflows/pages.yml)
+then rebuilds the site's root from the tag's own tree.
+
+On a tag push the workflow checks the tag against the manifest and fails if they
+disagree; on a dispatch there is nothing to disagree with, because the tag is
+derived from the manifest.
 
 ## Why the order matters
 
@@ -75,5 +87,5 @@ the only requirement on the far end, and
 anything.
 
 To check the packaging without cutting a release, dispatch the Release workflow
-by hand: it builds and smoke-tests the tarball and uploads it as a run artifact,
-and skips publishing entirely.
+with `publish=false` (the default): it builds and smoke-tests the tarball and
+uploads it as a run artifact, and skips publishing entirely.

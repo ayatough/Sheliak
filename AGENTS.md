@@ -52,11 +52,16 @@ is the whole of the state. See [README](README.md) for the user view,
 
 ## Releasing
 
-Four commands, in [docs/releasing.md](docs/releasing.md). `./scripts/release.sh
-<version>` does every mechanical part and runs the gate; the two that follow are
-a commit and a tag, in that order, with CI green in between. **Do not tag before
-CI passes on the bump commit** — the site's front page is built from the newest
-tag, and tagging early rebuilds it from the release before last.
+Three steps, in [docs/releasing.md](docs/releasing.md). `./scripts/release.sh
+<version>` does every mechanical part and runs the gate; then a commit, CI green,
+then the tag. **Do not cut it before CI passes on the bump commit** — the site's
+front page is built from the newest tag, and cutting early rebuilds it from the
+release before last.
+
+If your credentials cannot push a tag — which is usual for an agent — do not
+look for another way to create one. `gh workflow run release.yml -f publish=true`
+is the supported route: the workflow makes the tag itself, from the version in
+the manifest.
 
 ## Definition of done
 

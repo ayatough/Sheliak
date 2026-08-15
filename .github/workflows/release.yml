@@ -1,18 +1,33 @@
 name: Release
 
+# Publishes the tarball that `scripts/install.sh` fetches.
+#
+# Two ways in, and the second exists because pushing a tag is not always
+# available to whoever is cutting the release — a CI job, an agent, anyone
+# working through credentials scoped to branches. Running this workflow with
+# `publish` set makes the tag here, from the version already in the manifest,
+# so the release needs no local git at all.
+#
+#   tag push `v*`              build, then publish
+#   dispatch, publish = false  build only — rehearse the packaging, cut nothing
+#   dispatch, publish = true   build, create the tag, publish
+
 on:
   push:
     tags: ['v*']
-  # So the tarball can be built and downloaded without cutting a release —
-  # which is the only way to check the packaging before it is permanent.
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Tag this commit and publish a release (otherwise build only)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    name: build and publish the tarball
+  build:
+    name: build the tarball
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,15 +46,22 @@ jobs:
         run: npm ci
         working-directory: web
 
-      # The same script a contributor runs, so a tarball built here and one
-      # built by hand differ only in the version they are told.
-      - name: build the release tarball
-        run: ./scripts/build-release.sh "${GITHUB_REF_NAME#v}"
+      # The version comes from the manifest either way — `build-release.sh`
+      # defaults to it, and `check-versions.sh` is what keeps every other copy
+      # in step. A tag only has to agree with it; a tag that does not is a
+      # release whose `--version` would contradict its own name.
+      - name: check the tag against the manifest
         if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^version' dsp/Cargo.toml | cut -d'"' -f2)
+          [ "$GITHUB_REF_NAME" = "v$version" ] || {
+            echo "tag $GITHUB_REF_NAME does not match the manifest version $version" >&2
+            exit 1
+          }
 
-      - name: build the release tarball (dry run)
+      - name: build the release tarball
         run: ./scripts/build-release.sh
-        if: "!startsWith(github.ref, 'refs/tags/')"
 
       # A tarball nobody has run is a guess. This is the same path the installer
       # produces: extract it somewhere unrelated to the repository and use it.
@@ -54,28 +76,80 @@ jobs:
           node "$cli" new song.md
           node "$cli" check song.md
           node "$cli" fmt song.md --check
-          node "$cli" render song.md -o song.wav
+          node "$cli" render song.md -o song.wav --stems
           test -s song.wav
+          test -s song.lead.wav
 
       - uses: actions/upload-artifact@v4
         with:
           name: sheliak-tarball
           path: dist-release/*
 
-      - name: publish the release
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ github.token }}
+  publish:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sheliak-tarball
+          path: dist-release
+
+      # On a tag push the tag is given; on a dispatch it is derived from the
+      # manifest, which is the same rule the build job checked the tag against.
+      - name: name this release
+        id: rel
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --notes "See [CHANGELOG.md](https://github.com/$GITHUB_REPOSITORY/blob/main/CHANGELOG.md).
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/*) tag="$GITHUB_REF_NAME" ;;
+            *) tag="v$(grep -m1 '^version' dsp/Cargo.toml | cut -d'"' -f2)" ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-          \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh | sh
-          \`\`\`
+      # A release is not something to publish twice. Re-dispatching after a
+      # failure part-way through should say so rather than move a tag people
+      # may already have fetched.
+      - name: refuse to republish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag='${{ steps.rel.outputs.tag }}'
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag is already released. Bump the version, or delete the release first." >&2
+            exit 1
+          fi
 
-          Node.js 20 or newer is required." \
-            dist-release/*.tar.gz \
-            dist-release/*.tar.gz.sha256
+      # The tag's section of the changelog becomes the release notes, so the
+      # notes and the repository never disagree.
+      - name: extract release notes
+        run: |
+          tag='${{ steps.rel.outputs.tag }}'
+          awk -v v="${tag#v}" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          {
+            echo
+            echo '```'
+            echo "curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh | sh"
+            echo '```'
+            echo
+            echo 'Node.js 20 or newer is required.'
+          } >> notes.md
+
+      # `gh release create` makes the tag when it does not exist, which is what
+      # turns a dispatch into a release. It fires a `release` event rather than
+      # a tag `push`, so this workflow does not start itself again.
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create '${{ steps.rel.outputs.tag }}' \
+            --target "$GITHUB_SHA" \
+            --title '${{ steps.rel.outputs.tag }}' \
+            --notes-file notes.md \
+            dist-release/*
