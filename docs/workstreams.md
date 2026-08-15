@@ -1045,9 +1045,12 @@ travel.
 
 ## 13. Instrument plugins, and what is already known about them
 
-Track E's specification. §9 hosts a plugin **on the mix**; this is the other
-kind, where a plugin *is* a track's voice and Sheliak's engine does not run for
-it at all.
+Track E's specification — **landed**. §9 hosts a plugin **on the mix**; this is
+the other kind, where a plugin *is* a track's voice and Sheliak's engine does
+not run for it at all. `sheliak-render job.json -o out.wav --clap-instrument
+Nekobi.clap --clap-track 0` renders track 0 through the plugin; the engine's
+voice for that track stays silent, the other tracks render as always, and the
+track's stem is the plugin's output.
 
 ### What is already established
 
@@ -1068,16 +1071,34 @@ Do not re-derive these. They cost a morning, and are written down for that reaso
   | Kars, Nekobi | **0** | 1 | 1 |
   | Dragonfly, MVerb | 1 | 1 | extension absent |
 
-- **The host currently lies about ports, and it matters.** `process` always
-  presents one stereo input port. Give that to a plugin declaring zero inputs
+- **A host that lies about ports corrupts DPF.** `process` used to present one
+  stereo input port unconditionally. Give that to a plugin declaring zero inputs
   and DPF trips `"firstEventFrame >= totalFramesUsed"` with an uninitialised
-  frame count. `HostedPlugin::load` refuses instruments for exactly this reason;
-  lifting that refusal without building the port layout from
-  `clap_plugin_audio_ports` will reproduce the crash.
-- **Nothing is sent in.** `process` passes `InputEvents::empty()`. That is the
-  hole: an instrument with no notes is silent, which is what both currently are.
+  frame count. The host now builds the layout from `clap_plugin_audio_ports` at
+  load — every declared port, at its declared channel count — and the old
+  load-time refusal became a `process`-time one: an instrument still cannot go
+  *on* the mix, and the error now says which flag drives it instead.
+- **The dialect is asked, not assumed.** `clap_plugin_note_ports` is queried
+  once at load: the port's preferred dialect when this host speaks it, else CLAP
+  note events, else MIDI 1.0. Kars and Nekobi take CLAP note events.
+- **Kars cannot render the same bytes twice, and no host can make it.** Its
+  Karplus-Strong excitation is drawn from an unseeded `rand()`
+  (`DistrhoPluginKars.cpp`: `note.wavetable[i] = (float(rand()) /
+  float(RAND_MAX)) * 2.0f - 1.0f`), so two instances differ from the first
+  frame of the first note — the onset itself still lands sample-accurately.
+  Nekobi is bit-identical across runs. `tests/clap.rs` asserts both findings by
+  name; this pair is exactly what §4's classes have to be able to say apart,
+  since `pinned` can pin a plugin's build but never its `rand()`.
+- **Two plugin instances in one process interfere.** Both DPF instruments
+  import the process-global libc `rand()`, and running plugin tests on cargo's
+  concurrent test threads made Nekobi — bit-identical in isolation — flake
+  about once per ten suite runs. The tests now take one plugin at a time; the
+  renderer itself already hosts one plugin per process. The day a document
+  names two plugins in one render, this is the paragraph to reread.
 
-### What the work is
+### What the work was
+
+All five landed, in this order, which turned out to be the dependency order:
 
 1. **Build the audio port layout from what the plugin declares** rather than
    assuming stereo in and out. This is the prerequisite; the refusal comes off
@@ -1095,9 +1116,13 @@ Do not re-derive these. They cost a morning, and are written down for that reaso
    does not run. The mix is the plugin's output plus the other tracks.
 5. **Measure determinism**, as `tests/clap.rs` already does for effects: same
    job twice, same bytes. An instrument carries more state than an effect and is
-   a better test of it.
+   a better test of it — and it caught one: Nekobi renders the same bytes
+   twice, Kars cannot (see above), which "same job twice" over effects alone
+   would never have surfaced.
 
 ### What to leave alone
+
+Still true after landing: none of these were touched.
 
 - **Parameters.** A plugin runs at its defaults until Track F can name one.
   Wiring `clap_host_params` before the notation exists means guessing what the
@@ -1110,8 +1135,8 @@ Do not re-derive these. They cost a morning, and are written down for that reaso
 
 ## Splitting the work
 
-Six tracks. **E and F are the two to run now, and they share no file** — E is
-the renderer and F is the notation. A and C have landed; B waits on Stream 2's
+Six tracks. **F is the one to run now** — the notation, which E deliberately
+did not wait for. A, C and E have landed; B waits on Stream 2's
 frontmatter; D waits on the shared-memory question in §8. Do not put two agents inside Track A — it is the
 parameter contract, and that is the file pair AGENTS.md names as the contention
 hotspot.
@@ -1190,20 +1215,24 @@ notation's shape in Rust — exactly the thing §9 exists to avoid.
 
 What remains is `clack-host` on top.
 
-### Track E — instrument plugins (§13) — **hard, and the one to hand out**
+### Track E — instrument plugins (§13) — **landed**
 
 **Owns** `render/` entirely — `src/clap_host.rs`, `src/main.rs`, `tests/clap.rs`,
 `Cargo.toml`.
 **Does not touch** `web/`, `dsp/`, `docs/syntax.md`. The notation for naming a
-plugin is Track F and it is deliberately not a dependency: drive this from CLI
-flags, the way the effect host was proved before any fence existed.
+plugin is Track F and it was deliberately not a dependency: this is driven from
+CLI flags (`--clap-instrument <path> --clap-track <n>`), the way the effect
+host was proved before any fence existed.
 
-This is the hardest track in the stream, and §13 is its specification —
-including the reconnaissance already done, so that it does not need repeating.
-
-Finished when `sheliak-render` can render a document in which one track's notes
-are played by a CLAP instrument instead of by Sheliak's engine, verified against
-both Kars and Nekobi, with the same render twice giving the same bytes.
+The finish criterion was: `sheliak-render` renders a document in which one
+track's notes are played by a CLAP instrument instead of by Sheliak's engine,
+verified against both Kars and Nekobi, with the same render twice giving the
+same bytes. It holds — with one correction the measurement forced. Both
+instruments load, declare their ports, take notes sample-accurately and sound;
+Nekobi gives the same bytes twice, mix and stem alike. Kars *cannot*: its
+excitation noise comes from an unseeded `rand()` upstream (§13), which no host
+reaches. `tests/clap.rs` pins both findings, and the Kars one is an input to
+§4, not a failure of the host.
 
 ### Track F — the notation for plugins (§7)
 

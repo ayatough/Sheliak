@@ -42,10 +42,16 @@ const HELP: &str = "usage: sheliak-render <job.json> -o <out.wav> [--clap <plugi
   -o, --out <file>    where to write the WAV
   --clap <file>       run the finished mix through a CLAP plugin
   --clap-id <id>      which plugin, when the bundle carries more than one
+  --clap-instrument <file>
+                      a CLAP instrument that plays one track's notes,
+                      in place of the engine's voice for that track
+  --clap-instrument-id <id>
+                      which instrument, when the bundle carries more than one
+  --clap-track <n>    the track the instrument plays (with --clap-instrument)
   --list-clap <file>  list what a bundle carries, and exit
 
 A `.clap` is a dynamic library, which is why this exists at all: the browser
-renderer cannot load one. See docs/workstreams.md \u{a7}9.";
+renderer cannot load one. See docs/workstreams.md \u{a7}9 and \u{a7}13.";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,7 +130,14 @@ fn collect_stems(
 /// `renderLoop` from `offline.ts`, in Rust. The engine is constructed here
 /// rather than by the caller for the same reason: a render that reused a
 /// previous instance's state would not be reproducible.
-fn render_loop(job: &Job, stem_tracks: &[usize]) -> (MultiEngine, Rendered) {
+///
+/// `mute_track` withholds one track's events: when a CLAP instrument is that
+/// track's voice, the engine's voice must not also play them (§13).
+fn render_loop(
+    job: &Job,
+    stem_tracks: &[usize],
+    mute_track: Option<usize>,
+) -> (MultiEngine, Rendered) {
     let mut engine = MultiEngine::new(job.sample_rate);
     for track in &job.tracks {
         let mut block = [0.0f32; PARAM_COUNT];
@@ -147,6 +160,9 @@ fn render_loop(job: &Job, stem_tracks: &[usize]) -> (MultiEngine, Rendered) {
         while ev_idx < events.len() && events[ev_idx].offset_samples <= counter {
             let ev = &events[ev_idx];
             ev_idx += 1;
+            if Some(ev.track) == mute_track {
+                continue;
+            }
             // -1 / false, exactly as worklet.js sends them: use the patch's
             // glide, no legato.
             if ev.kind == 0 {
@@ -192,6 +208,68 @@ fn render_tail(engine: &mut MultiEngine, total: usize, stem_tracks: &[usize]) ->
         written += n;
     }
     Rendered { l, r, stems }
+}
+
+/// Expands one track's loop events into absolute frames across every loop
+/// pass, firing exactly where `render_loop`'s wrapping counter would fire
+/// them — plus a release per key still held where the tail begins, which is
+/// this path's `all_notes_off`.
+///
+/// The whole span is expanded up front because an instrument is driven the
+/// other way round from the engine: whole blocks with in-block offsets, not
+/// blocks split at event boundaries (§13). Sharing the engine's loop would
+/// force its splitting onto a plugin that never asked for it.
+fn instrument_notes(job: &Job, track: usize) -> Vec<clap_host::NoteEvent> {
+    let length = job.loop_.length_samples;
+    let total = job.loop_frames;
+    let mut out = Vec::new();
+    let mut held: Vec<u8> = Vec::new();
+    let mut base = 0usize;
+    loop {
+        for ev in &job.loop_.events {
+            if ev.track != track {
+                continue;
+            }
+            // An offset past the loop length never fires in the engine path
+            // either: the counter wraps before reaching it.
+            if length > 0 && ev.offset_samples >= length {
+                continue;
+            }
+            let frame = base + ev.offset_samples;
+            if frame >= total {
+                continue;
+            }
+            let key = ev.note.round().clamp(0.0, 127.0) as u8;
+            let on = ev.kind == 0;
+            out.push(clap_host::NoteEvent {
+                frame,
+                on,
+                key,
+                velocity: ev.velocity,
+            });
+            if on {
+                if !held.contains(&key) {
+                    held.push(key);
+                }
+            } else {
+                held.retain(|k| *k != key);
+            }
+        }
+        base += length;
+        if length == 0 || base >= total {
+            break;
+        }
+    }
+    // Sorted so the releases arrive in one order however the notes were
+    // written; `frame == total` lands on the first frame of the tail.
+    held.sort_unstable();
+    out.extend(held.into_iter().map(|key| clap_host::NoteEvent {
+        frame: total,
+        on: false,
+        key,
+        velocity: 0.0,
+    }));
+    out
 }
 
 // ------------------------------------------------------------------------ wav
@@ -274,6 +352,9 @@ fn run() -> Result<String, String> {
     let mut out = None;
     let mut clap_path: Option<String> = None;
     let mut clap_id: Option<String> = None;
+    let mut instrument_path: Option<String> = None;
+    let mut instrument_id: Option<String> = None;
+    let mut instrument_track: Option<usize> = None;
     let mut list_clap: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
@@ -289,6 +370,22 @@ fn run() -> Result<String, String> {
             "--clap-id" => {
                 i += 1;
                 clap_id = args.get(i).cloned();
+            }
+            "--clap-instrument" => {
+                i += 1;
+                instrument_path = args.get(i).cloned();
+            }
+            "--clap-instrument-id" => {
+                i += 1;
+                instrument_id = args.get(i).cloned();
+            }
+            "--clap-track" => {
+                i += 1;
+                let raw = args.get(i).ok_or("--clap-track needs a track number")?;
+                instrument_track =
+                    Some(raw.parse().map_err(|_| {
+                        format!("--clap-track wants a track number, got \"{raw}\"")
+                    })?);
             }
             "--list-clap" => {
                 i += 1;
@@ -313,7 +410,7 @@ fn run() -> Result<String, String> {
             // The features are what say whether a host has to send it notes or
             // audio, so they are the useful half of a listing rather than trivia.
             let kind = if plugin.is_instrument() {
-                "  [instrument — not supported yet]"
+                "  [instrument — plays a track: --clap-instrument]"
             } else {
                 ""
             };
@@ -339,13 +436,44 @@ fn run() -> Result<String, String> {
         return Err("the job has no tracks, so there is nothing to render".into());
     }
 
+    // The pairing is checked before anything renders: half a flag pair is a
+    // mistake, not a render with a surprise in it.
+    let instrument = match (instrument_path, instrument_track) {
+        (Some(path), Some(track)) => Some((path, track)),
+        (Some(_), None) => {
+            return Err("--clap-instrument needs --clap-track <n>: which track it plays".into())
+        }
+        (None, Some(_)) => {
+            return Err("--clap-track does nothing without --clap-instrument <plugin.clap>".into())
+        }
+        (None, None) => {
+            if instrument_id.is_some() {
+                return Err(
+                    "--clap-instrument-id does nothing without --clap-instrument <plugin.clap>"
+                        .into(),
+                );
+            }
+            None
+        }
+    };
+    // Loaded before the engine runs so a missing plugin fails in milliseconds
+    // rather than after the whole render.
+    let mut instrument = match instrument {
+        Some((path, track)) => Some((
+            clap_host::HostedPlugin::load(&path, instrument_id.as_deref(), job.sample_rate)?,
+            track,
+        )),
+        None => None,
+    };
+
     let stem_tracks: Vec<usize> = if job.stems {
         job.tracks.iter().map(|t| t.track).collect()
     } else {
         Vec::new()
     };
 
-    let (mut engine, body) = render_loop(&job, &stem_tracks);
+    let mute_track = instrument.as_ref().map(|(_, track)| *track);
+    let (mut engine, body) = render_loop(&job, &stem_tracks, mute_track);
     let total = job.loop_frames + job.tail_frames;
     let mut l = body.l;
     let mut r = body.r;
@@ -368,6 +496,34 @@ fn run() -> Result<String, String> {
         }
     }
 
+    // The instrument plays its track over the whole span, tail included — its
+    // release ring is the tail, the way the engine's own voices ring out. Its
+    // output joins the mix where the engine's voice would have: added to the
+    // other tracks, before any mix effect.
+    let mut played = None;
+    if let Some((plugin, track)) = instrument.as_mut() {
+        let notes = instrument_notes(&job, *track);
+        let mut il = vec![0.0; total];
+        let mut ir = vec![0.0; total];
+        plugin.render_notes(&notes, &mut il, &mut ir)?;
+        for i in 0..total {
+            l[i] += il[i];
+            r[i] += ir[i];
+        }
+        // The track's stem is what its voice produced, and its voice is now the
+        // plugin; the engine's silence would be a stem-shaped lie.
+        for (t, sl, sr) in stems.iter_mut() {
+            if t == track {
+                sl.copy_from_slice(&il);
+                sr.copy_from_slice(&ir);
+            }
+        }
+        played = Some(format!(
+            "track {track} played by {} ({})",
+            plugin.name, plugin.id
+        ));
+    }
+
     // The plugin sees the finished mix. Stems are left alone deliberately: they
     // are what each track produced, and a master-bus effect is not part of that.
     let mut hosted = None;
@@ -387,6 +543,9 @@ fn run() -> Result<String, String> {
         if job.tracks.len() == 1 { "" } else { "s" },
         20.0 * peak_of(&l, &r).max(1.0e-9).log10(),
     );
+    if let Some(instrument) = played {
+        report.push_str(&format!("\n      {instrument}"));
+    }
     if let Some(plugin) = hosted {
         report.push_str(&format!("\n      through {plugin}"));
     }
@@ -449,6 +608,73 @@ mod tests {
         assert_eq!(to_pcm16(f32::NAN), 0);
         assert_eq!(to_pcm16(f32::INFINITY), 0);
         assert_eq!(to_pcm16(f32::NEG_INFINITY), 0);
+    }
+
+    fn a_job(length: usize, loop_frames: usize, events: Vec<JobEvent>) -> Job {
+        Job {
+            sample_rate: 48_000.0,
+            tracks: Vec::new(),
+            loop_: JobLoop {
+                length_samples: length,
+                events,
+            },
+            loop_frames,
+            tail_frames: 0,
+            stems: false,
+        }
+    }
+
+    fn ev(offset_samples: usize, track: usize, kind: u8, note: f32) -> JobEvent {
+        JobEvent {
+            offset_samples,
+            track,
+            kind,
+            note,
+            velocity: 0.8,
+        }
+    }
+
+    /// The expansion has to fire where the engine's wrapping counter fires:
+    /// once per loop pass, at `pass * length + offset`, for this track only.
+    #[test]
+    fn instrument_notes_repeat_per_loop_pass_and_ignore_other_tracks() {
+        let job = a_job(
+            1000,
+            2000,
+            vec![ev(0, 0, 0, 57.0), ev(100, 1, 0, 60.0), ev(500, 0, 1, 57.0)],
+        );
+        let notes = instrument_notes(&job, 0);
+        let frames: Vec<(usize, bool)> = notes.iter().map(|n| (n.frame, n.on)).collect();
+        assert_eq!(
+            frames,
+            vec![(0, true), (500, false), (1000, true), (1500, false)]
+        );
+        assert!(notes.iter().all(|n| n.key == 57));
+    }
+
+    /// A key still held when the loop span ends gets its release on the first
+    /// frame of the tail — the engine path's `all_notes_off`, written as an
+    /// event because that is the only language an instrument plugin has.
+    #[test]
+    fn instrument_notes_release_held_keys_where_the_tail_begins() {
+        let job = a_job(1000, 2000, vec![ev(0, 0, 0, 57.0), ev(200, 0, 0, 60.0)]);
+        let notes = instrument_notes(&job, 0);
+        let releases: Vec<(usize, u8)> = notes
+            .iter()
+            .filter(|n| !n.on)
+            .map(|n| (n.frame, n.key))
+            .collect();
+        // One release per held key, not per note-on that held it.
+        assert_eq!(releases, vec![(2000, 57), (2000, 60)]);
+    }
+
+    /// An event past the loop length never fires in the engine path — the
+    /// counter wraps before reaching it — so it must not fire here either.
+    #[test]
+    fn instrument_notes_drop_events_the_loop_never_reaches() {
+        let job = a_job(1000, 2000, vec![ev(1200, 0, 0, 57.0)]);
+        let notes = instrument_notes(&job, 0);
+        assert!(notes.is_empty(), "got {notes:?}");
     }
 
     #[test]
