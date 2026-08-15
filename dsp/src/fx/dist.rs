@@ -15,6 +15,7 @@
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::{DcBlock, OnePole};
+use super::Effect;
 
 /// Maximum pre-gain at `drive = 1` (≈ +28 dB).
 const MAX_PRE: f32 = 24.0;
@@ -82,15 +83,17 @@ impl Dist {
             cached_pre: -1.0,
         }
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Dist {
+    fn reset(&mut self) {
         self.lp[0].reset();
         self.lp[1].reset();
         self.dc[0].reset();
         self.dc[1].reset();
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
         let mode = super::clamp_idx(p[crate::params::DIST_MODE], 0.0, 2.0);
         if mode != self.mode {
             self.mode = mode;
@@ -114,11 +117,11 @@ impl Dist {
         );
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         self.mix.current() > 0.0 || self.mix.target() > 0.0
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let n = l.len();
         let mut mix = self.mix.block(n);
         let drive = self.drive.advance(n);

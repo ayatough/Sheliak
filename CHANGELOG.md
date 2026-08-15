@@ -12,6 +12,66 @@ policy.
 
 ## [Unreleased]
 
+### Added
+- **A track can be played by a CLAP plugin, named in the document.** A new
+  ```` ```plugin ```` fence is a track like a ```` ```synth ```` fence is,
+  taking an index in the same sequence and binding to a `loop` line the same
+  way:
+
+  ````markdown
+  ```plugin id=pad from=studio.kx.distrho.Nekobi
+  cutoff: 60
+  decay:  90
+  ```
+  ````
+
+  `from=` names the plugin, not a file: the renderer finds it by id on the CLAP
+  search path (`CLAP_PATH`, `~/.clap`, `/usr/lib/clap`, `/usr/local/lib/clap`),
+  because which file carries a plugin is a property of the machine and not of
+  the song. The body is that plugin's parameters, written either as a
+  percentage of the parameter's own range (`60%`) or as the plugin's own number
+  (`60`); a name it does not have, or a value outside its range, is an error
+  naming the plugin. `sheliak-render --list-clap <file> --clap-id <id>` prints
+  the names, ranges and defaults.
+
+  **A plugin track is silent in the browser and in `sheliak render`**, because
+  both drive the engine and neither can load a `.clap`. The other tracks play
+  normally, and `sheliak check` warns which track is silent and how to hear it.
+- **A native renderer, and CLAP effects on the mix.** `sheliak render song.md
+  --emit-job job.json` compiles a document to a render job — the flat parameter
+  block per track and the loop's events, no Markdown — and `sheliak-render
+  job.json -o out.wav` synthesizes it without a browser or a wasm runtime. That
+  is what makes plugin hosting possible at all: a `.clap` is a dynamic library
+  and cannot be loaded in a tab. `--clap <plugin.clap>` runs the finished mix
+  through an effect.
+- **A CLAP instrument can be a track's voice.** `sheliak-render job.json -o
+  out.wav --clap-instrument <plugin.clap> --clap-track <n>` sends that track's
+  notes to the plugin — sample-accurately, in the note dialect the plugin
+  declares — and mixes its output with the other tracks in place of the
+  engine's voice; the track's stem becomes the plugin's output. The host now
+  builds each plugin's audio port layout from what it declares instead of
+  assuming stereo in and out, which is what made instruments (zero audio
+  inputs) hostable at all. Verified against DPF's Kars and Nekobi; Nekobi
+  renders bit-identically twice, and Kars measurably cannot — its excitation
+  noise is unseeded upstream — which the tests record by name.
+
+### Notes
+
+- **A render through a plugin is reproducible against that build of that
+  plugin, and nothing weaker.** CLAP guarantees nothing about determinism — a
+  plugin may read a clock or use an unseeded RNG, and no host can stop it — so
+  Sheliak's own guarantee stops at its own engine. The plugin tests measure it
+  per plugin rather than assuming it.
+- **The native and wasm builds of the engine agree to one LSB, not to the
+  byte.** `scripts/check-render-parity.sh` renders a document both ways and
+  reports the difference: on a document using every effect, 6% of samples
+  differ and every difference is a single least-significant bit at 16 bits
+  (about -90 dBFS); a track with no effects is byte-for-byte identical. The
+  divergence is in the effect chain, where `tanh`, `exp` and `sin` are, and the
+  two targets reach different implementations of them. Determinism itself is
+  untouched — the same document, seed and *build* still produce the same bytes
+  — but a golden audio hash pins an engine build rather than a version.
+
 ## [0.1.0] - 2026-08-14
 
 ### Added

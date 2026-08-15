@@ -77,6 +77,47 @@ pub(crate) fn set(s: &mut Smoother, v: f32, first: bool) {
     }
 }
 
+/// What the chain needs from an effect, and the whole of it.
+///
+/// The parameter slice is the effect's own block — it never sees the rest of
+/// the patch, and it never sees a name, a unit or a default. Those live on the
+/// TypeScript side, where the DSL does; an effect here reads numbers out of
+/// `p` by offset and nothing else. That is non-negotiable 1 restated one level
+/// down: the chain does not know the DSL either.
+///
+/// `new()` is deliberately not on the trait. It runs inside `init()`, it is the
+/// only place an effect may allocate, and it returns `Self` rather than a boxed
+/// trait object, so it stays an inherent constructor.
+pub(crate) trait Effect {
+    /// Reads this effect's parameter block. Called while audio runs, so it
+    /// moves smoother targets rather than values — `first` snaps instead.
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool);
+
+    /// Would this effect change the signal? A chain that is present but silent
+    /// costs nothing because of this.
+    fn should_process(&self) -> bool;
+
+    /// Clears buffers and filter memory. Called on the rising edge into
+    /// audible, so a tail from minutes ago can never burst back in.
+    fn reset(&mut self);
+
+    /// Processes the stereo bus in place. **No allocation.**
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32);
+
+    /// One turn in the chain. The default skips a silent effect entirely; an
+    /// effect whose state goes stale while idle overrides this instead of the
+    /// chain carrying a special case for it.
+    fn run(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+        if self.should_process() {
+            self.process(l, r, sample_rate);
+        }
+    }
+}
+
+/// What an effect that is not in the chain reads. Its own slot no longer
+/// exists, and silence is what the region held before it was written.
+const SILENT_SLOT: [f32; FX_SLOT_STRIDE] = [0.0; FX_SLOT_STRIDE];
+
 pub struct Fx {
     sample_rate: f32,
     order: [u32; FX_SLOTS],
@@ -84,44 +125,51 @@ pub struct Fx {
     /// Indexed by type id; slot 0 is unused.
     was_active: [bool; FX_TYPE_COUNT + 1],
     any: bool,
-    dist: Dist,
-    eq: Eq,
-    chorus: Chorus,
-    phaser: Phaser,
-    flanger: Flanger,
-    delay: Delay,
-    reverb: Reverb,
-    mbcomp: MbComp,
+    /// One effect per type, indexed by `type id - 1`. The array length is
+    /// `FX_TYPE_COUNT`, so adding a type without registering it here does not
+    /// compile — which is the point of holding them in an array rather than in
+    /// eight named fields with four `match` statements over them.
+    effects: [Box<dyn Effect>; FX_TYPE_COUNT],
 }
 
 impl Fx {
-    /// Allocates every FX buffer at its maximum size. `init()` only.
+    /// Allocates every FX buffer at its maximum size. `init()` only — the
+    /// boxes below are the last allocation the chain performs.
     pub fn new(sample_rate: f32) -> Self {
+        // In type-id order: index i is type id i + 1.
+        let effects: [Box<dyn Effect>; FX_TYPE_COUNT] = [
+            Box::new(Dist::new(sample_rate)),
+            Box::new(Eq::new(sample_rate)),
+            Box::new(Chorus::new(sample_rate)),
+            Box::new(Phaser::new(sample_rate)),
+            Box::new(Flanger::new(sample_rate)),
+            Box::new(Delay::new(sample_rate)),
+            Box::new(Reverb::new(sample_rate)),
+            Box::new(MbComp::new(sample_rate)),
+        ];
         Fx {
             sample_rate,
             order: [FX_NONE; FX_SLOTS],
             was_active: [false; FX_TYPE_COUNT + 1],
             any: false,
-            dist: Dist::new(sample_rate),
-            eq: Eq::new(sample_rate),
-            chorus: Chorus::new(sample_rate),
-            phaser: Phaser::new(sample_rate),
-            flanger: Flanger::new(sample_rate),
-            delay: Delay::new(sample_rate),
-            reverb: Reverb::new(sample_rate),
-            mbcomp: MbComp::new(sample_rate),
+            effects,
         }
     }
 
-    fn params_for(p: &[f32; PARAM_COUNT], ty: u32) -> &[f32] {
-        let base = FX_PARAMS_BASE + (ty as usize - 1) * FX_PARAMS_STRIDE;
-        &p[base..base + FX_PARAMS_STRIDE]
+    /// The effect registered for a type id, or `None` for `FX_NONE` and for
+    /// anything out of range. Out of range is ignored, never a panic.
+    fn effect(&mut self, ty: u32) -> Option<&mut Box<dyn Effect>> {
+        let index = (ty as usize).checked_sub(1)?;
+        self.effects.get_mut(index)
     }
 
     pub fn apply_patch(&mut self, p: &[f32; PARAM_COUNT], first: bool) {
-        // Decode the order, dropping duplicates (each type at most once).
+        // Decode the order, dropping duplicates (each type at most once), and
+        // remember which slot each type landed in — that slot is where its
+        // parameters are.
         let mut order = [FX_NONE; FX_SLOTS];
         let mut seen = [false; FX_TYPE_COUNT + 1];
+        let mut slot_of = [None; FX_TYPE_COUNT + 1];
         let mut any = false;
         for (i, slot) in order.iter_mut().enumerate() {
             let ty = clamp_idx(p[FX_ORDER_BASE + i], 0.0, FX_TYPE_COUNT as f32);
@@ -129,64 +177,45 @@ impl Fx {
                 continue;
             }
             seen[ty as usize] = true;
+            slot_of[ty as usize] = Some(i);
             *slot = ty;
             any = true;
         }
         self.order = order;
         self.any = any;
 
+        // Every effect reads a block, in type-id order, whether or not it is in
+        // the chain: an effect that has just been dropped still has to land on
+        // silence, or adding it back would snap from a value minutes old.
+        //
+        // A type in the chain reads the block of *its slot*; one that is not
+        // reads zeros, which is what the writing side leaves in an unused slot
+        // and therefore what it used to read from its own vacated region.
         let sr = self.sample_rate;
-        self.dist
-            .apply_patch(Self::params_for(p, FX_DIST), sr, first);
-        self.eq.apply_patch(Self::params_for(p, FX_EQ), sr, first);
-        self.chorus
-            .apply_patch(Self::params_for(p, FX_CHORUS), sr, first);
-        self.phaser
-            .apply_patch(Self::params_for(p, FX_PHASER), sr, first);
-        self.flanger
-            .apply_patch(Self::params_for(p, FX_FLANGER), sr, first);
-        self.delay
-            .apply_patch(Self::params_for(p, FX_DELAY), sr, first);
-        self.reverb
-            .apply_patch(Self::params_for(p, FX_REVERB), sr, first);
-        self.mbcomp
-            .apply_patch(Self::params_for(p, FX_MBCOMP), sr, first);
+        for (index, effect) in self.effects.iter_mut().enumerate() {
+            let slot = slot_of[index + 1];
+            let block = match slot {
+                Some(slot) => {
+                    let base = FX_SLOT_BASE + slot * FX_SLOT_STRIDE;
+                    &p[base..base + FX_SLOT_STRIDE]
+                }
+                None => &SILENT_SLOT[..],
+            };
+            effect.apply_patch(block, sr, first);
+        }
 
         // Rising edge (absent/silent → active) clears stale buffers.
         for ty in 1..=FX_TYPE_COUNT as u32 {
-            let active = seen[ty as usize] && self.wants(ty);
-            if active && !self.was_active[ty as usize] {
-                self.reset_type(ty);
+            let in_chain = seen[ty as usize];
+            let was_active = self.was_active[ty as usize];
+            let Some(effect) = self.effect(ty) else {
+                continue;
+            };
+            let active = in_chain && effect.should_process();
+            if active && !was_active {
+                effect.reset();
             }
             self.was_active[ty as usize] = active;
-        }
-    }
-
-    fn wants(&self, ty: u32) -> bool {
-        match ty {
-            FX_DIST => self.dist.should_process(),
-            FX_EQ => self.eq.should_process(),
-            FX_CHORUS => self.chorus.should_process(),
-            FX_PHASER => self.phaser.should_process(),
-            FX_FLANGER => self.flanger.should_process(),
-            FX_DELAY => self.delay.should_process(),
-            FX_REVERB => self.reverb.should_process(),
-            FX_MBCOMP => self.mbcomp.should_process(),
-            _ => false,
-        }
-    }
-
-    fn reset_type(&mut self, ty: u32) {
-        match ty {
-            FX_DIST => self.dist.reset(),
-            FX_EQ => self.eq.reset(),
-            FX_CHORUS => self.chorus.reset(),
-            FX_PHASER => self.phaser.reset(),
-            FX_FLANGER => self.flanger.reset(),
-            FX_DELAY => self.delay.reset(),
-            FX_REVERB => self.reverb.reset(),
-            FX_MBCOMP => self.mbcomp.reset(),
-            _ => {}
         }
     }
 
@@ -198,8 +227,8 @@ impl Fx {
 
     /// Clears every effect (used by `init()`-time construction and tests).
     pub fn reset_all(&mut self) {
-        for ty in 1..=FX_TYPE_COUNT as u32 {
-            self.reset_type(ty);
+        for effect in self.effects.iter_mut() {
+            effect.reset();
         }
     }
 
@@ -210,47 +239,9 @@ impl Fx {
         }
         let sr = self.sample_rate;
         for i in 0..FX_SLOTS {
-            match self.order[i] {
-                FX_DIST => {
-                    if self.dist.should_process() {
-                        self.dist.process(l, r, sr);
-                    }
-                }
-                FX_EQ => {
-                    if self.eq.should_process() {
-                        self.eq.process(l, r, sr);
-                    } else {
-                        // Keep the biquad memory from going stale while flat.
-                        self.eq.reset();
-                    }
-                }
-                FX_CHORUS => {
-                    if self.chorus.should_process() {
-                        self.chorus.process(l, r, sr);
-                    }
-                }
-                FX_PHASER => {
-                    if self.phaser.should_process() {
-                        self.phaser.process(l, r, sr);
-                    }
-                }
-                FX_FLANGER => {
-                    if self.flanger.should_process() {
-                        self.flanger.process(l, r, sr);
-                    }
-                }
-                FX_DELAY => {
-                    if self.delay.should_process() {
-                        self.delay.process(l, r, sr);
-                    }
-                }
-                FX_REVERB => {
-                    if self.reverb.should_process() {
-                        self.reverb.process(l, r, sr);
-                    }
-                }
-                FX_MBCOMP => self.mbcomp.process(l, r, sr),
-                _ => {}
+            let ty = self.order[i];
+            if let Some(effect) = self.effect(ty) {
+                effect.run(l, r, sr);
             }
         }
     }

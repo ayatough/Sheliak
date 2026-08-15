@@ -21,8 +21,8 @@ import {
   FX_DELAY,
   FX_REVERB,
   FX_MBCOMP,
-  FX_PARAMS_BASE,
-  FX_PARAMS_STRIDE,
+  FX_SLOT_BASE,
+  FX_SLOT_STRIDE,
   DIST_DRIVE,
   DIST_MIX,
   DIST_MODE,
@@ -168,83 +168,214 @@ export type FxInput = { [K in FxType]: { type: K; params: Partial<FxParamMap[K]>
 
 export const DIST_MODES: Record<string, number> = { tanh: 0, fold: 1, clip: 2 };
 
-export const FX_TYPE_IDS: Record<FxType, number> = {
-  dist: FX_DIST,
-  eq: FX_EQ,
-  chorus: FX_CHORUS,
-  phaser: FX_PHASER,
-  flanger: FX_FLANGER,
-  delay: FX_DELAY,
-  reverb: FX_REVERB,
-  comp: FX_MBCOMP,
+// ----------------------------------------------------------------- descriptors
+
+/**
+ * How a parameter is spelled in the document and shown back to the reader.
+ *
+ * This is the DSL's half of the contract and it lives here on purpose: the DSP
+ * core is handed a number at an offset and never learns that the number was
+ * written `-6dB` (non-negotiable 1). The IR always carries the *param block's*
+ * unit — `db-linear` means the DSL says dB and the IR holds linear gain, which
+ * is why it needs a spelling of its own.
+ */
+export type FxUnit =
+  | 'norm' // bare 0..1, shown rounded
+  | 'ratio' // written and shown as a percentage
+  | 'db'
+  | 'db-linear' // dB in the document, linear in the IR and the block
+  | 'hz'
+  | 'seconds'
+  | 'count' // a bare integer or ratio, shown as written
+  | 'bool'
+  | 'enum';
+
+export interface FxParamDesc<P> {
+  /** The key as written in the fence. */
+  key: string;
+  /** The field it lands on in this effect's IR. */
+  field: keyof P & string;
+  /** Index inside the effect's parameter block. */
+  offset: number;
+  unit: FxUnit;
+  /** Default, already in IR units. `beats` is for a musical default. */
+  value?: number | boolean | string;
+  /** A default the bpm resolves, in beats — delay's `3/16`. */
+  beats?: number;
+  /** `enum` only: the spellings, and what each is worth in the block. */
+  values?: Record<string, number>;
+  /** Editable range. Domain facts — a phaser has 2..8 stages — not GUI ones. */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** Shown instead of the key with its underscores spaced out. */
+  label?: string;
+}
+
+export interface FxDesc<P> {
+  id: number;
+  /** Every spelling accepted for `type:`; the first is the canonical one. */
+  aliases: string[];
+  params: FxParamDesc<P>[];
+}
+
+/**
+ * The effect set, described once.
+ *
+ * Everything below this point is derived from it — the type ids, the accepted
+ * spellings, the allowed keys, the defaults, the flattening into the parameter
+ * block and the expanded view. Adding an effect is an entry here plus a file in
+ * `dsp/src/fx/`, rather than an edit to five tables that have to agree.
+ *
+ * `field` is typed against the effect's IR, so a typo in one is a type error
+ * rather than a parameter that silently never gets written.
+ */
+export const FX_DESCRIPTORS: { [K in FxType]: FxDesc<FxParamMap[K]> } = {
+  dist: {
+    id: FX_DIST,
+    aliases: ['dist', 'distortion'],
+    params: [
+      { key: 'drive', field: 'drive', offset: DIST_DRIVE, unit: 'norm', value: 0.3 },
+      { key: 'mix', field: 'mix', offset: DIST_MIX, unit: 'ratio', value: 1 },
+      { key: 'mode', field: 'mode', offset: DIST_MODE, unit: 'enum', value: 'tanh', values: DIST_MODES },
+      { key: 'tone', field: 'toneHz', offset: DIST_TONE_HZ, unit: 'hz', value: 20000 },
+    ],
+  },
+  eq: {
+    id: FX_EQ,
+    aliases: ['eq'],
+    params: [
+      { key: 'low', field: 'lowDb', offset: EQ_LOW_DB, unit: 'db', value: 0, min: -24, max: 24 },
+      { key: 'mid', field: 'midDb', offset: EQ_MID_DB, unit: 'db', value: 0, min: -24, max: 24 },
+      { key: 'high', field: 'highDb', offset: EQ_HIGH_DB, unit: 'db', value: 0, min: -24, max: 24 },
+      { key: 'mid_freq', field: 'midFreqHz', offset: EQ_MID_FREQ_HZ, unit: 'hz', value: 1000 },
+    ],
+  },
+  chorus: {
+    id: FX_CHORUS,
+    aliases: ['chorus'],
+    params: [
+      { key: 'rate', field: 'rateHz', offset: CHORUS_RATE_HZ, unit: 'hz', value: 0.8, min: 0.01, max: 20 },
+      { key: 'depth', field: 'depth', offset: CHORUS_DEPTH, unit: 'ratio', value: 0.3 },
+      { key: 'mix', field: 'mix', offset: CHORUS_MIX, unit: 'ratio', value: 0.35 },
+    ],
+  },
+  phaser: {
+    id: FX_PHASER,
+    aliases: ['phaser'],
+    params: [
+      { key: 'rate', field: 'rateHz', offset: PHASER_RATE_HZ, unit: 'hz', value: 0.4, min: 0.01, max: 20 },
+      { key: 'depth', field: 'depth', offset: PHASER_DEPTH, unit: 'ratio', value: 0.7 },
+      { key: 'feedback', field: 'feedback', offset: PHASER_FEEDBACK, unit: 'ratio', value: 0.3 },
+      { key: 'mix', field: 'mix', offset: PHASER_MIX, unit: 'ratio', value: 0.4 },
+      { key: 'stages', field: 'stages', offset: PHASER_STAGES, unit: 'count', value: 6, min: 2, max: 8, step: 2 },
+      { key: 'center', field: 'centerHz', offset: PHASER_CENTER_HZ, unit: 'hz', value: 800 },
+    ],
+  },
+  flanger: {
+    id: FX_FLANGER,
+    aliases: ['flanger'],
+    params: [
+      { key: 'rate', field: 'rateHz', offset: FLANGER_RATE_HZ, unit: 'hz', value: 0.25, min: 0.01, max: 20 },
+      { key: 'depth', field: 'depth', offset: FLANGER_DEPTH, unit: 'ratio', value: 0.6 },
+      { key: 'feedback', field: 'feedback', offset: FLANGER_FEEDBACK, unit: 'ratio', value: 0.5 },
+      { key: 'mix', field: 'mix', offset: FLANGER_MIX, unit: 'ratio', value: 0.35 },
+    ],
+  },
+  delay: {
+    id: FX_DELAY,
+    aliases: ['delay'],
+    params: [
+      // 3/16 = 0.75 beat, so the default moves with the document's bpm.
+      { key: 'time', field: 'timeS', offset: DELAY_TIME_S, unit: 'seconds', beats: 0.75, min: 0.001, max: 2 },
+      { key: 'feedback', field: 'feedback', offset: DELAY_FEEDBACK, unit: 'ratio', value: 0.4 },
+      { key: 'mix', field: 'mix', offset: DELAY_MIX, unit: 'ratio', value: 0.25 },
+      { key: 'pingpong', field: 'pingpong', offset: DELAY_PINGPONG, unit: 'bool', value: true, label: 'ping-pong' },
+      { key: 'tone', field: 'toneHz', offset: DELAY_TONE_HZ, unit: 'hz', value: 4000 },
+    ],
+  },
+  reverb: {
+    id: FX_REVERB,
+    aliases: ['reverb'],
+    params: [
+      { key: 'size', field: 'size', offset: REVERB_SIZE, unit: 'ratio', value: 0.6 },
+      { key: 'damp', field: 'damp', offset: REVERB_DAMP, unit: 'ratio', value: 0.5 },
+      { key: 'mix', field: 'mix', offset: REVERB_MIX, unit: 'ratio', value: 0.2 },
+      { key: 'predelay', field: 'predelayS', offset: REVERB_PREDELAY_S, unit: 'seconds', value: 0.02, min: 0, max: 0.25, step: 0.001 },
+      { key: 'width', field: 'width', offset: REVERB_WIDTH, unit: 'ratio', value: 1 },
+    ],
+  },
+  comp: {
+    id: FX_MBCOMP,
+    aliases: ['comp', 'mbcomp'],
+    params: [
+      { key: 'thresh_low', field: 'threshLowDb', offset: MBCOMP_THRESH_LOW_DB, unit: 'db', value: -24, min: -80, max: 0 },
+      { key: 'thresh_mid', field: 'threshMidDb', offset: MBCOMP_THRESH_MID_DB, unit: 'db', value: -24, min: -80, max: 0 },
+      { key: 'thresh_high', field: 'threshHighDb', offset: MBCOMP_THRESH_HIGH_DB, unit: 'db', value: -24, min: -80, max: 0 },
+      { key: 'ratio', field: 'ratio', offset: MBCOMP_RATIO, unit: 'count', value: 3, min: 1, max: 20 },
+      { key: 'attack', field: 'attackS', offset: MBCOMP_ATTACK_S, unit: 'seconds', value: 0.01, min: 0.0005, max: 1 },
+      { key: 'release', field: 'releaseS', offset: MBCOMP_RELEASE_S, unit: 'seconds', value: 0.12, min: 0.005, max: 5 },
+      { key: 'makeup', field: 'makeup', offset: MBCOMP_MAKEUP, unit: 'db-linear', value: 1, min: -24, max: 24 }, // 0dB
+    ],
+  },
 };
+
+const FX_TYPES = Object.keys(FX_DESCRIPTORS) as FxType[];
+
+/** Untyped view of a descriptor, for the loops that cannot name the effect. */
+const descOf = (type: FxType): FxDesc<Record<string, unknown>> =>
+  FX_DESCRIPTORS[type] as unknown as FxDesc<Record<string, unknown>>;
+
+const fromTypes = <V>(f: (type: FxType) => V): Record<FxType, V> =>
+  Object.fromEntries(FX_TYPES.map((t) => [t, f(t)])) as Record<FxType, V>;
+
+export const FX_TYPE_IDS: Record<FxType, number> = fromTypes((t) => FX_DESCRIPTORS[t].id);
 
 /** DSL spellings accepted for `type:` (docs/syntax.md). */
-export const FX_ALIASES: Record<string, FxType> = {
-  dist: 'dist',
-  distortion: 'dist',
-  eq: 'eq',
-  chorus: 'chorus',
-  phaser: 'phaser',
-  flanger: 'flanger',
-  delay: 'delay',
-  reverb: 'reverb',
-  comp: 'comp',
-  mbcomp: 'comp',
-};
+export const FX_ALIASES: Record<string, FxType> = Object.fromEntries(
+  FX_TYPES.flatMap((t) => FX_DESCRIPTORS[t].aliases.map((a) => [a, t] as const)),
+);
+
+/**
+ * Separates a namespace from a name in an effect id.
+ *
+ * Built-in effects are bare names — `reverb`, `comp` — and that set is allowed
+ * to grow. An effect that comes from outside the engine has to be named without
+ * risking a collision with a built-in that does not exist yet, so the separator
+ * is reserved now, before anything uses it: an id containing one is never a
+ * built-in, whatever gets added later. Nothing hosts plugins yet
+ * (docs/workstreams.md §8, §9); reserving the spelling costs nothing and
+ * un-reserving it later would be a breaking change.
+ */
+export const FX_NAMESPACE = ':';
+
+/** Is this id claiming to come from outside the built-in set? */
+export function isNamespacedFx(id: string): boolean {
+  return id.includes(FX_NAMESPACE);
+}
 
 /** Allowed DSL keys per effect (`type` is added by the parser). */
-export const FX_KEYS: Record<FxType, string[]> = {
-  dist: ['drive', 'mix', 'mode', 'tone'],
-  eq: ['low', 'mid', 'high', 'mid_freq'],
-  chorus: ['rate', 'depth', 'mix'],
-  phaser: ['rate', 'depth', 'feedback', 'mix', 'stages', 'center'],
-  flanger: ['rate', 'depth', 'feedback', 'mix'],
-  delay: ['time', 'feedback', 'mix', 'pingpong', 'tone'],
-  reverb: ['size', 'damp', 'mix', 'predelay', 'width'],
-  comp: ['thresh_low', 'thresh_mid', 'thresh_high', 'ratio', 'attack', 'release', 'makeup'],
-};
+export const FX_KEYS: Record<FxType, string[]> = fromTypes((t) =>
+  descOf(t).params.map((p) => p.key),
+);
 
 // ------------------------------------------------------------------ defaults
 
-/** docs/syntax.md per-effect defaults. `bpm` resolves delay's musical default (3/16). */
+/**
+ * docs/syntax.md per-effect defaults. `bpm` resolves delay's musical default
+ * (3/16). Built from the descriptors, so the defaults documented there and the
+ * defaults the parser fills in cannot drift apart.
+ *
+ * The cast is the one place the descriptors give up on types: `params` is
+ * assembled key by key, and only the `field` typing above keeps the keys
+ * honest. `fx.test.ts` asserts the whole expanded default for every effect.
+ */
 export function defaultFxEntry(type: FxType, bpm: number): FxIR {
-  switch (type) {
-    case 'dist':
-      return { type: 'dist', params: { drive: 0.3, mix: 1, mode: 'tanh', toneHz: 20000 } };
-    case 'eq':
-      return { type: 'eq', params: { lowDb: 0, midDb: 0, highDb: 0, midFreqHz: 1000 } };
-    case 'chorus':
-      return { type: 'chorus', params: { rateHz: 0.8, depth: 0.3, mix: 0.35 } };
-    case 'phaser':
-      return {
-        type: 'phaser',
-        params: { rateHz: 0.4, depth: 0.7, feedback: 0.3, mix: 0.4, stages: 6, centerHz: 800 },
-      };
-    case 'flanger':
-      return { type: 'flanger', params: { rateHz: 0.25, depth: 0.6, feedback: 0.5, mix: 0.35 } };
-    case 'delay':
-      return {
-        type: 'delay',
-        // 3/16 = 0.75 beat.
-        params: { timeS: beatsToSeconds(0.75, bpm), feedback: 0.4, mix: 0.25, pingpong: true, toneHz: 4000 },
-      };
-    case 'reverb':
-      return { type: 'reverb', params: { size: 0.6, damp: 0.5, mix: 0.2, predelayS: 0.02, width: 1 } };
-    case 'comp':
-      return {
-        type: 'comp',
-        params: {
-          threshLowDb: -24,
-          threshMidDb: -24,
-          threshHighDb: -24,
-          ratio: 3,
-          attackS: 0.01,
-          releaseS: 0.12,
-          makeup: 1, // 0dB
-        },
-      };
+  const params: Record<string, unknown> = {};
+  for (const p of descOf(type).params) {
+    params[p.field] = p.beats !== undefined ? beatsToSeconds(p.beats, bpm) : p.value;
   }
+  return { type, params } as unknown as FxIR;
 }
 
 /**
@@ -264,94 +395,41 @@ export function writeNoise(p: Float32Array, noise: NoiseIR): void {
   p[NOISE_BASE + NOISE_COLOR] = NOISE_COLORS[noise.color] ?? 0;
 }
 
-/** Chain order goes into FX_ORDER slots; each effect's params into its block. */
+/**
+ * Chain order goes into the FX_ORDER slots, and each effect's parameters into
+ * the block of the slot it occupies. Position in the chain — not type — is what
+ * addresses a block, so the region stays 8 x 8 floats however many effect types
+ * come to exist, and an unused slot is left at zero.
+ */
 export function writeFxChain(p: Float32Array, chain: FxIR[]): void {
   for (let i = 0; i < FX_SLOTS; i++) {
     const entry = chain[i];
     p[FX_ORDER_BASE + i] = entry ? FX_TYPE_IDS[entry.type] : FX_NONE;
-  }
-  for (const entry of chain) {
-    writeFxParams(p, entry);
+    if (entry) writeFxParams(p, entry, i);
   }
 }
 
-function fxBase(type: FxType): number {
-  return FX_PARAMS_BASE + (FX_TYPE_IDS[type] - 1) * FX_PARAMS_STRIDE;
+export function fxSlotBase(slot: number): number {
+  return FX_SLOT_BASE + slot * FX_SLOT_STRIDE;
 }
 
-function writeFxParams(p: Float32Array, entry: FxIR): void {
-  const b = fxBase(entry.type);
-  switch (entry.type) {
-    case 'dist': {
-      const v = entry.params;
-      p[b + DIST_DRIVE] = v.drive;
-      p[b + DIST_MIX] = v.mix;
-      p[b + DIST_MODE] = DIST_MODES[v.mode] ?? 0;
-      p[b + DIST_TONE_HZ] = v.toneHz;
-      break;
-    }
-    case 'eq': {
-      const v = entry.params;
-      p[b + EQ_LOW_DB] = v.lowDb;
-      p[b + EQ_MID_DB] = v.midDb;
-      p[b + EQ_HIGH_DB] = v.highDb;
-      p[b + EQ_MID_FREQ_HZ] = v.midFreqHz;
-      break;
-    }
-    case 'chorus': {
-      const v = entry.params;
-      p[b + CHORUS_RATE_HZ] = v.rateHz;
-      p[b + CHORUS_DEPTH] = v.depth;
-      p[b + CHORUS_MIX] = v.mix;
-      break;
-    }
-    case 'phaser': {
-      const v = entry.params;
-      p[b + PHASER_RATE_HZ] = v.rateHz;
-      p[b + PHASER_DEPTH] = v.depth;
-      p[b + PHASER_FEEDBACK] = v.feedback;
-      p[b + PHASER_MIX] = v.mix;
-      p[b + PHASER_STAGES] = v.stages;
-      p[b + PHASER_CENTER_HZ] = v.centerHz;
-      break;
-    }
-    case 'flanger': {
-      const v = entry.params;
-      p[b + FLANGER_RATE_HZ] = v.rateHz;
-      p[b + FLANGER_DEPTH] = v.depth;
-      p[b + FLANGER_FEEDBACK] = v.feedback;
-      p[b + FLANGER_MIX] = v.mix;
-      break;
-    }
-    case 'delay': {
-      const v = entry.params;
-      p[b + DELAY_TIME_S] = v.timeS;
-      p[b + DELAY_FEEDBACK] = v.feedback;
-      p[b + DELAY_MIX] = v.mix;
-      p[b + DELAY_PINGPONG] = v.pingpong ? 1 : 0;
-      p[b + DELAY_TONE_HZ] = v.toneHz;
-      break;
-    }
-    case 'reverb': {
-      const v = entry.params;
-      p[b + REVERB_SIZE] = v.size;
-      p[b + REVERB_DAMP] = v.damp;
-      p[b + REVERB_MIX] = v.mix;
-      p[b + REVERB_PREDELAY_S] = v.predelayS;
-      p[b + REVERB_WIDTH] = v.width;
-      break;
-    }
-    case 'comp': {
-      const v = entry.params;
-      p[b + MBCOMP_THRESH_LOW_DB] = v.threshLowDb;
-      p[b + MBCOMP_THRESH_MID_DB] = v.threshMidDb;
-      p[b + MBCOMP_THRESH_HIGH_DB] = v.threshHighDb;
-      p[b + MBCOMP_RATIO] = v.ratio;
-      p[b + MBCOMP_ATTACK_S] = v.attackS;
-      p[b + MBCOMP_RELEASE_S] = v.releaseS;
-      p[b + MBCOMP_MAKEUP] = v.makeup;
-      break;
-    }
+/** A field's value as the parameter block wants it: a plain `f32`. */
+function toBlock(value: unknown, desc: FxParamDesc<Record<string, unknown>>): number {
+  switch (desc.unit) {
+    case 'bool':
+      return value ? 1 : 0;
+    case 'enum':
+      return desc.values?.[String(value)] ?? 0;
+    default:
+      return value as number;
+  }
+}
+
+function writeFxParams(p: Float32Array, entry: FxIR, slot: number): void {
+  const b = fxSlotBase(slot);
+  const params = entry.params as unknown as Record<string, unknown>;
+  for (const desc of descOf(entry.type).params) {
+    p[b + desc.offset] = toBlock(params[desc.field], desc);
   }
 }
 
@@ -383,66 +461,34 @@ export function fxView(chain: FxIR[]): unknown[] {
   }));
 }
 
-function fxParamsView(entry: FxIR): Record<string, unknown> {
-  switch (entry.type) {
-    case 'dist': {
-      const v = entry.params;
-      return { drive: r(v.drive), mix: pct(v.mix), mode: `${v.mode} (${DIST_MODES[v.mode] ?? 0})`, tone: hz(v.toneHz) };
+function showValue(value: unknown, desc: FxParamDesc<Record<string, unknown>>): unknown {
+  switch (desc.unit) {
+    case 'norm':
+      return r(value as number);
+    case 'ratio':
+      return pct(value as number);
+    case 'db':
+      return db(value as number);
+    case 'db-linear': {
+      const linear = value as number;
+      return `${db(linearToDb(linear))} (${r(linear)})`;
     }
-    case 'eq': {
-      const v = entry.params;
-      return { low: db(v.lowDb), mid: db(v.midDb), high: db(v.highDb), mid_freq: hz(v.midFreqHz) };
-    }
-    case 'chorus': {
-      const v = entry.params;
-      return { rate: hz(v.rateHz), depth: pct(v.depth), mix: pct(v.mix) };
-    }
-    case 'phaser': {
-      const v = entry.params;
-      return {
-        rate: hz(v.rateHz),
-        depth: pct(v.depth),
-        feedback: pct(v.feedback),
-        mix: pct(v.mix),
-        stages: v.stages,
-        center: hz(v.centerHz),
-      };
-    }
-    case 'flanger': {
-      const v = entry.params;
-      return { rate: hz(v.rateHz), depth: pct(v.depth), feedback: pct(v.feedback), mix: pct(v.mix) };
-    }
-    case 'delay': {
-      const v = entry.params;
-      return {
-        time: sec(v.timeS),
-        feedback: pct(v.feedback),
-        mix: pct(v.mix),
-        pingpong: v.pingpong,
-        tone: hz(v.toneHz),
-      };
-    }
-    case 'reverb': {
-      const v = entry.params;
-      return {
-        size: pct(v.size),
-        damp: pct(v.damp),
-        mix: pct(v.mix),
-        predelay: sec(v.predelayS),
-        width: pct(v.width),
-      };
-    }
-    case 'comp': {
-      const v = entry.params;
-      return {
-        thresh_low: db(v.threshLowDb),
-        thresh_mid: db(v.threshMidDb),
-        thresh_high: db(v.threshHighDb),
-        ratio: v.ratio,
-        attack: sec(v.attackS),
-        release: sec(v.releaseS),
-        makeup: `${db(linearToDb(v.makeup))} (${r(v.makeup)})`,
-      };
-    }
+    case 'hz':
+      return hz(value as number);
+    case 'seconds':
+      return sec(value as number);
+    case 'enum':
+      return `${String(value)} (${desc.values?.[String(value)] ?? 0})`;
+    default:
+      return value;
   }
+}
+
+function fxParamsView(entry: FxIR): Record<string, unknown> {
+  const params = entry.params as unknown as Record<string, unknown>;
+  const view: Record<string, unknown> = {};
+  for (const desc of descOf(entry.type).params) {
+    view[desc.key] = showValue(params[desc.field], desc);
+  }
+  return view;
 }

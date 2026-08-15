@@ -74,11 +74,12 @@ pub const NOISE_ENABLED: usize = 0; // 0/1
 pub const NOISE_LEVEL: usize = 1; // linear
 pub const NOISE_COLOR: usize = 2; // 0=white 1=pink
 
-// Master FX chain: processing order as a list of effect type ids, 0 = empty.
+// Per-track FX chain: processing order as a list of effect type ids, 0 = empty.
 pub const FX_ORDER_BASE: usize = 104;
 pub const FX_SLOTS: usize = 8;
 
-// Effect type ids (each type appears at most once in the chain)
+// Effect type ids. A type still appears at most once in a chain; the ids no
+// longer index the parameter region, so a new one needs no room reserved.
 pub const FX_NONE: u32 = 0;
 pub const FX_DIST: u32 = 1;
 pub const FX_EQ: u32 = 2;
@@ -90,9 +91,11 @@ pub const FX_REVERB: u32 = 7;
 pub const FX_MBCOMP: u32 = 8;
 pub const FX_TYPE_COUNT: usize = 8;
 
-// Per-effect parameter blocks: base = FX_PARAMS_BASE + (type - 1) * FX_PARAMS_STRIDE
-pub const FX_PARAMS_BASE: usize = 112;
-pub const FX_PARAMS_STRIDE: usize = 8;
+// Per-slot parameter blocks: base = FX_SLOT_BASE + slot * FX_SLOT_STRIDE.
+// Keyed by position in the chain, not by type — so the region is a fixed
+// 8 x 8 = 64 floats however many effect types exist.
+pub const FX_SLOT_BASE: usize = 112;
+pub const FX_SLOT_STRIDE: usize = 8;
 
 // Distortion (FX_DIST)
 pub const DIST_DRIVE: usize = 0; // 0..1

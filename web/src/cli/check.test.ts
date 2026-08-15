@@ -96,9 +96,13 @@ describe('what compiling cannot call an error', () => {
     ]);
   });
 
-  it('warns when there is no synth fence at all', () => {
+  it('warns when the document declares no track at all', () => {
+    // "no `synth` or `plugin` fence": a plugin fence is a track too, so a
+    // document with one is not trackless.
     const report = check([file(HOOK)]);
-    expect(report.files[0].findings.some((f) => f.message.includes('no `synth` fence'))).toBe(true);
+    expect(
+      report.files[0].findings.some((f) => f.message.includes('no `synth` or `plugin` fence')),
+    ).toBe(true);
   });
 
   it('stays quiet about bindings when the loop itself failed', () => {

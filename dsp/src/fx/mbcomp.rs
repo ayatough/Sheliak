@@ -35,6 +35,7 @@ use crate::params::*;
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::OnePole;
+use super::Effect;
 
 const LOW_XOVER_HZ: f32 = 120.0;
 const HIGH_XOVER_HZ: f32 = 2_500.0;
@@ -82,8 +83,10 @@ impl MbComp {
         }
         c
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for MbComp {
+    fn reset(&mut self) {
         for ch in 0..2 {
             self.lp_low[ch].reset();
             self.lp_high[ch].reset();
@@ -91,7 +94,7 @@ impl MbComp {
         self.env = [0.0; 3];
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
         let t = [
             MBCOMP_THRESH_LOW_DB,
             MBCOMP_THRESH_MID_DB,
@@ -126,11 +129,11 @@ impl MbComp {
         }
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         true
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], _sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], _sample_rate: f32) {
         let n = l.len();
         let mut makeup = self.makeup.block(n);
         let ratio = self.ratio.advance(n).max(1.0);

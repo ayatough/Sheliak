@@ -141,11 +141,11 @@ function readReason(e: unknown): string {
  */
 function silenceWarnings(result: CompileResult): Finding[] {
   const out: Finding[] = [];
-  const synthFences = result.fences.filter((f) => f.lang === 'synth');
+  const synthFences = result.fences.filter((f) => f.lang === 'synth' || f.lang === 'plugin');
   const loopFence = result.fences.find((f) => f.lang === 'loop');
 
   if (synthFences.length === 0) {
-    out.push({ severity: 'warning', line: 1, col: 1, message: 'no `synth` fence: the document declares no track, so nothing can play' });
+    out.push({ severity: 'warning', line: 1, col: 1, message: 'no `synth` or `plugin` fence: the document declares no track, so nothing can play' });
   }
   if (loopFence === undefined) {
     out.push({ severity: 'warning', line: 1, col: 1, message: 'no `loop` fence: nothing is scheduled, so the document is silent' });
@@ -175,14 +175,31 @@ function silenceWarnings(result: CompileResult): Finding[] {
   }
 
   const boundTracks = new Set(lines.map((l) => l.trackId));
-  for (const track of result.tracks) {
+  const trackFences = result.fences.filter((f) => f.lang === 'synth' || f.lang === 'plugin');
+  for (const track of [...result.tracks, ...result.pluginTracks]) {
     if (boundTracks.has(track.id)) continue;
-    const fence = synthFences[track.track];
+    const fence = trackFences[track.track];
     out.push({
       severity: 'warning',
       line: fence?.fenceLine ?? 1,
       col: 1,
       message: `track \`${track.id}\` has no loop line, so it never plays`,
+    });
+  }
+
+  // A plugin track is silent in the browser and in `sheliak render`, because
+  // both drive the engine and neither can load a `.clap`. Saying so is the
+  // difference between a known limitation and a mystery.
+  for (const track of result.pluginTracks) {
+    const fence = trackFences[track.track];
+    out.push({
+      severity: 'warning',
+      line: fence?.fenceLine ?? 1,
+      col: 1,
+      message:
+        `track \`${track.id}\` is played by the plugin \`${track.from}\`, which the engine ` +
+        'cannot load — it is silent here and in the browser. `sheliak render --emit-job` ' +
+        'and `sheliak-render` play it',
     });
   }
 

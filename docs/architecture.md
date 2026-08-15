@@ -147,7 +147,7 @@ just comes out wrong. Change both in the same commit.
 | Mod slots | 64–95 | 8 slots of `[SRC, DST, AMOUNT, reserved]` |
 | Noise | 96 | `ENABLED`, `LEVEL` (linear), `COLOR` (0 = white, 1 = pink) |
 | FX order | 104–111 | effect type ids in processing order, 0 = empty |
-| FX params | 112.. | 8 slots per type: `base = 112 + (type_id - 1) * 8` |
+| FX params | 112–175 | one 8-float block per chain **slot**: `base = 112 + slot * 8` |
 
 `PARAM_COUNT = 192`.
 
@@ -168,6 +168,16 @@ The chain is per track, in stereo: it runs on that track's output, after its
 voices are summed and its level applied, which is why `FX_*` lives in the track's
 own parameter block. The tracks are summed after that and the master bus does
 nothing but the soft-clip guard. Each type appears at most once.
+
+**A block belongs to a slot, not to a type.** An effect's parameters are at the
+block of the position it occupies in the chain, so moving it along the chain
+moves its parameters with it, and the region is a fixed 8 x 8 = 64 floats
+however many effect types come to exist. Type ids are names, not addresses:
+adding a ninth type needs no room reserved for it and does not move anything.
+Two instances of one type still cannot coexist — the chain drops duplicates —
+because each type has one instance per track to hold its buffers; that is the
+remaining half of the problem, and it is a memory question rather than a layout
+one ([workstreams §12](workstreams.md#12-a4-decided-before-it-is-written)).
 
 **Modulation sources**: 0 none, 1 `env.filter`, 2 `env.amp`, 3 `lfo.1`,
 4 `velocity`. Envelopes are `0..1`, the LFO is bipolar `-1..1`, velocity is `0..1`.

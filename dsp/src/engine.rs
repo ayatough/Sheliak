@@ -166,7 +166,7 @@ pub struct Track {
     noise_enabled: bool,
     noise_color: u32,
 
-    /// Master FX chain (v0.2). Buffers allocated here, never in `process()`.
+    /// This track's FX chain. Buffers allocated here, never in `process()`.
     fx: Fx,
 
     age: u64,

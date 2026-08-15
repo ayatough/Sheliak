@@ -11,6 +11,7 @@ use crate::params::{EQ_HIGH_DB, EQ_LOW_DB, EQ_MID_DB, EQ_MID_FREQ_HZ};
 use crate::smoother::{Smoother, DEFAULT_TAU};
 
 use super::common::{Biquad, BiquadCoeffs};
+use super::Effect;
 
 const LOW_HZ: f32 = 120.0;
 const HIGH_HZ: f32 = 6_000.0;
@@ -35,8 +36,10 @@ impl Eq {
             state: [[Biquad::default(); 2]; 3],
         }
     }
+}
 
-    pub fn reset(&mut self) {
+impl Effect for Eq {
+    fn reset(&mut self) {
         for band in self.state.iter_mut() {
             for ch in band.iter_mut() {
                 ch.reset();
@@ -44,7 +47,7 @@ impl Eq {
         }
     }
 
-    pub fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
+    fn apply_patch(&mut self, p: &[f32], sample_rate: f32, first: bool) {
         super::set(
             &mut self.low_db,
             super::fclamp(p[EQ_LOW_DB], -24.0, 24.0),
@@ -67,12 +70,12 @@ impl Eq {
         );
     }
 
-    pub fn should_process(&self) -> bool {
+    fn should_process(&self) -> bool {
         let flat = |s: &Smoother| s.current().abs() < 1.0e-4 && s.target().abs() < 1.0e-4;
         !(flat(&self.low_db) && flat(&self.mid_db) && flat(&self.high_db))
     }
 
-    pub fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
         let n = l.len();
         let low = self.low_db.advance(n);
         let mid = self.mid_db.advance(n);
@@ -94,6 +97,18 @@ impl Eq {
             }
             l[i] = xl;
             r[i] = xr;
+        }
+    }
+
+    /// A flat EQ is skipped like any other silent effect, but its biquads keep
+    /// the last samples they saw. Left alone, that memory is minutes stale by
+    /// the time a gain moves off zero and lands as a click; clearing it on the
+    /// way past costs nothing and makes an idle EQ bit-transparent.
+    fn run(&mut self, l: &mut [f32], r: &mut [f32], sample_rate: f32) {
+        if self.should_process() {
+            self.process(l, r, sample_rate);
+        } else {
+            self.reset();
         }
     }
 }

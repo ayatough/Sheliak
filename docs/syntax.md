@@ -30,6 +30,7 @@ A song is a Markdown document. Three info strings are recognized:
 
 ````markdown
 ```synth  id=lead seed=42
+```plugin id=pad  from=studio.kx.distrho.Kars
 ```phrase id=verse-lead key=C scale=minor res=1/16 bars=1
 ```loop   id=demo bars=2 bpm=124
 ````
@@ -42,8 +43,8 @@ maps `{ ... }`, flow sequences `[ ... ]`, and `- ` lists. `#` starts a comment.
 
 ## `synth`
 
-Each ```` ```synth ```` fence is one track. Their order in the document is the
-track index, `0` to `7`.
+Each ```` ```synth ```` fence is one track. Their order in the document — counted
+together with ```` ```plugin ```` fences — is the track index, `0` to `7`.
 
 | Attribute | Default | |
 |---|---|---|
@@ -176,6 +177,12 @@ fx:
 `distortion` and `mbcomp` are accepted as aliases for `dist` and `comp`. `ratio`
 and `stages` may be bare numbers; EQ gains and compressor thresholds require `dB`.
 
+**A `:` in an effect type is reserved.** Built-in effects are bare names and that
+set will grow; an id with a colon in it is how an effect from outside the engine
+will be named, so it can never be a built-in whatever gets added later. Nothing
+hosts plugins yet, and writing one is an error that says so rather than listing
+the built-ins you were not looking for.
+
 ### `voice`
 
 ```yaml
@@ -194,6 +201,72 @@ There is no drum sampler. Percussion is synthesized like anything else:
 - **Hi-hat** — `osc: []`, a noise section, a high-pass filter and a 40 ms decay.
 
 Both are in `web/src/defaultDoc.ts`.
+
+## `plugin`
+
+A track whose voice comes from outside the engine: a CLAP plugin plays its
+notes. It takes an index in the same sequence as `synth` fences and binds to a
+`loop` line the same way.
+
+```plugin id=pad from=studio.kx.distrho.Kars
+brightness: 60%
+damping:    35%
+```
+
+| Attribute | | |
+|---|---|---|
+| `id` | — | Required. `loop` lines bind to it |
+| `from` | — | Required. The plugin's CLAP id, which `sheliak-render --list-clap <file.clap>` prints |
+
+The body is that plugin's parameters, one per line. **Two spellings, and no
+others:**
+
+| | |
+|---|---|
+| `60%` | A position between that parameter's own minimum and maximum |
+| `800` | The plugin's own value, in whatever unit it uses |
+
+`500ms` is an error, and so is any other unit. Everywhere else in this notation
+a unit is how the document stops you confusing milliseconds with seconds; here
+Sheliak does not know what the parameter measures, and writing a unit would be a
+promise it cannot keep.
+
+**The parameter names are not checked.** Sheliak cannot know what
+`studio.kx.distrho.Kars` has — the answer is inside a dynamic library, which the
+browser cannot open at all — so a name is carried through as written and
+resolved where the plugin is loaded. A misspelling is reported by the renderer,
+naming the plugin, rather than by the editor.
+
+**A plugin track is silent in the browser**, and in `sheliak render`, because
+both drive the engine and neither can load a `.clap`. The other tracks play
+normally; `sheliak check` says which track is silent and why. To hear it, render
+through the native renderer:
+
+```bash
+sheliak render song.md --emit-job job.json
+sheliak-render job.json -o out.wav
+```
+
+The renderer finds the plugin by the id `from=` names, searching `CLAP_PATH`,
+`~/.clap`, `/usr/lib/clap` and `/usr/local/lib/clap`. A song names a plugin
+because that is a property of the song; which file carries it is a property of
+the machine reading it.
+
+To find out what a plugin accepts, ask it:
+
+```bash
+sheliak-render --list-clap /usr/lib/clap/Kars.clap --clap-id studio.kx.distrho.Kars
+  sustain                  0 .. 1   default 0
+  release                  0 .. 5   default 0.01
+  volume                   0 .. 100   default 75
+```
+
+Names are matched loosely — lowercase, with spaces and dashes as underscores —
+so a parameter the plugin calls `Cutoff Freq` is written `cutoff_freq`. A name
+the plugin does not have is an error listing the ones it does. A value outside
+the parameter's range is an error too, rather than being clamped: a number that
+far out is almost always the wrong unit, and the document is what should be
+fixed.
 
 ## `phrase`
 

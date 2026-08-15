@@ -204,6 +204,10 @@ function cmdRender(args: string[]): Outcome {
         opts.wasm = args[++i];
         if (opts.wasm === undefined) return usage('--wasm requires a path to dsp.wasm');
         break;
+      case '--emit-job':
+        opts.emitJob = args[++i];
+        if (opts.emitJob === undefined) return usage('--emit-job requires a path to write the job to');
+        break;
       default:
         if (input === undefined && !arg.startsWith('-')) input = arg;
         else return usage(`unknown argument: ${arg}`);
