@@ -27,6 +27,8 @@
 //! they will be written as parameters and never as an opaque state blob, and
 //! until the fence can carry them, defaults are the honest thing to use.
 
+use std::path::PathBuf;
+
 use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::note_ports::{NoteDialect, NotePortInfoBuffer, PluginNotePorts};
 use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent};
@@ -129,6 +131,71 @@ pub struct NoteEvent {
     pub key: u8,
     /// Normalized 0..=1, as the notation writes it and as CLAP wants it.
     pub velocity: f32,
+}
+
+/// Where CLAP plugins live on this machine, most specific first.
+///
+/// A document names a plugin, not a file — `from=studio.kx.distrho.Kars` is a
+/// property of the song, while `/usr/lib/clap/Kars.clap` is a property of the
+/// machine reading it, and a song that carried the second would stop being
+/// portable the moment somebody else opened it. So the path is searched.
+///
+/// `CLAP_PATH` is the format's own environment variable and comes first;
+/// the rest are the standard Linux locations.
+pub fn search_path() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(list) = std::env::var("CLAP_PATH") {
+        dirs.extend(list.split(':').filter(|s| !s.is_empty()).map(PathBuf::from));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(PathBuf::from(home).join(".clap"));
+    }
+    dirs.push(PathBuf::from("/usr/lib/clap"));
+    dirs.push(PathBuf::from("/usr/local/lib/clap"));
+    dirs
+}
+
+/// Every `.clap` bundle on the search path, in the order it would be found.
+fn bundles() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for dir in search_path() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut here: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "clap"))
+            .collect();
+        // Within a directory, alphabetical: two machines with the same plugins
+        // installed should resolve an id the same way.
+        here.sort();
+        found.extend(here);
+    }
+    found
+}
+
+/// Finds the bundle carrying `id`, searching [`search_path`].
+///
+/// A bundle that fails to load is skipped rather than fatal — one broken
+/// plugin in a directory must not stop a song that does not use it.
+pub fn find_by_id(id: &str) -> Result<PathBuf, String> {
+    for path in bundles() {
+        let Some(text) = path.to_str() else { continue };
+        let Ok(found) = describe(text) else { continue };
+        if found.iter().any(|p| p.id == id) {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "no plugin with id \"{id}\" is installed. Looked in {}. \
+         `sheliak-render --list-clap <file.clap>` prints the ids a bundle carries",
+        search_path()
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 /// Everything a `.clap` bundle offers, for `--list-clap`.

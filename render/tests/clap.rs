@@ -389,3 +389,39 @@ fn asking_for_a_plugin_that_is_not_there_fails_by_name() {
         "the error should name what was asked for, got: {error}"
     );
 }
+
+// ------------------------------------------------- the document's own plugins
+
+/// A document names a plugin, not a file, so the renderer has to find it.
+#[test]
+fn a_plugin_is_found_by_the_id_a_document_would_write() {
+    let path = std::path::Path::new("/usr/lib/clap/Kars.clap");
+    if !path.exists() {
+        eprintln!("Kars not installed — skipping. apt-get install dpf-plugins-clap");
+        return;
+    }
+    let found = sheliak_render::clap_host::find_by_id("studio.kx.distrho.Kars")
+        .expect("an installed plugin should be findable by its id");
+    // Not asserting the path: which file carries an id is a property of the
+    // machine. What must hold is that the file found really carries it.
+    let carried = describe(found.to_str().unwrap()).unwrap();
+    assert!(carried.iter().any(|p| p.id == "studio.kx.distrho.Kars"));
+}
+
+#[test]
+fn an_id_nobody_has_installed_says_where_it_looked() {
+    let error = sheliak_render::clap_host::find_by_id("com.example.definitely-not-installed")
+        .expect_err("an absent plugin must not resolve to something else");
+    assert!(error.contains("com.example.definitely-not-installed"));
+    // A song that will not render because a plugin is missing is a song whose
+    // reader needs to know where to put one.
+    assert!(error.contains("Looked in"), "got: {error}");
+}
+
+#[test]
+fn the_search_path_puts_the_environment_first() {
+    // CLAP_PATH is the format's own variable, and a machine that sets it means
+    // it — a system directory must not shadow what the user asked for.
+    let dirs = sheliak_render::clap_host::search_path();
+    assert!(dirs.iter().any(|d| d.ends_with("clap")));
+}

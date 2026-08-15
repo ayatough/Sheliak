@@ -58,6 +58,9 @@ renderer cannot load one. See docs/workstreams.md \u{a7}9 and \u{a7}13.";
 struct Job {
     sample_rate: f32,
     tracks: Vec<JobTrack>,
+    /// Absent in a job written before the `plugin` fence existed.
+    #[serde(default)]
+    plugin_tracks: Vec<JobPluginTrack>,
     #[serde(rename = "loop")]
     loop_: JobLoop,
     /// Frames of loop to render, already multiplied out by the loop count.
@@ -66,6 +69,19 @@ struct Job {
     tail_frames: usize,
     #[serde(default)]
     stems: bool,
+}
+
+/// A track whose voice is a plugin, named by the document's `plugin` fence.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobPluginTrack {
+    track: usize,
+    id: String,
+    /// The plugin's CLAP id. Resolved to a file here, because which file
+    /// carries it is a property of this machine and not of the song.
+    from: String,
+    #[serde(default)]
+    params: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -131,13 +147,9 @@ fn collect_stems(
 /// rather than by the caller for the same reason: a render that reused a
 /// previous instance's state would not be reproducible.
 ///
-/// `mute_track` withholds one track's events: when a CLAP instrument is that
+/// `muted` withholds those tracks' events: when a CLAP instrument is that
 /// track's voice, the engine's voice must not also play them (§13).
-fn render_loop(
-    job: &Job,
-    stem_tracks: &[usize],
-    mute_track: Option<usize>,
-) -> (MultiEngine, Rendered) {
+fn render_loop(job: &Job, stem_tracks: &[usize], muted: &[usize]) -> (MultiEngine, Rendered) {
     let mut engine = MultiEngine::new(job.sample_rate);
     for track in &job.tracks {
         let mut block = [0.0f32; PARAM_COUNT];
@@ -160,7 +172,7 @@ fn render_loop(
         while ev_idx < events.len() && events[ev_idx].offset_samples <= counter {
             let ev = &events[ev_idx];
             ev_idx += 1;
-            if Some(ev.track) == mute_track {
+            if muted.contains(&ev.track) {
                 continue;
             }
             // -1 / false, exactly as worklet.js sends them: use the patch's
@@ -458,13 +470,32 @@ fn run() -> Result<String, String> {
     };
     // Loaded before the engine runs so a missing plugin fails in milliseconds
     // rather than after the whole render.
-    let mut instrument = match instrument {
-        Some((path, track)) => Some((
+    let mut instruments: Vec<(clap_host::HostedPlugin, usize)> = Vec::new();
+    if let Some((path, track)) = instrument {
+        instruments.push((
             clap_host::HostedPlugin::load(&path, instrument_id.as_deref(), job.sample_rate)?,
             track,
-        )),
-        None => None,
-    };
+        ));
+    }
+
+    // The document's own plugin tracks. `--clap-instrument` stays for driving a
+    // plugin a document does not name — proving a plugin works before writing a
+    // fence for it — and a flag naming a track the document already claims is a
+    // contradiction rather than an override.
+    for declared in &job.plugin_tracks {
+        if instruments.iter().any(|(_, t)| *t == declared.track) {
+            return Err(format!(
+                "--clap-track {} is the track `{}`, which the document already plays with {}",
+                declared.track, declared.id, declared.from
+            ));
+        }
+        let path = clap_host::find_by_id(&declared.from)?;
+        let text = path.display().to_string();
+        instruments.push((
+            clap_host::HostedPlugin::load(&text, Some(&declared.from), job.sample_rate)?,
+            declared.track,
+        ));
+    }
 
     let stem_tracks: Vec<usize> = if job.stems {
         job.tracks.iter().map(|t| t.track).collect()
@@ -472,8 +503,8 @@ fn run() -> Result<String, String> {
         Vec::new()
     };
 
-    let mute_track = instrument.as_ref().map(|(_, track)| *track);
-    let (mut engine, body) = render_loop(&job, &stem_tracks, mute_track);
+    let muted: Vec<usize> = instruments.iter().map(|(_, track)| *track).collect();
+    let (mut engine, body) = render_loop(&job, &stem_tracks, &muted);
     let total = job.loop_frames + job.tail_frames;
     let mut l = body.l;
     let mut r = body.r;
@@ -500,8 +531,8 @@ fn run() -> Result<String, String> {
     // release ring is the tail, the way the engine's own voices ring out. Its
     // output joins the mix where the engine's voice would have: added to the
     // other tracks, before any mix effect.
-    let mut played = None;
-    if let Some((plugin, track)) = instrument.as_mut() {
+    let mut played: Vec<String> = Vec::new();
+    for (plugin, track) in instruments.iter_mut() {
         let notes = instrument_notes(&job, *track);
         let mut il = vec![0.0; total];
         let mut ir = vec![0.0; total];
@@ -518,11 +549,33 @@ fn run() -> Result<String, String> {
                 sr.copy_from_slice(&ir);
             }
         }
-        played = Some(format!(
+        played.push(format!(
             "track {track} played by {} ({})",
             plugin.name, plugin.id
         ));
     }
+
+    // A plugin's output joins the mix *after* `MultiEngine` has already put its
+    // own sum through the master guard, so the sum of the two is outside the
+    // guarantee the engine makes: Kars at its defaults takes this document to
+    // +5.4 dBFS, which the WAV encoder then hard-clips. Putting the total back
+    // through the same guard restores "the master bus is bounded" for audio
+    // that did not all come from the engine.
+    //
+    // Only when a plugin actually contributed. The guard is bit-transparent
+    // below 0.95 but not above it, and a plugin-free render must stay identical
+    // to what the browser produces (`scripts/check-render-parity.sh`).
+    if !played.is_empty() {
+        for i in 0..total {
+            l[i] = sheliak_dsp::multi::soft_clip_master(l[i]);
+            r[i] = sheliak_dsp::multi::soft_clip_master(r[i]);
+        }
+    }
+
+    // The document can write a plugin's parameters and nothing applies them
+    // yet: setting one needs `clap_plugin_params`, which is its own piece of
+    // work. Saying so beats a render that quietly ignores what was written.
+    let unapplied: usize = job.plugin_tracks.iter().map(|t| t.params.len()).sum();
 
     // The plugin sees the finished mix. Stems are left alone deliberately: they
     // are what each track produced, and a master-bus effect is not part of that.
@@ -539,12 +592,22 @@ fn run() -> Result<String, String> {
     let mut report = format!(
         "wrote {out} — {:.2}s · {} track{} · peak {:.1} dBFS",
         total as f32 / job.sample_rate,
-        job.tracks.len(),
-        if job.tracks.len() == 1 { "" } else { "s" },
+        job.tracks.len() + job.plugin_tracks.len(),
+        if job.tracks.len() + job.plugin_tracks.len() == 1 {
+            ""
+        } else {
+            "s"
+        },
         20.0 * peak_of(&l, &r).max(1.0e-9).log10(),
     );
-    if let Some(instrument) = played {
-        report.push_str(&format!("\n      {instrument}"));
+    for entry in &played {
+        report.push_str(&format!("\n      {entry}"));
+    }
+    if unapplied > 0 {
+        report.push_str(&format!(
+            "\n      note: {unapplied} plugin parameter(s) written in the document are not \
+             applied yet — the plugins ran at their defaults"
+        ));
     }
     if let Some(plugin) = hosted {
         report.push_str(&format!("\n      through {plugin}"));
@@ -613,6 +676,7 @@ mod tests {
     fn a_job(length: usize, loop_frames: usize, events: Vec<JobEvent>) -> Job {
         Job {
             sample_rate: 48_000.0,
+            plugin_tracks: Vec::new(),
             tracks: Vec::new(),
             loop_: JobLoop {
                 length_samples: length,

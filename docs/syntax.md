@@ -247,6 +247,16 @@ sheliak render song.md --emit-job job.json
 sheliak-render job.json -o out.wav
 ```
 
+The renderer finds the plugin by the id `from=` names, searching `CLAP_PATH`,
+`~/.clap`, `/usr/lib/clap` and `/usr/local/lib/clap`. A song names a plugin
+because that is a property of the song; which file carries it is a property of
+the machine reading it.
+
+**Parameters are not applied yet.** They are parsed, carried through and
+reported as unapplied — setting one needs a part of CLAP the host does not
+speak yet. Until then a plugin runs at its own defaults, and the renderer says
+so rather than pretending.
+
 ## `phrase`
 
 A phrase is one track's notes over one to a few bars: an ASCII grid where rows
