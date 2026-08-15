@@ -802,6 +802,28 @@ Three risks worth knowing before starting:
   (The refusal itself is a browser policy and cannot be exercised from Node;
   what was checked here is that the permitted branch works and that the other
   branch really does produce a `SharedArrayBuffer`.)
+- **The build side is solved, and it is one linker flag.** A `cdylib` built for
+  `wasm32-unknown-unknown` with `-C link-arg=--export-table` produces exactly
+  the three things the draft asks for and nothing else:
+
+  ```
+  imports: []
+  exports: memory (memory), clap_entry (global),
+           __indirect_function_table (table), entry_ptr (function)
+  ```
+
+  671 bytes for a stub. No wasi-sdk, no C toolchain, no sysroot — the crate is
+  already the shape Sheliak's own core is, which is the shape §8 needs. Anyone
+  building a plugin for Sheliak should start here rather than from the C++
+  reference host's build.
+
+  **One detail is still open**: `clap_entry` has to be a global *holding the
+  address of* a static `clap_plugin_entry`, and a Rust `static` does not
+  initialise an exported global to another static's address at link time. The
+  probe exported a constant and a separate accessor function instead. Whoever
+  builds the first real module has to close that — a small linker or `#[used]`
+  question, not a design one.
+
 - **The WASI surface is thin.** The reference host implements "the very basics"
   and 32-bit only. Expect to implement enough WASI to keep plugins from trapping,
   and expect that to be where the time goes.
