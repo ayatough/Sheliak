@@ -425,3 +425,168 @@ fn the_search_path_puts_the_environment_first() {
     let dirs = sheliak_render::clap_host::search_path();
     assert!(dirs.iter().any(|d| d.ends_with("clap")));
 }
+
+// ------------------------------------------------------ parameters, resolved
+
+/// Kars specifically: its parameters are known and small, and one of them
+/// (`volume`, 0..100) is linear enough that "did the setting arrive" is a
+/// question about the audio rather than about the API returning Ok.
+fn kars() -> Option<PathBuf> {
+    let path = PathBuf::from("/usr/lib/clap/Kars.clap");
+    path.exists().then_some(path)
+}
+
+macro_rules! kars_or_skip {
+    () => {
+        match kars() {
+            Some(path) => path,
+            None => {
+                eprintln!("Kars not installed — skipping. apt-get install dpf-plugins-clap");
+                return;
+            }
+        }
+    };
+}
+
+fn render_kars(settings: &[(&str, bool, f64)]) -> Vec<f32> {
+    let path = kars().unwrap();
+    let mut plugin = HostedPlugin::load(path.to_str().unwrap(), None, SR).unwrap();
+    let settings: Vec<_> = settings
+        .iter()
+        .map(
+            |(name, normalized, value)| sheliak_render::clap_host::ParamSetting {
+                name: (*name).to_string(),
+                normalized: *normalized,
+                value: *value,
+            },
+        )
+        .collect();
+    plugin.set_params(&settings).unwrap();
+    let frames = SR as usize / 2;
+    let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+    plugin.render_notes(&a_phrase(), &mut l, &mut r).unwrap();
+    l
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt()
+}
+
+#[test]
+fn a_plugin_reports_the_parameters_a_document_can_name() {
+    let _one = one_plugin_at_a_time();
+    let path = kars_or_skip!();
+    let plugin = HostedPlugin::load(path.to_str().unwrap(), None, SR).unwrap();
+    let names: Vec<String> = plugin
+        .parameters()
+        .iter()
+        .map(|p| p.name.to_lowercase())
+        .collect();
+    assert!(names.contains(&"volume".to_string()), "got {names:?}");
+    // A range is what makes a percentage mean anything.
+    let volume = plugin
+        .parameters()
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("volume"))
+        .unwrap();
+    assert!(
+        volume.max > volume.min,
+        "volume has no range to be a fraction of"
+    );
+}
+
+#[test]
+fn a_setting_reaches_the_plugin_and_changes_the_sound() {
+    let _one = one_plugin_at_a_time();
+    let _path = kars_or_skip!();
+    // Louder is louder. Anything weaker than this passes when the events are
+    // built correctly and quietly dropped on the floor.
+    let quiet = rms(&render_kars(&[("volume", false, 25.0)]));
+    let loud = rms(&render_kars(&[("volume", false, 100.0)]));
+    assert!(quiet > 0.0, "the instrument made no sound at all");
+    assert!(
+        loud > quiet * 2.0,
+        "volume 100 ({loud}) should be well above volume 25 ({quiet})"
+    );
+}
+
+#[test]
+fn a_percentage_and_the_plugins_own_number_mean_the_same_thing() {
+    let _one = one_plugin_at_a_time();
+    // Nekobi, not Kars: this compares two renders sample for sample, and Kars
+    // cannot be compared to itself — its excitation comes from an unseeded
+    // `rand()` upstream. Nekobi is bit-identical across runs, so a difference
+    // here is the conversion and nothing else.
+    //
+    // `tuning` spans -12..12, which is the case worth testing: a range that
+    // does not start at zero is where `min + v * (max - min)` earns its keep.
+    // 50% is the middle of -12..12, which is 0 — the same as writing `0`.
+    let path = PathBuf::from("/usr/lib/clap/Nekobi.clap");
+    if !path.exists() {
+        eprintln!("Nekobi not installed — skipping. apt-get install dpf-plugins-clap");
+        return;
+    }
+    let render = |normalized: bool, value: f64| {
+        let mut plugin = HostedPlugin::load(path.to_str().unwrap(), None, SR).unwrap();
+        plugin
+            .set_params(&[sheliak_render::clap_host::ParamSetting {
+                name: "tuning".into(),
+                normalized,
+                value,
+            }])
+            .unwrap();
+        let frames = SR as usize / 4;
+        let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+        plugin.render_notes(&a_phrase(), &mut l, &mut r).unwrap();
+        l
+    };
+    let by_percent = render(true, 0.5);
+    let by_value = render(false, 0.0);
+    assert_eq!(
+        by_percent, by_value,
+        "50% of -12..12 should be the same as writing 0"
+    );
+
+    // And the two spellings must not collapse into each other: a real change
+    // still has to be audible, or the test above would pass on a host that
+    // ignored settings entirely.
+    assert_ne!(
+        by_percent,
+        render(false, 12.0),
+        "tuning 0 and tuning 12 should not sound the same"
+    );
+}
+
+#[test]
+fn a_parameter_the_plugin_does_not_have_is_named_along_with_the_ones_it_does() {
+    let _one = one_plugin_at_a_time();
+    let path = kars_or_skip!();
+    let mut plugin = HostedPlugin::load(path.to_str().unwrap(), None, SR).unwrap();
+    let error = plugin
+        .set_params(&[sheliak_render::clap_host::ParamSetting {
+            name: "brightness".into(),
+            normalized: true,
+            value: 0.6,
+        }])
+        .expect_err("an unknown parameter must not be silently ignored");
+    assert!(error.contains("brightness"), "got: {error}");
+    // Naming what it *does* have is the difference between a wall and a fix.
+    assert!(error.contains("volume"), "got: {error}");
+}
+
+#[test]
+fn a_value_outside_the_range_is_refused_rather_than_clamped() {
+    let _one = one_plugin_at_a_time();
+    let path = kars_or_skip!();
+    let mut plugin = HostedPlugin::load(path.to_str().unwrap(), None, SR).unwrap();
+    // Clamping would be the quieter answer and the worse one: a value this far
+    // out is almost always the wrong unit, and the document should be fixed.
+    let error = plugin
+        .set_params(&[sheliak_render::clap_host::ParamSetting {
+            name: "volume".into(),
+            normalized: false,
+            value: 5000.0,
+        }])
+        .expect_err("an out-of-range value must not be quietly clamped");
+    assert!(error.contains("outside its range"), "got: {error}");
+}

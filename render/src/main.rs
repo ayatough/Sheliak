@@ -49,6 +49,7 @@ const HELP: &str = "usage: sheliak-render <job.json> -o <out.wav> [--clap <plugi
                       which instrument, when the bundle carries more than one
   --clap-track <n>    the track the instrument plays (with --clap-instrument)
   --list-clap <file>  list what a bundle carries, and exit
+                      with --clap-id, list that plugin's parameters instead
 
 A `.clap` is a dynamic library, which is why this exists at all: the browser
 renderer cannot load one. See docs/workstreams.md \u{a7}9 and \u{a7}13.";
@@ -69,6 +70,37 @@ struct Job {
     tail_frames: usize,
     #[serde(default)]
     stems: bool,
+}
+
+/// A document's parameter settings for one plugin track, in the order written.
+///
+/// The job carries them as the notation spelled them — a percentage of the
+/// parameter's own range, or the plugin's own number — because only the side
+/// holding the plugin knows what either means.
+fn settings_of(track: &JobPluginTrack) -> Result<Vec<clap_host::ParamSetting>, String> {
+    let mut out = Vec::with_capacity(track.params.len());
+    for (name, raw) in &track.params {
+        let kind = raw.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let value = raw
+            .get("value")
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| format!("track `{}`: parameter \"{name}\" has no number", track.id))?;
+        out.push(clap_host::ParamSetting {
+            name: name.clone(),
+            normalized: match kind {
+                "normalized" => true,
+                "plain" => false,
+                other => {
+                    return Err(format!(
+                        "track `{}`: parameter \"{name}\" has an unknown kind \"{other}\"",
+                        track.id
+                    ))
+                }
+            },
+            value,
+        });
+    }
+    Ok(out)
 }
 
 /// A track whose voice is a plugin, named by the document's `plugin` fence.
@@ -411,6 +443,27 @@ fn run() -> Result<String, String> {
         }
         i += 1;
     }
+    // Listing one plugin's parameters is what someone writing a `plugin` fence
+    // actually needs: the names it accepts, and what each one's range is.
+    if let (Some(path), Some(id)) = (&list_clap, &clap_id) {
+        let plugin = clap_host::HostedPlugin::load(path, Some(id), 48_000.0)?;
+        let params = plugin.parameters().to_vec();
+        if params.is_empty() {
+            return Ok(format!("{} ({id}) has no parameters", plugin.name));
+        }
+        let mut report = format!("{} ({id}):", plugin.name);
+        for p in &params {
+            report.push_str(&format!(
+                "\n  {:<24} {} .. {}   default {}",
+                p.name.to_lowercase().replace([' ', '-'], "_"),
+                p.min,
+                p.max,
+                p.default
+            ));
+        }
+        return Ok(report);
+    }
+
     // Listing is a question about a file, not a render: it needs no job.
     if let Some(path) = list_clap {
         let found = clap_host::describe(&path)?;
@@ -491,10 +544,10 @@ fn run() -> Result<String, String> {
         }
         let path = clap_host::find_by_id(&declared.from)?;
         let text = path.display().to_string();
-        instruments.push((
-            clap_host::HostedPlugin::load(&text, Some(&declared.from), job.sample_rate)?,
-            declared.track,
-        ));
+        let mut plugin =
+            clap_host::HostedPlugin::load(&text, Some(&declared.from), job.sample_rate)?;
+        plugin.set_params(&settings_of(declared)?)?;
+        instruments.push((plugin, declared.track));
     }
 
     let stem_tracks: Vec<usize> = if job.stems {
@@ -572,10 +625,7 @@ fn run() -> Result<String, String> {
         }
     }
 
-    // The document can write a plugin's parameters and nothing applies them
-    // yet: setting one needs `clap_plugin_params`, which is its own piece of
-    // work. Saying so beats a render that quietly ignores what was written.
-    let unapplied: usize = job.plugin_tracks.iter().map(|t| t.params.len()).sum();
+    let applied: usize = job.plugin_tracks.iter().map(|t| t.params.len()).sum();
 
     // The plugin sees the finished mix. Stems are left alone deliberately: they
     // are what each track produced, and a master-bus effect is not part of that.
@@ -603,10 +653,9 @@ fn run() -> Result<String, String> {
     for entry in &played {
         report.push_str(&format!("\n      {entry}"));
     }
-    if unapplied > 0 {
+    if applied > 0 {
         report.push_str(&format!(
-            "\n      note: {unapplied} plugin parameter(s) written in the document are not \
-             applied yet — the plugins ran at their defaults"
+            "\n      {applied} plugin parameter(s) set from the document"
         ));
     }
     if let Some(plugin) = hosted {

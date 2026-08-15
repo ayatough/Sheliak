@@ -31,10 +31,12 @@ use std::path::PathBuf;
 
 use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
 use clack_extensions::note_ports::{NoteDialect, NotePortInfoBuffer, PluginNotePorts};
-use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent};
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
+use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
 use clack_host::events::{Match, Pckn};
 use clack_host::prelude::*;
+use clack_host::utils::{ClapId, Cookie};
 
 /// The block the plugin is driven with, matching the engine's render quantum.
 const BLOCK: usize = 128;
@@ -79,6 +81,10 @@ pub struct HostedPlugin {
     /// The dialect notes will be sent in, settled once at load: the port's
     /// preference when this host speaks it, else CLAP events, else MIDI 1.0.
     note_dialect: Option<NoteDialect>,
+    /// Every parameter the plugin declares, read once at load.
+    params: Vec<ParamDesc>,
+    /// Settings resolved from a document, sent at frame 0 of the first block.
+    pending: Vec<(ClapId, f64)>,
     /// `Option` only so that `Drop` can take it: deactivation consumes it.
     processor: Option<PluginAudioProcessor<SheliakHost>>,
     instance: PluginInstance<SheliakHost>,
@@ -115,6 +121,41 @@ pub struct Ports {
     /// `None` when the plugin does not implement the note-ports extension,
     /// which is how an effect says it wants no notes.
     pub note_in: Option<u32>,
+}
+
+/// One of a plugin's parameters, as it describes itself.
+///
+/// The name is the plugin's own display name — "Brightness", "Cutoff Freq" —
+/// and it is the only handle a document has on it. CLAP's *ids* are stable and
+/// the names are not guaranteed to be, but an id is a bare number that says
+/// nothing to a reader, and a song is meant to be read. Matching by name is the
+/// choice that keeps the document legible; a plugin that renames a parameter
+/// between versions breaks the song loudly, which is the better failure.
+#[derive(Clone, Debug)]
+pub struct ParamDesc {
+    pub id: ClapId,
+    pub name: String,
+    pub min: f64,
+    pub max: f64,
+    pub default: f64,
+}
+
+impl ParamDesc {
+    /// How a document would write this name: lowercase, spaces as underscores.
+    fn key(&self) -> String {
+        self.name.trim().to_lowercase().replace([' ', '-'], "_")
+    }
+}
+
+/// A parameter setting from a document, before it has been matched to a plugin.
+#[derive(Clone, Debug)]
+pub struct ParamSetting {
+    /// The name as the document wrote it.
+    pub name: String,
+    /// `true` when the value is a position in the parameter's range, `false`
+    /// when it is the plugin's own number.
+    pub normalized: bool,
+    pub value: f64,
 }
 
 /// One timed note for an instrument, at an absolute frame of the render.
@@ -339,17 +380,120 @@ impl HostedPlugin {
             _ => None,
         };
 
-        Ok(HostedPlugin {
+        let mut hosted = HostedPlugin {
             name,
             id: id.to_string_lossy().into_owned(),
             in_channels,
             out_channels,
             note_in,
             note_dialect,
+            params: Vec::new(),
+            pending: Vec::new(),
             processor: Some(processor.into()),
             instance,
             _entry: entry,
-        })
+        };
+        hosted.params = hosted.read_params();
+        Ok(hosted)
+    }
+
+    /// Every parameter the plugin declares. A plugin without the params
+    /// extension has none, which is not an error — it is a plugin with nothing
+    /// to set.
+    fn read_params(&mut self) -> Vec<ParamDesc> {
+        let Some(ext) = self
+            .instance
+            .plugin_handle()
+            .get_extension::<PluginParams>()
+        else {
+            return Vec::new();
+        };
+        let mut handle = self.instance.plugin_handle();
+        let count = ext.count(&mut handle);
+        let mut buffer = ParamInfoBuffer::new();
+        let mut out = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let Some(info) = ext.get_info(&mut handle, index, &mut buffer) else {
+                continue;
+            };
+            out.push(ParamDesc {
+                id: info.id,
+                name: String::from_utf8_lossy(info.name).trim().to_string(),
+                min: info.min_value,
+                max: info.max_value,
+                default: info.default_value,
+            });
+        }
+        out
+    }
+
+    /// What this plugin can be told, for `--list-clap --clap-id`.
+    pub fn parameters(&self) -> &[ParamDesc] {
+        &self.params
+    }
+
+    /// Resolves a document's settings against this plugin and queues them.
+    ///
+    /// Sent as events at frame 0 of the first block rather than flushed on the
+    /// main thread, because that is the one moment guaranteed to be before any
+    /// audio: a plugin is entitled to ignore a flush it receives while inactive.
+    pub fn set_params(&mut self, settings: &[ParamSetting]) -> Result<(), String> {
+        for setting in settings {
+            let wanted = setting.name.trim().to_lowercase().replace([' ', '-'], "_");
+            let Some(desc) = self.params.iter().find(|p| p.key() == wanted) else {
+                return Err(format!(
+                    "{} has no parameter \"{}\". It has {}",
+                    self.name,
+                    setting.name,
+                    self.parameter_list()
+                ));
+            };
+            let value = if setting.normalized {
+                desc.min + setting.value * (desc.max - desc.min)
+            } else {
+                setting.value
+            };
+            let (lo, hi) = (desc.min.min(desc.max), desc.min.max(desc.max));
+            if value < lo || value > hi {
+                // Clamping would be a quieter answer and a worse one: a value
+                // outside the range is almost always the wrong unit, and the
+                // document should be corrected rather than silently obeyed.
+                return Err(format!(
+                    "{}: {} is {}, outside its range {}..{}",
+                    self.name, desc.name, value, lo, hi
+                ));
+            }
+            self.pending.push((desc.id, value));
+        }
+        Ok(())
+    }
+
+    /// The parameter names, for an error that has to be actionable.
+    fn parameter_list(&self) -> String {
+        if self.params.is_empty() {
+            return "no parameters at all".to_string();
+        }
+        const SHOWN: usize = 12;
+        let names: Vec<String> = self.params.iter().take(SHOWN).map(|p| p.key()).collect();
+        if self.params.len() > SHOWN {
+            format!(
+                "{}, and {} more",
+                names.join(", "),
+                self.params.len() - SHOWN
+            )
+        } else {
+            names.join(", ")
+        }
+    }
+
+    /// The queued settings as events for the first block, and clears them.
+    fn take_pending(&mut self) -> Vec<ParamValueEvent> {
+        self.pending
+            .drain(..)
+            .map(|(id, value)| {
+                ParamValueEvent::new(0, id, Pckn::match_all(), value, Cookie::empty())
+            })
+            .collect()
     }
 
     /// What this plugin declares it wants, as queried once at load.
@@ -417,6 +561,8 @@ impl HostedPlugin {
     /// `l`/`r` when the plugin declares any input, `notes` become events at
     /// their in-block offsets, and output port 0 comes back as `l`/`r`.
     fn drive(&mut self, l: &mut [f32], r: &mut [f32], notes: &[NoteEvent]) -> Result<(), String> {
+        // Taken before the destructure below borrows every field.
+        let mut pending = self.take_pending();
         // Field-by-field so the processor's mutable borrow does not lock the
         // layout away.
         let Self {
@@ -488,6 +634,10 @@ impl HostedPlugin {
             }
 
             in_events.clear();
+            // The document's settings, once, before the first note is heard.
+            for event in pending.drain(..) {
+                in_events.push(&event);
+            }
             while next_note < notes.len() && notes[next_note].frame < at + n {
                 let note = &notes[next_note];
                 next_note += 1;

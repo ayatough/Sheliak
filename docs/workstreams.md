@@ -746,6 +746,14 @@ written against Dragonfly Reverb and LSP rather than against an idea. The first
 question it has to answer is the one the host left open: a plugin currently runs
 at its defaults, because the fence cannot yet name a parameter.
 
+**Landed for instruments**, which is the half a `plugin` fence needs: the fence
+names a plugin with `from=`, the renderer finds it on the CLAP search path, and
+the body's parameters are resolved against `clap_plugin_params` and sent at
+frame 0 of the first block. A name the plugin does not have, and a value outside
+its range, are both errors that name the plugin. What is still open is the same
+notation for an *effect* — a namespaced id inside `fx:` — which needs the chain
+to accept a foreign entry rather than a built-in type id.
+
 Rules that follow from the rest of this document:
 
 - **Namespaced ids.** Built-ins keep their bare names; external plugins are

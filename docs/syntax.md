@@ -252,10 +252,21 @@ The renderer finds the plugin by the id `from=` names, searching `CLAP_PATH`,
 because that is a property of the song; which file carries it is a property of
 the machine reading it.
 
-**Parameters are not applied yet.** They are parsed, carried through and
-reported as unapplied — setting one needs a part of CLAP the host does not
-speak yet. Until then a plugin runs at its own defaults, and the renderer says
-so rather than pretending.
+To find out what a plugin accepts, ask it:
+
+```bash
+sheliak-render --list-clap /usr/lib/clap/Kars.clap --clap-id studio.kx.distrho.Kars
+  sustain                  0 .. 1   default 0
+  release                  0 .. 5   default 0.01
+  volume                   0 .. 100   default 75
+```
+
+Names are matched loosely — lowercase, with spaces and dashes as underscores —
+so a parameter the plugin calls `Cutoff Freq` is written `cutoff_freq`. A name
+the plugin does not have is an error listing the ones it does. A value outside
+the parameter's range is an error too, rather than being clamped: a number that
+far out is almost always the wrong unit, and the document is what should be
+fixed.
 
 ## `phrase`
 
