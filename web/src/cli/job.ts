@@ -32,9 +32,22 @@ export interface JobEvent {
   velocity: number;
 }
 
+/** A track the engine cannot play: the renderer has to load a plugin for it. */
+export interface JobPluginTrack {
+  track: number;
+  id: string;
+  /** The plugin's reverse-domain id. Which file carries it is the renderer's
+   *  problem, not the document's — a song names the plugin, not a path. */
+  from: string;
+  /** By the name the document wrote. Resolved where the plugin is loaded. */
+  params: Record<string, { kind: 'normalized' | 'plain'; value: number }>;
+}
+
 export interface RenderJob {
   sampleRate: number;
   tracks: JobTrack[];
+  /** Empty unless the document has a `plugin` fence. */
+  pluginTracks: JobPluginTrack[];
   loop: { lengthSamples: number; events: JobEvent[] };
   /** Frames of loop, with the repeat count already multiplied out. */
   loopFrames: number;
@@ -62,12 +75,20 @@ export function buildJob(result: CompileResult, opts: JobOptions): RenderJob {
   if (result.loop === undefined) {
     throw new Error('no `loop` fence: nothing is scheduled, so there is nothing to render');
   }
-  if (result.tracks.length === 0) {
-    throw new Error('no `synth` fence: the document declares no track, so there is nothing to render');
+  if (result.tracks.length === 0 && result.pluginTracks.length === 0) {
+    throw new Error('no `synth` or `plugin` fence: the document declares no track, so there is nothing to render');
   }
   return {
     sampleRate: opts.sampleRate,
     tracks: result.tracks.map((t) => ({ track: t.track, id: t.id, params: Array.from(t.params) })),
+    pluginTracks: result.pluginTracks.map((t) => ({
+      track: t.track,
+      id: t.id,
+      from: t.from,
+      params: Object.fromEntries(
+        Object.entries(t.params).map(([name, p]) => [name, { kind: p.kind, value: p.value }]),
+      ),
+    })),
     loop: {
       lengthSamples: result.loop.lengthSamples,
       events: result.loop.events.map((e) => ({

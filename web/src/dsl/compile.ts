@@ -8,6 +8,7 @@ import { extractFences, findFence, type Fence } from './fences.ts';
 import { parseSynth } from './synth.ts';
 import { parseLoop, type LoopIR, type LoopMeta } from './loop.ts';
 import { parsePhrase, type Phrase } from './phrase.ts';
+import { parsePlugin, type PluginIR } from './plugin.ts';
 import { expandedView, DEFAULT_BPM, type PatchIR } from './ir.ts';
 import { sortErrors, type DslError } from './errors.ts';
 import { MAX_TRACKS } from '../shared/params.ts';
@@ -22,7 +23,17 @@ export interface CompiledPatch {
 export interface CompiledTrack extends CompiledPatch {
   /** The fence's `id=` (or a generated `trackN` when absent). */
   id: string;
-  /** Track index = order of appearance among synth fences. */
+  /** Track index = order of appearance among synth **and plugin** fences. */
+  track: number;
+}
+
+/**
+ * A track whose voice is a plugin. It holds an index in the same sequence as
+ * the synth tracks, and no patch — the engine has nothing to play for it, so
+ * its output is silence anywhere a plugin cannot be loaded (which is every
+ * browser). `sheliak render` says so rather than leaving it a mystery.
+ */
+export interface CompiledPluginTrack extends PluginIR {
   track: number;
 }
 
@@ -30,11 +41,13 @@ export interface CompileResult {
   /** Tracks that compiled cleanly, in track order. */
   tracks: CompiledTrack[];
   /**
-   * How many synth fences the document declares (including ones that failed to
-   * compile, so their index stays reserved). Tracks at or above this index are
-   * stale and should be cleared.
+   * How many tracks the document declares — synth and plugin fences together,
+   * including ones that failed to compile, so their index stays reserved.
+   * Tracks at or above this index are stale and should be cleared.
    */
   trackCount: number;
+  /** Tracks played by a plugin rather than by the engine, in track order. */
+  pluginTracks: CompiledPluginTrack[];
   /** Convenience alias for tracks[0], kept for single-track callers. */
   patch?: CompiledPatch;
   /** Every `phrase` fence that parsed, by id. */
@@ -52,7 +65,9 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
   const fences = extractFences(markdown);
   const errors: DslError[] = [];
 
-  const synthFences = fences.filter((f) => f.lang === 'synth');
+  // Both kinds of fence are tracks and they share one sequence, so the index a
+  // `loop` line binds to is the order of appearance among them together.
+  const trackFences = fences.filter((f) => f.lang === 'synth' || f.lang === 'plugin');
   const loopFence = findFence(fences, 'loop');
 
   // The loop fence owns the tempo; patches need it to resolve musical units
@@ -63,18 +78,19 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     if (Number.isFinite(v) && v > 0) bpm = v;
   }
 
-  if (synthFences.length > MAX_TRACKS) {
-    for (const extra of synthFences.slice(MAX_TRACKS)) {
+  if (trackFences.length > MAX_TRACKS) {
+    for (const extra of trackFences.slice(MAX_TRACKS)) {
       errors.push({
         line: extra.fenceLine,
         col: 1,
-        message: `at most ${MAX_TRACKS} synth fences (tracks) are supported, got ${synthFences.length}`,
+        message: `at most ${MAX_TRACKS} tracks are supported, got ${trackFences.length}`,
       });
     }
   }
 
-  const used = synthFences.slice(0, MAX_TRACKS);
+  const used = trackFences.slice(0, MAX_TRACKS);
   const tracks: CompiledTrack[] = [];
+  const pluginTracks: CompiledPluginTrack[] = [];
   // Every declared fence gets an id, so loop lines can bind even to a fence
   // that failed to compile.
   const trackIds: Record<string, number> = {};
@@ -85,10 +101,20 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
       errors.push({
         line: fence.fenceLine,
         col: 1,
-        message: `duplicate synth id "${id}" — each track needs a unique id`,
+        message: `duplicate track id "${id}" — each track needs a unique id`,
       });
     } else {
       trackIds[id] = index;
+    }
+
+    if (fence.lang === 'plugin') {
+      const r = parsePlugin(fence.body, fence.attrs, {
+        bodyStartLine: fence.bodyStartLine,
+        fenceLine: fence.fenceLine,
+      });
+      errors.push(...r.errors);
+      if (r.ir) pluginTracks.push({ ...r.ir, id, track: index });
+      return;
     }
 
     const r = parseSynth(fence.body, fence.attrs, {
@@ -123,14 +149,22 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     if (r.phrase && id !== '') phrases[id] = r.phrase;
   }
 
-  const result: CompileResult = { tracks, trackCount: used.length, phrases, bpm, errors, fences };
+  const result: CompileResult = {
+    tracks,
+    pluginTracks,
+    trackCount: used.length,
+    phrases,
+    bpm,
+    errors,
+    fences,
+  };
   if (tracks[0]) result.patch = tracks[0];
 
   if (used.length === 0 && !loopFence) {
     errors.push({
       line: 1,
       col: 1,
-      message: 'no ```synth or ```loop code fence found in the document',
+      message: 'no ```synth, ```plugin or ```loop code fence found in the document',
     });
   }
 

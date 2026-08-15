@@ -89,7 +89,10 @@ describe('the render job', () => {
     expect(job.loop.lengthSamples).toBeGreaterThan(0);
     // camelCase throughout: the Rust side deserializes by these names.
     expect(Object.keys(job).sort()).toEqual(
-      ['loop', 'loopFrames', 'sampleRate', 'stems', 'tailFrames', 'tracks'].sort(),
+      ['loop', 'loopFrames', 'pluginTracks', 'sampleRate', 'stems', 'tailFrames', 'tracks'].sort(),
     );
+    // Present and empty rather than absent, so the reading side never has to
+    // tell "no plugins" from "an older job".
+    expect(job.pluginTracks).toEqual([]);
   });
 });
