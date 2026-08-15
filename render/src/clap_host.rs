@@ -4,12 +4,15 @@
 //! everything Sheliak does in the browser is closed to it and the native
 //! renderer is the only door — see [workstreams §9](../../docs/workstreams.md).
 //!
-//! What is hosted here is an **effect on the mix**: the rendered stereo bus goes
-//! through the plugin and comes back. That is the smallest thing that proves the
-//! door opens, and it is deliberately not wired to the notation. §7 holds the
-//! `fx` fence back until a host exists precisely so the notation can be written
-//! against a plugin that really loads, rather than against a guess; this is the
-//! plugin that really loads, and the fence comes after.
+//! Two kinds of plugin are hosted, and they are driven differently. An
+//! **effect on the mix** takes the rendered stereo bus and gives it back
+//! ([`HostedPlugin::process`]). An **instrument** declares no audio input at
+//! all: it is a track's voice, fed the track's notes and nothing else, and
+//! Sheliak's engine does not run for that track ([`HostedPlugin::render_notes`],
+//! workstreams §13). Neither is wired to the notation yet. §7 holds the fence
+//! back until a host exists precisely so the notation can be written against a
+//! plugin that really loads, rather than against a guess; these are the plugins
+//! that really load, and the fence comes after.
 //!
 //! # What a plugin costs the guarantees
 //!
@@ -24,9 +27,11 @@
 //! they will be written as parameters and never as an opaque state blob, and
 //! until the fence can carry them, defaults are the honest thing to use.
 
-use clack_extensions::audio_ports::PluginAudioPorts;
-use clack_extensions::note_ports::PluginNotePorts;
+use clack_extensions::audio_ports::{AudioPortInfoBuffer, PluginAudioPorts};
+use clack_extensions::note_ports::{NoteDialect, NotePortInfoBuffer, PluginNotePorts};
+use clack_host::events::event_types::{MidiEvent, NoteOffEvent, NoteOnEvent};
 use clack_host::events::io::{EventBuffer, InputEvents, OutputEvents};
+use clack_host::events::{Match, Pckn};
 use clack_host::prelude::*;
 
 /// The block the plugin is driven with, matching the engine's render quantum.
@@ -55,12 +60,23 @@ impl HostHandlers for SheliakHost {
     type AudioProcessor<'a> = ();
 }
 
-/// A loaded plugin, ready to process the mix.
+/// A loaded plugin, ready to process the mix or play a track.
 pub struct HostedPlugin {
     /// The plugin's own name, for the report.
     pub name: String,
     /// Its reverse-domain id, which is what a document would have to name.
     pub id: String,
+    /// Channel count of every declared input port, in port order. Empty for an
+    /// instrument — that emptiness is what decides how it may be driven.
+    in_channels: Vec<u32>,
+    /// Channel count of every declared output port, in port order.
+    out_channels: Vec<u32>,
+    /// How many note-input ports it declares; `None` when the note-ports
+    /// extension is absent, which is how an effect says it wants no notes.
+    note_in: Option<u32>,
+    /// The dialect notes will be sent in, settled once at load: the port's
+    /// preference when this host speaks it, else CLAP events, else MIDI 1.0.
+    note_dialect: Option<NoteDialect>,
     /// `Option` only so that `Drop` can take it: deactivation consumes it.
     processor: Option<PluginAudioProcessor<SheliakHost>>,
     instance: PluginInstance<SheliakHost>,
@@ -99,6 +115,22 @@ pub struct Ports {
     pub note_in: Option<u32>,
 }
 
+/// One timed note for an instrument, at an absolute frame of the render.
+///
+/// This is the *other* shape from how the engine is driven: the engine splits
+/// the block at every event boundary, whereas a CLAP event carries its offset
+/// inside a whole block. The caller keeps the list sorted by frame.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct NoteEvent {
+    pub frame: usize,
+    /// `true` for note-on, `false` for note-off — the two kinds the job has.
+    pub on: bool,
+    /// MIDI key number, 0..=127.
+    pub key: u8,
+    /// Normalized 0..=1, as the notation writes it and as CLAP wants it.
+    pub velocity: f32,
+}
+
 /// Everything a `.clap` bundle offers, for `--list-clap`.
 pub fn describe(path: &str) -> Result<Vec<Described>, String> {
     // SAFETY: none available. Loading a `.clap` runs its initialiser, which is
@@ -126,6 +158,13 @@ pub fn describe(path: &str) -> Result<Vec<Described>, String> {
                 .collect(),
         })
         .collect())
+}
+
+/// A note-on below full scale but above nothing, for the MIDI dialect. MIDI has
+/// no zero-velocity note-on — that byte pattern *is* a note-off — so the floor
+/// is 1.
+fn midi_velocity(v: f32) -> u8 {
+    ((v.clamp(0.0, 1.0) * 127.0).round() as u8).max(1)
 }
 
 impl HostedPlugin {
@@ -191,49 +230,67 @@ impl HostedPlugin {
             .activate(|_, _| (), config)
             .map_err(|e| format!("cannot activate {name}: {e}"))?;
 
-        let refused = name.clone();
-        let mut hosted = HostedPlugin {
+        // The port layout comes from the plugin, not from assumption: `process`
+        // must present exactly the ports a plugin declared, with their channel
+        // counts. A plugin without the extension gets CLAP's baseline guess of
+        // one stereo pair each way — the only case where guessing is all there is.
+        let audio = instance.plugin_handle().get_extension::<PluginAudioPorts>();
+        let (in_channels, out_channels) = match audio {
+            Some(ext) => {
+                let mut handle = instance.plugin_handle();
+                let mut buffer = AudioPortInfoBuffer::new();
+                let mut channels = |is_input: bool| -> Vec<u32> {
+                    (0..ext.count(&mut handle, is_input))
+                        .map(|i| {
+                            ext.get(&mut handle, i, is_input, &mut buffer)
+                                .map(|p| p.channel_count)
+                                .unwrap_or(0)
+                        })
+                        .collect()
+                };
+                (channels(true), channels(false))
+            }
+            None => (vec![2], vec![2]),
+        };
+
+        let notes = instance.plugin_handle().get_extension::<PluginNotePorts>();
+        let mut handle = instance.plugin_handle();
+        let note_in = notes.map(|ext| ext.count(&mut handle, true));
+        let note_dialect = match (notes, note_in) {
+            (Some(ext), Some(n)) if n > 0 => {
+                let mut buffer = NotePortInfoBuffer::new();
+                ext.get(&mut handle, 0, true, &mut buffer).and_then(|info| {
+                    // The port's preference wins when this host speaks it; the
+                    // fallbacks are the two dialects a host must know anyway.
+                    let speaks = |d: NoteDialect| info.supported_dialects.supports(d).then_some(d);
+                    match info.preferred_dialect {
+                        Some(d @ (NoteDialect::Clap | NoteDialect::Midi)) => Some(d),
+                        _ => speaks(NoteDialect::Clap).or_else(|| speaks(NoteDialect::Midi)),
+                    }
+                })
+            }
+            _ => None,
+        };
+
+        Ok(HostedPlugin {
             name,
             id: id.to_string_lossy().into_owned(),
+            in_channels,
+            out_channels,
+            note_in,
+            note_dialect,
             processor: Some(processor.into()),
             instance,
             _entry: entry,
-        };
-
-        // An instrument has no audio input, and `process` below always presents
-        // one. Feeding a port a plugin never declared is a protocol violation
-        // rather than a harmless extra: DPF's Kars trips an internal assertion
-        // and writes uninitialised frame counts. Refusing is the honest answer
-        // until the renderer can drive an instrument properly — notes and all —
-        // which is its own piece of work (workstreams.md, Track E).
-        let ports = hosted.ports();
-        if ports.audio_in == 0 {
-            return Err(format!(
-                "{refused} is an instrument: it declares no audio input, {} note input(s), \
-                 and this renderer can only put a plugin *on* the mix. \
-                 Driving one from the document's notes is not implemented yet.",
-                ports.note_in.unwrap_or(0)
-            ));
-        }
-        Ok(hosted)
+        })
     }
 
-    /// What this plugin declares it wants. Queried after instantiation because
-    /// the extensions are only reachable through a live instance.
-    pub fn ports(&mut self) -> Ports {
-        let audio = self
-            .instance
-            .plugin_handle()
-            .get_extension::<PluginAudioPorts>();
-        let notes = self
-            .instance
-            .plugin_handle()
-            .get_extension::<PluginNotePorts>();
-        let mut handle = self.instance.plugin_handle();
+    /// What this plugin declares it wants, as queried once at load.
+    pub fn ports(&self) -> Ports {
         Ports {
-            audio_in: audio.map(|e| e.count(&mut handle, true)).unwrap_or(0),
-            audio_out: audio.map(|e| e.count(&mut handle, false)).unwrap_or(0),
-            note_in: notes.map(|e| e.count(&mut handle, true)),
+            audio_in: self.in_channels.len() as u32,
+            audio_out: self.out_channels.len() as u32,
+            note_in: self.note_in,
         }
     }
 
@@ -244,57 +301,179 @@ impl HostedPlugin {
     /// look-ahead limiter is audible; compensating it is a real feature and it
     /// belongs with the notation that can express a plugin at all, not here.
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) -> Result<(), String> {
-        let processor = self
-            .processor
+        // An instrument declares no audio input, and feeding a port a plugin
+        // never declared is a protocol violation rather than a harmless extra:
+        // DPF's Kars trips an internal assertion and writes uninitialised frame
+        // counts. It can play a track instead — that is the other door.
+        if self.in_channels.is_empty() {
+            return Err(format!(
+                "{} is an instrument: it declares no audio input, {} note input(s), \
+                 so it cannot go *on* the mix. Give it a track to play instead: \
+                 --clap-instrument <plugin.clap> --clap-track <n>.",
+                self.name,
+                self.note_in.unwrap_or(0)
+            ));
+        }
+        self.drive(l, r, &[])
+    }
+
+    /// Plays `notes` through an instrument, writing its output over `l`/`r`.
+    ///
+    /// `notes` are absolute frames into the buffers and must be sorted; each
+    /// block is handed to the plugin whole, with the events that fall inside it
+    /// carrying their offset from the block's start. Sample-accuracy is the
+    /// plugin's own contract from there.
+    pub fn render_notes(
+        &mut self,
+        notes: &[NoteEvent],
+        l: &mut [f32],
+        r: &mut [f32],
+    ) -> Result<(), String> {
+        if self.note_in.unwrap_or(0) == 0 {
+            return Err(format!(
+                "{} declares no note input, so it cannot play a track. \
+                 An effect goes on the mix instead: --clap <plugin.clap>.",
+                self.name
+            ));
+        }
+        if self.note_dialect.is_none() {
+            return Err(format!(
+                "{} wants a note dialect this host does not speak \
+                 (neither CLAP note events nor MIDI 1.0)",
+                self.name
+            ));
+        }
+        self.drive(l, r, notes)
+    }
+
+    /// One block loop for both ways of driving a plugin: input port 0 carries
+    /// `l`/`r` when the plugin declares any input, `notes` become events at
+    /// their in-block offsets, and output port 0 comes back as `l`/`r`.
+    fn drive(&mut self, l: &mut [f32], r: &mut [f32], notes: &[NoteEvent]) -> Result<(), String> {
+        // Field-by-field so the processor's mutable borrow does not lock the
+        // layout away.
+        let Self {
+            name,
+            in_channels,
+            out_channels,
+            note_dialect,
+            processor,
+            ..
+        } = self;
+        let processor = processor
             .as_mut()
             .ok_or("the plugin has already been deactivated")?;
         processor
             .ensure_processing_started()
-            .map_err(|e| format!("{} refused to start processing: {e}", self.name))?;
+            .map_err(|e| format!("{name} refused to start processing: {e}"))?;
 
-        let mut in_ports = AudioPorts::with_capacity(2, 1);
-        let mut out_ports = AudioPorts::with_capacity(2, 1);
+        if out_channels.is_empty() {
+            return Err(format!("{name} declares no audio output at all"));
+        }
+
+        let mut in_ports = AudioPorts::with_capacity(
+            in_channels.iter().map(|c| *c as usize).sum(),
+            in_channels.len(),
+        );
+        let mut out_ports = AudioPorts::with_capacity(
+            out_channels.iter().map(|c| *c as usize).sum(),
+            out_channels.len(),
+        );
+        // One buffer per declared channel of every declared port. Ports beyond
+        // the first stay silent — a sidechain gets nothing, honestly.
+        let mut in_bufs: Vec<Vec<Vec<f32>>> = in_channels
+            .iter()
+            .map(|c| vec![vec![0.0; BLOCK]; *c as usize])
+            .collect();
+        let mut out_bufs: Vec<Vec<Vec<f32>>> = out_channels
+            .iter()
+            .map(|c| vec![vec![0.0; BLOCK]; *c as usize])
+            .collect();
+        let mut in_events = EventBuffer::new();
         let mut out_events = EventBuffer::new();
-        let mut in_l = [0.0f32; BLOCK];
-        let mut in_r = [0.0f32; BLOCK];
-        let mut out_l = [0.0f32; BLOCK];
-        let mut out_r = [0.0f32; BLOCK];
 
         let total = l.len().min(r.len());
         let mut at = 0;
+        let mut next_note = 0usize;
         while at < total {
             let n = BLOCK.min(total - at);
-            in_l[..n].copy_from_slice(&l[at..at + n]);
-            in_r[..n].copy_from_slice(&r[at..at + n]);
-            out_l[..n].fill(0.0);
-            out_r[..n].fill(0.0);
+
+            if let Some(port) = in_bufs.first_mut() {
+                match port.as_mut_slice() {
+                    // A mono input takes the mid signal; halving keeps a
+                    // centred source at its own level.
+                    [mono] => {
+                        for i in 0..n {
+                            mono[i] = 0.5 * (l[at + i] + r[at + i]);
+                        }
+                    }
+                    [cl, cr, ..] => {
+                        cl[..n].copy_from_slice(&l[at..at + n]);
+                        cr[..n].copy_from_slice(&r[at..at + n]);
+                    }
+                    [] => {}
+                }
+            }
+            for port in out_bufs.iter_mut() {
+                for channel in port.iter_mut() {
+                    channel[..n].fill(0.0);
+                }
+            }
+
+            in_events.clear();
+            while next_note < notes.len() && notes[next_note].frame < at + n {
+                let note = &notes[next_note];
+                next_note += 1;
+                let time = note.frame.saturating_sub(at) as u32;
+                match note_dialect {
+                    Some(NoteDialect::Clap) => {
+                        let pckn = Pckn::new(0u16, 0u16, note.key as u16, Match::<u32>::All);
+                        if note.on {
+                            in_events.push(&NoteOnEvent::new(time, pckn, note.velocity as f64));
+                        } else {
+                            in_events.push(&NoteOffEvent::new(time, pckn, note.velocity as f64));
+                        }
+                    }
+                    _ => {
+                        // MIDI 1.0, the only other dialect `render_notes` lets
+                        // through. Channel 0; the job has no channels to carry.
+                        let data = if note.on {
+                            [0x90, note.key.min(127), midi_velocity(note.velocity)]
+                        } else {
+                            [0x80, note.key.min(127), 0x40]
+                        };
+                        in_events.push(&MidiEvent::new(time, 0, data));
+                    }
+                }
+            }
             out_events.clear();
 
-            let mut input_channels = [&mut in_l[..n], &mut in_r[..n]];
-            let input_audio = in_ports.with_input_buffers([AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_input_only(
-                    input_channels
-                        .iter_mut()
-                        .map(|b| InputChannel::variable(*b)),
-                ),
-            }]);
-            let mut output_channels = [&mut out_l[..n], &mut out_r[..n]];
-            let mut output_audio = out_ports.with_output_buffers([AudioPortBuffer {
-                latency: 0,
-                channels: AudioPortBufferType::f32_output_only(
-                    output_channels.iter_mut().map(|b| &mut **b),
-                ),
-            }]);
+            let input_audio = in_ports.with_input_buffers(in_bufs.iter_mut().map(|channels| {
+                AudioPortBuffer {
+                    latency: 0,
+                    channels: AudioPortBufferType::f32_input_only(
+                        channels
+                            .iter_mut()
+                            .map(|c| InputChannel::variable(&mut c[..n])),
+                    ),
+                }
+            }));
+            let mut output_audio =
+                out_ports.with_output_buffers(out_bufs.iter_mut().map(|channels| {
+                    AudioPortBuffer {
+                        latency: 0,
+                        channels: AudioPortBufferType::f32_output_only(
+                            channels.iter_mut().map(|c| &mut c[..n]),
+                        ),
+                    }
+                }));
 
-            // Nothing is sent in: this hosts an effect on the mix, and the
-            // notation has no way to address a plugin's parameters yet (§7).
-            let input_events = InputEvents::empty();
+            let input_events = InputEvents::from_buffer(&in_events);
             let mut output_events = OutputEvents::from_buffer(&mut out_events);
 
             processor
                 .ensure_processing_started()
-                .map_err(|e| format!("{} stopped processing early: {e}", self.name))?
+                .map_err(|e| format!("{name} stopped processing early: {e}"))?
                 .process(
                     &input_audio,
                     &mut output_audio,
@@ -303,10 +482,19 @@ impl HostedPlugin {
                     None,
                     None,
                 )
-                .map_err(|e| format!("{} failed while processing: {e}", self.name))?;
+                .map_err(|e| format!("{name} failed while processing: {e}"))?;
 
-            l[at..at + n].copy_from_slice(&out_l[..n]);
-            r[at..at + n].copy_from_slice(&out_r[..n]);
+            match out_bufs.first().map(|port| port.as_slice()) {
+                Some([mono]) => {
+                    l[at..at + n].copy_from_slice(&mono[..n]);
+                    r[at..at + n].copy_from_slice(&mono[..n]);
+                }
+                Some([cl, cr, ..]) => {
+                    l[at..at + n].copy_from_slice(&cl[..n]);
+                    r[at..at + n].copy_from_slice(&cr[..n]);
+                }
+                _ => return Err(format!("{name} has an output port with no channels")),
+            }
             at += n;
         }
 

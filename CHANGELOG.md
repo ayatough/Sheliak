@@ -12,6 +12,18 @@ policy.
 
 ## [Unreleased]
 
+### Added
+- **A CLAP instrument can be a track's voice.** `sheliak-render job.json -o
+  out.wav --clap-instrument <plugin.clap> --clap-track <n>` sends that track's
+  notes to the plugin — sample-accurately, in the note dialect the plugin
+  declares — and mixes its output with the other tracks in place of the
+  engine's voice; the track's stem becomes the plugin's output. The host now
+  builds each plugin's audio port layout from what it declares instead of
+  assuming stereo in and out, which is what made instruments (zero audio
+  inputs) hostable at all. Verified against DPF's Kars and Nekobi; Nekobi
+  renders bit-identically twice, and Kars measurably cannot — its excitation
+  noise is unseeded upstream — which the tests record by name.
+
 ## [0.1.0] - 2026-08-14
 
 ### Added
