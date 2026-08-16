@@ -20,7 +20,9 @@ use core::mem::{offset_of, size_of};
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
-use clap_sys::events::{clap_event_header, clap_event_param_value, clap_input_events};
+use clap_sys::events::{
+    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events,
+};
 use clap_sys::ext::audio_ports::{clap_audio_port_info, clap_plugin_audio_ports};
 use clap_sys::ext::params::{clap_param_info, clap_plugin_params};
 use clap_sys::factory::plugin_factory::clap_plugin_factory;
@@ -76,6 +78,9 @@ layout! {
     } size 24;
     clap_input_events { ctx => 0, size => 4, get => 8 } size 12;
     clap_event_header { size => 0, time => 4, space_id => 8, type_ => 10, flags => 12 } size 16;
+    clap_event_note {
+        note_id => 16, port_index => 20, channel => 22, key => 24, velocity => 32,
+    } size 40;
     clap_event_param_value {
         param_id => 16, cookie => 20, note_id => 24, port_index => 28, channel => 30,
         key => 32, value => 40,

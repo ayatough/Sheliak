@@ -33,6 +33,16 @@ policy.
   same effect in the engine's chain.** Running an effect as a plugin is not a
   different effect.
 
+  The module carries two plugins: the distortion, and **Sheliak Synth** — one
+  track of the wavetable engine with a dozen of its parameters exposed and a
+  CLAP note port on the front. It is the reference the note path is checked
+  against, the same way the distortion is the reference for the audio path, and
+  it holds to the same standard: a note played through the plugin comes out
+  sample for sample identical to the same note played through the engine's own
+  track. The host reads a plugin's declared ports rather than assuming a stereo
+  input — an instrument has none, and handing it one is what crashed a
+  third-party instrument in the native renderer.
+
   Nothing in the app uses this yet — the worklet does not host plugins, and a
   module that needs WASI is refused by name. See docs/workstreams.md §8.
 - **A track can be played by a CLAP plugin, named in the document.** A new

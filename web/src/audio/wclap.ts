@@ -91,6 +91,9 @@ const L = {
   outputEvents: { size: 8, ctx: 0, tryPush: 4 },
   eventHeader: { size: 16, byteSize: 0, time: 4, spaceId: 8, type: 10, flags: 12 },
   paramValue: { size: 48, paramId: 16, cookie: 20, noteId: 24, portIndex: 28, channel: 30, key: 32, value: 40 },
+  note: { size: 40, noteId: 16, portIndex: 20, channel: 22, key: 24, velocity: 32 },
+  notePortInfo: { size: 268, id: 0, supportedDialects: 4, preferredDialect: 8, name: 12 },
+  notePortsExt: { count: 0, get: 4 },
   paramInfo: { size: 1320, id: 0, flags: 4, cookie: 8, name: 12, module: 268, min: 1296, max: 1304, default: 1312 },
   audioPortInfo: { size: 276, id: 0, name: 4, flags: 260, channelCount: 264, portType: 268, inPlacePair: 272 },
   audioPortsExt: { count: 0, get: 4 },
@@ -99,11 +102,15 @@ const L = {
 
 const CLAP_NAME_SIZE = 256;
 const CORE_EVENT_SPACE = 0;
+const EVENT_NOTE_ON = 0;
+const EVENT_NOTE_OFF = 1;
 const EVENT_PARAM_VALUE = 5;
 const PARAM_IS_STEPPED = 1 << 0;
 const PARAM_IS_ENUM = 1 << 16;
-/** How many parameter changes one block may carry before they are dropped. */
+/** How many events one block may carry before the rest are dropped. */
 const EVENT_CAPACITY = 256;
+/** Every event this host writes fits in the largest one it writes. */
+const EVENT_STRIDE = L.paramValue.size;
 
 /** What a `clap_plugin_descriptor` says about itself. */
 export interface WclapDescriptor {
@@ -454,7 +461,9 @@ export class WclapPlugin {
   private eventCount = 0;
   private inputsPtr = 0;
   private outputsPtr = 0;
-  /** in L, in R, out L, out R — see `channel()`. */
+  private mainInputChannels = 0;
+  private mainOutputChannels = 0;
+  /** Channel views: 0..1 main input, 2..3 main output — see `channel()`. */
   private views: Array<Float32Array | undefined> = [];
 
   constructor(module: WclapModule, ptr: number) {
@@ -510,6 +519,18 @@ export class WclapPlugin {
       return out;
     };
     return { inputs: side(true), outputs: side(false) };
+  }
+
+  /**
+   * How many note input ports the plugin has. Anything above zero means it is
+   * played rather than fed — an instrument, where sending audio in would be
+   * sending it somewhere the plugin never looks.
+   */
+  noteInputs(): number {
+    const ext = this.extension('clap.note-ports');
+    if (ext === 0) return 0;
+    const count = this.m.fn(ext + L.notePortsExt.count);
+    return count === null ? 0 : count(this.ptr, 1);
   }
 
   /** Every parameter the plugin declares, in its own order. */
@@ -588,31 +609,46 @@ export class WclapPlugin {
    */
   private buildProcess(maxFrames: number): void {
     const m = this.m;
-    const channelBytes = maxFrames * 4;
-    const inL = m.alloc(channelBytes);
-    const inR = m.alloc(channelBytes);
-    const outL = m.alloc(channelBytes);
-    const outR = m.alloc(channelBytes);
-    this.inData = m.alloc(8);
-    this.outData = m.alloc(8);
-    let view = m.memory;
-    view.setUint32(this.inData, inL, true);
-    view.setUint32(this.inData + 4, inR, true);
-    view.setUint32(this.outData, outL, true);
-    view.setUint32(this.outData + 4, outR, true);
 
-    this.inputsPtr = m.alloc(L.audioBuffer.size);
-    this.outputsPtr = m.alloc(L.audioBuffer.size);
-    view = m.memory;
-    for (const [buf, data] of [
-      [this.inputsPtr, this.inData],
-      [this.outputsPtr, this.outData],
-    ] as const) {
-      view.setUint32(buf + L.audioBuffer.data32, data, true);
-      view.setUint32(buf + L.audioBuffer.channelCount, 2, true);
+    // The ports the plugin declares, not the ports a host would like it to
+    // have. An instrument has no audio input at all, and handing it one is
+    // not a harmless extra: it is a protocol violation, and it is what
+    // crashed a third-party instrument in the native renderer.
+    const { inputs, outputs } = this.ports();
+    if (outputs.length === 0) {
+      throw new Error('this plugin declares no audio output port, so there is nothing to render');
     }
+    const side = (ports: WclapPort[]): { buffers: number; data: number } => {
+      if (ports.length === 0) return { buffers: 0, data: 0 };
+      const buffers = m.alloc(ports.length * L.audioBuffer.size);
+      // The main port's channel pointers, which `input`/`output` hand out.
+      let mainData = 0;
+      ports.forEach((port, index) => {
+        const channels = Math.max(1, port.channels);
+        const data = m.alloc(channels * 4);
+        for (let c = 0; c < channels; c++) {
+          const buffer = m.alloc(maxFrames * 4);
+          m.memory.setUint32(data + c * 4, buffer, true);
+        }
+        const at = buffers + index * L.audioBuffer.size;
+        const view = m.memory;
+        view.setUint32(at + L.audioBuffer.data32, data, true);
+        view.setUint32(at + L.audioBuffer.channelCount, channels, true);
+        if (index === 0) mainData = data;
+      });
+      return { buffers, data: mainData };
+    };
 
-    this.eventArena = m.alloc(EVENT_CAPACITY * L.paramValue.size);
+    const input = side(inputs);
+    const output = side(outputs);
+    this.inputsPtr = input.buffers;
+    this.inData = input.data;
+    this.outputsPtr = output.buffers;
+    this.outData = output.data;
+    this.mainInputChannels = inputs[0]?.channels ?? 0;
+    this.mainOutputChannels = outputs[0]!.channels;
+
+    this.eventArena = m.alloc(EVENT_CAPACITY * EVENT_STRIDE);
 
     const inEvents = m.alloc(L.inputEvents.size);
     const outEvents = m.alloc(L.outputEvents.size);
@@ -621,15 +657,14 @@ export class WclapPlugin {
       {
         params: ['i32', 'i32'],
         result: 'i32',
-        fn: (_list, index) =>
-          index! < this.eventCount ? this.eventArena + index! * L.paramValue.size : 0,
+        fn: (_list, index) => (index! < this.eventCount ? this.eventArena + index! * EVENT_STRIDE : 0),
       },
       // Output events — a plugin reporting its own parameter changes. Nothing
       // reads them yet, and dropping them is legal; accepting them is not
       // optional, because a plugin may check the return value.
       { params: ['i32', 'i32'], result: 'i32', fn: () => 1 },
     ]);
-    view = m.memory;
+    let view = m.memory;
     view.setUint32(inEvents + L.inputEvents.count, count!, true);
     view.setUint32(inEvents + L.inputEvents.get, get!, true);
     view.setUint32(outEvents + L.outputEvents.tryPush, tryPush!, true);
@@ -639,31 +674,43 @@ export class WclapPlugin {
     view.setBigInt64(this.processPtr + L.process.steadyTime, -1n, true);
     view.setUint32(this.processPtr + L.process.audioInputs, this.inputsPtr, true);
     view.setUint32(this.processPtr + L.process.audioOutputs, this.outputsPtr, true);
-    view.setUint32(this.processPtr + L.process.audioInputsCount, 1, true);
-    view.setUint32(this.processPtr + L.process.audioOutputsCount, 1, true);
+    view.setUint32(this.processPtr + L.process.audioInputsCount, inputs.length, true);
+    view.setUint32(this.processPtr + L.process.audioOutputsCount, outputs.length, true);
     view.setUint32(this.processPtr + L.process.inEvents, inEvents, true);
     view.setUint32(this.processPtr + L.process.outEvents, outEvents, true);
   }
 
   /**
-   * A writable view of one input channel — write the block here.
+   * A writable view of one channel of the main input port — write the block
+   * here. Throws for a plugin that has no audio input, because silently
+   * accepting the write would look like it was being fed.
    *
    * Cached, and re-made only when the plugin's memory has grown underneath it:
    * this is called twice per render quantum on the audio thread, where a
    * fresh `Float32Array` per block would be garbage nobody asked for.
    */
-  input(channel: 0 | 1): Float32Array {
-    return this.channel(this.inData, channel);
+  input(channel: number): Float32Array {
+    if (this.mainInputChannels === 0) {
+      throw new Error(
+        `"${this.descriptor().name}" has no audio input — it is played with notes, not fed`,
+      );
+    }
+    return this.channel(this.inData, Math.min(channel, this.mainInputChannels - 1), 0);
   }
 
-  /** A view of one output channel — read the block from here after `process`. */
-  output(channel: 0 | 1): Float32Array {
-    return this.channel(this.outData, channel);
+  /** A view of one channel of the main output port, valid after `process`. */
+  output(channel: number): Float32Array {
+    return this.channel(this.outData, Math.min(channel, this.mainOutputChannels - 1), 2);
   }
 
-  private channel(table: number, index: 0 | 1): Float32Array {
+  /** Channels on the main input and output ports, as the plugin declared them. */
+  channels(): { in: number; out: number } {
+    return { in: this.mainInputChannels, out: this.mainOutputChannels };
+  }
+
+  private channel(table: number, index: number, base: number): Float32Array {
     const buffer = this.m.exports.memory.buffer;
-    const slot = (table === this.inData ? 0 : 2) + index;
+    const slot = base + index;
     const cached = this.views[slot];
     if (cached !== undefined && cached.buffer === buffer) return cached;
     const ptr = this.m.memory.getUint32(table + index * 4, true);
@@ -680,14 +727,9 @@ export class WclapPlugin {
    * changes — a caller that cares can slow down rather than lose one silently.
    */
   setParam(id: number, value: number, time = 0): boolean {
-    if (this.eventCount >= EVENT_CAPACITY) return false;
-    const at = this.eventArena + this.eventCount * L.paramValue.size;
+    const at = this.queue(L.paramValue.size, EVENT_PARAM_VALUE, time);
+    if (at === 0) return false;
     const view = this.m.memory;
-    view.setUint32(at + L.eventHeader.byteSize, L.paramValue.size, true);
-    view.setUint32(at + L.eventHeader.time, time, true);
-    view.setUint16(at + L.eventHeader.spaceId, CORE_EVENT_SPACE, true);
-    view.setUint16(at + L.eventHeader.type, EVENT_PARAM_VALUE, true);
-    view.setUint32(at + L.eventHeader.flags, 0, true);
     view.setUint32(at + L.paramValue.paramId, id, true);
     view.setUint32(at + L.paramValue.cookie, 0, true);
     view.setInt32(at + L.paramValue.noteId, -1, true);
@@ -695,8 +737,53 @@ export class WclapPlugin {
     view.setInt16(at + L.paramValue.channel, -1, true);
     view.setInt16(at + L.paramValue.key, -1, true);
     view.setFloat64(at + L.paramValue.value, value, true);
-    this.eventCount++;
     return true;
+  }
+
+  /**
+   * Plays a note at frame `time` of the next block. `key` is a MIDI note
+   * number and `velocity` is 0..1, which is CLAP's own scale rather than
+   * MIDI's 0..127.
+   */
+  noteOn(key: number, velocity = 1, time = 0): boolean {
+    return this.note(EVENT_NOTE_ON, key, velocity, time);
+  }
+
+  /** Releases a note. A `key` of -1 releases every note the plugin is holding. */
+  noteOff(key: number, time = 0): boolean {
+    return this.note(EVENT_NOTE_OFF, key, 0, time);
+  }
+
+  private note(type: number, key: number, velocity: number, time: number): boolean {
+    const at = this.queue(L.note.size, type, time);
+    if (at === 0) return false;
+    const view = this.m.memory;
+    // No note id: this host addresses notes by key, so per-note expression is
+    // not on the table and -1 says exactly that.
+    view.setInt32(at + L.note.noteId, -1, true);
+    view.setInt16(at + L.note.portIndex, 0, true);
+    view.setInt16(at + L.note.channel, 0, true);
+    view.setInt16(at + L.note.key, key, true);
+    view.setFloat64(at + L.note.velocity, velocity, true);
+    return true;
+  }
+
+  /**
+   * Reserves the next event slot and writes its header. Returns the slot's
+   * address, or 0 when the block is full — a caller that cares can slow down
+   * rather than lose an event silently.
+   */
+  private queue(size: number, type: number, time: number): number {
+    if (this.eventCount >= EVENT_CAPACITY) return 0;
+    const at = this.eventArena + this.eventCount * EVENT_STRIDE;
+    const view = this.m.memory;
+    view.setUint32(at + L.eventHeader.byteSize, size, true);
+    view.setUint32(at + L.eventHeader.time, time, true);
+    view.setUint16(at + L.eventHeader.spaceId, CORE_EVENT_SPACE, true);
+    view.setUint16(at + L.eventHeader.type, type, true);
+    view.setUint32(at + L.eventHeader.flags, 0, true);
+    this.eventCount++;
+    return at;
   }
 
   /** Renders `frames` frames from the input views into the output views. */

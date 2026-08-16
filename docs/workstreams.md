@@ -782,18 +782,27 @@ you debugging two unknowns at once.
 
 Both halves exist and the loop is closed:
 
-- **The plugin.** `wclap/` is Sheliak's distortion behind the CLAP C ABI,
-  built by `scripts/build-wclap.sh` into `web/public/sheliak.wclap/module.wasm`
-  — 96 KiB, no imports at all. `wclap/tests/native.rs` drives it through the
-  entry point natively and asserts the thing that matters: **one block through
-  the plugin is bit-identical to the same block through `Dist` in the chain.**
-  Running an effect as a plugin is not a different effect.
+- **The plugins.** `wclap/` is Sheliak's distortion *and* one track of its
+  synth behind the CLAP C ABI, built by `scripts/build-wclap.sh` into
+  `web/public/sheliak.wclap/module.wasm` — no imports at all.
+  `wclap/tests/native.rs` drives both through the entry point natively and
+  asserts the thing that matters: **a block through the plugin is bit-identical
+  to the same block through `Dist` in the chain, and a note through the plugin
+  is bit-identical to the same note through `Track`.** Running the engine's DSP
+  as a plugin is not different DSP.
 - **The host.** `web/src/audio/wclap.ts` instantiates a module, walks the
-  factory, creates a plugin, reads its parameters and ports, queues parameter
-  events at exact frames and renders. `web/src/audio/wclap.test.ts` runs it
-  against the real bundle: silence in gives silence out, `mix = 0` is a bypass
-  bit for bit, the same input twice gives the same output twice, and an event
-  queued for frame 64 changes the sound at frame 64 and not before.
+  factory, creates a plugin, reads its parameters and its declared ports,
+  queues parameter changes and notes at exact frames, and renders.
+  `web/src/audio/wclap.test.ts` runs it against the real bundle: silence in
+  gives silence out, `mix = 0` is a bypass bit for bit, the same input twice
+  gives the same output twice, an event queued for frame 64 changes the sound
+  at frame 64 and not before, and a note plays and stops.
+
+  The host reads the port layout rather than assuming one. An instrument has
+  **no audio input**, and a host that hands it one is not being generous, it is
+  violating the protocol — which is exactly what crashed a third-party
+  instrument in the native renderer (§13). Asking a plugin with no input for an
+  input buffer is an error that says so.
 
 Four things were unknown when this section was written and are now answered:
 
@@ -832,8 +841,11 @@ of the field rather than corrupting memory in a worklet.
 - **No WASI.** A module that imports anything is refused by name. That is honest
   today and a wall tomorrow: a plugin built against a C sysroot imports
   `wasi_snapshot_preview1`, and most will be.
-- **One plugin, one effect.** `MODELS` in `wclap/src/lib.rs` is a list; a second
-  effect is a descriptor, a parameter table and a constructor.
+- **Two plugins out of nine possible ones.** `MODELS` in `wclap/src/lib.rs` is a
+  list; another effect is a descriptor, a parameter table and a constructor.
+- **The synth exposes thirteen parameters of a 192-slot block.** The rest are
+  fixed at values a host cannot reach. Widening that is easy and irreversible —
+  a CLAP parameter id is a promise — so it waits for someone automating one.
 
 Three risks worth knowing before starting:
 

@@ -17,6 +17,7 @@ import { WclapModule, installCallbacks, type WclapPlugin } from './wclap.ts';
 
 const BUNDLE = resolve(__dirname, '../../public/sheliak.wclap/module.wasm');
 const PLUGIN_ID = 'io.github.ayatough.sheliak.dist';
+const SYNTH_ID = 'io.github.ayatough.sheliak.synth';
 const SAMPLE_RATE = 48000;
 const BLOCK = 128;
 
@@ -60,15 +61,16 @@ withBundle('the module Sheliak builds', () => {
     expect(exports.filter((e) => e.kind === 'table')).toHaveLength(1);
   });
 
-  it('announces itself through the factory', () => {
+  it('announces both of its plugins through the factory', () => {
     const descriptors = load().descriptors();
-    expect(descriptors).toHaveLength(1);
+    expect(descriptors.map((d) => d.id)).toEqual([PLUGIN_ID, SYNTH_ID]);
     expect(descriptors[0]).toMatchObject({
       id: PLUGIN_ID,
       name: 'Sheliak Distortion',
       vendor: 'Sheliak',
     });
     expect(descriptors[0]!.features).toContain('audio-effect');
+    expect(descriptors[1]!.features).toContain('instrument');
   });
 
   it('refuses a plugin id it does not have, and says what it does have', () => {
@@ -92,7 +94,8 @@ withBundle('what the host can read off a plugin', () => {
     expect(plugin.valueText(2, 0)).toBe('Tanh');
     expect(plugin.valueText(2, 1)).toBe('Fold');
     expect(plugin.valueText(2, 2)).toBe('Clip');
-    expect(plugin.valueText(3, 20000)).toBe('20000');
+    // A unit the plugin names itself: Sheliak has no idea this is a frequency.
+    expect(plugin.valueText(3, 20000)).toBe('20000 Hz');
     plugin.destroy();
   });
 
@@ -204,6 +207,99 @@ withBundle('what comes out of process()', () => {
     const plugin = open();
     expect(() => plugin.process(BLOCK + 1)).toThrow(/activated for/);
     plugin.destroy();
+  });
+});
+
+withBundle('an instrument, which is a different shape of plugin', () => {
+  function synth(): WclapPlugin {
+    const plugin = load().create(SYNTH_ID);
+    plugin.activate(SAMPLE_RATE, BLOCK);
+    return plugin;
+  }
+
+  const peak = (samples: Float32Array): number =>
+    [...samples].reduce((m, s) => Math.max(m, Math.abs(s)), 0);
+
+  it('declares notes in and no audio in, and the host believes it', () => {
+    const plugin = synth();
+    expect(plugin.ports().inputs).toEqual([]);
+    expect(plugin.ports().outputs).toHaveLength(1);
+    expect(plugin.noteInputs()).toBe(1);
+    expect(plugin.channels()).toEqual({ in: 0, out: 2 });
+    // Asking for an input it does not have is a mistake worth naming, not a
+    // buffer to quietly hand over.
+    expect(() => plugin.input(0)).toThrow(/no audio input/);
+    plugin.destroy();
+  });
+
+  it('an effect has audio in and no notes, which is how the two are told apart', () => {
+    const plugin = open();
+    expect(plugin.noteInputs()).toBe(0);
+    expect(plugin.channels()).toEqual({ in: 2, out: 2 });
+    plugin.destroy();
+  });
+
+  it('plays a note, and stops when it is released', () => {
+    const plugin = synth();
+    plugin.process(BLOCK);
+    expect(peak(plugin.output(0))).toBe(0);
+
+    plugin.noteOn(60, 1);
+    let loudest = 0;
+    for (let i = 0; i < 8; i++) {
+      plugin.process(BLOCK);
+      loudest = Math.max(loudest, peak(plugin.output(0)));
+    }
+    expect(loudest).toBeGreaterThan(0.05);
+    expect([...plugin.output(0)].every((s) => Number.isFinite(s) && Math.abs(s) <= 1.5)).toBe(true);
+
+    plugin.noteOff(60);
+    for (let i = 0; i < 400; i++) plugin.process(BLOCK);
+    expect(peak(plugin.output(0))).toBe(0);
+    plugin.destroy();
+  });
+
+  it('takes its parameters the same way an effect does', () => {
+    const plugin = synth();
+    const params = plugin.params();
+    expect(params.map((p) => p.name)).toContain('Cutoff');
+    expect(plugin.valueText(5, 8000)).toBe('8000 Hz');
+    expect(plugin.valueText(0, 3)).toBe('Square');
+
+    // A closed filter is audibly quieter than an open one, which is the
+    // cheapest proof that a parameter reached the DSP rather than a struct.
+    const loud = (cutoff: number): number => {
+      const p = synth();
+      p.setParam(5, cutoff);
+      p.noteOn(48, 1);
+      let energy = 0;
+      for (let i = 0; i < 16; i++) {
+        p.process(BLOCK);
+        for (const s of p.output(0)) energy += s * s;
+      }
+      p.destroy();
+      return energy;
+    };
+    expect(loud(20000)).toBeGreaterThan(loud(80) * 2);
+    plugin.destroy();
+  });
+
+  it('two instances of the same module do not disturb each other', () => {
+    const module = load();
+    const a = module.create(SYNTH_ID);
+    const b = module.create(SYNTH_ID);
+    a.activate(SAMPLE_RATE, BLOCK);
+    b.activate(SAMPLE_RATE, BLOCK);
+
+    a.noteOn(60, 1);
+    for (let i = 0; i < 4; i++) {
+      a.process(BLOCK);
+      b.process(BLOCK);
+    }
+    expect(peak(a.output(0))).toBeGreaterThan(0);
+    expect(peak(b.output(0))).toBe(0);
+    a.destroy();
+    b.destroy();
   });
 });
 

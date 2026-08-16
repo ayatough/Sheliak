@@ -47,12 +47,16 @@ use std::ptr::{null, null_mut};
 
 use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::{
-    clap_event_header, clap_event_param_value, clap_input_events, clap_output_events,
-    CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE,
+    clap_event_header, clap_event_note, clap_event_param_value, clap_input_events,
+    clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_OFF,
+    CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
 };
 use clap_sys::ext::audio_ports::{
     clap_audio_port_info, clap_plugin_audio_ports, CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS,
     CLAP_PORT_STEREO,
+};
+use clap_sys::ext::note_ports::{
+    clap_note_port_info, clap_plugin_note_ports, CLAP_EXT_NOTE_PORTS, CLAP_NOTE_DIALECT_CLAP,
 };
 use clap_sys::ext::params::{
     clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE,
@@ -60,7 +64,7 @@ use clap_sys::ext::params::{
 };
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
-use clap_sys::id::clap_id;
+use clap_sys::id::{clap_id, CLAP_INVALID_ID};
 use clap_sys::plugin::{clap_plugin, clap_plugin_descriptor};
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 use clap_sys::version::CLAP_VERSION;
@@ -68,8 +72,13 @@ use clap_sys::version::CLAP_VERSION;
 use sheliak_dsp::fx::dist::Dist;
 use sheliak_dsp::fx::Effect;
 use sheliak_dsp::params::{
-    DIST_DRIVE, DIST_MIX, DIST_MODE, DIST_TONE_HZ, FX_SLOT_STRIDE, MAX_BLOCK,
+    DIST_DRIVE, DIST_MIX, DIST_MODE, DIST_TONE_HZ, ENV_A, ENV_AMP_BASE, ENV_D, ENV_FILTER_BASE,
+    ENV_R, ENV_S, FX_SLOT_STRIDE, MAX_BLOCK, OSC_A_BASE, OSC_DETUNE_CENTS, OSC_ENABLED, OSC_LEVEL,
+    OSC_MORPH, OSC_TABLE_ID, OSC_UNISON, PARAM_COUNT, P_FILTER_CUTOFF_HZ, P_FILTER_MODE,
+    P_FILTER_RES, P_GLIDE_S, P_MASTER_GAIN, P_POLYPHONY,
 };
+use sheliak_dsp::tables::{self, Table};
+use sheliak_dsp::Track;
 
 // --------------------------------------------------------------- descriptors
 
@@ -78,37 +87,70 @@ const fn cstr(bytes: &'static [u8]) -> *const c_char {
     bytes.as_ptr() as *const c_char
 }
 
+/// What kind of number a parameter is, which is all a host needs to label it.
+enum ParamKind {
+    /// A quantity. `decimals` and `suffix` are only ever used by
+    /// `value_to_text` — the value itself is the block value, unconverted.
+    Number {
+        decimals: usize,
+        suffix: &'static str,
+    },
+    /// Whole numbers with no names — a count, like unison voices.
+    Count,
+    /// Whole numbers where each step is a name rather than a quantity.
+    Choice(&'static [&'static [u8]]),
+}
+
 /// One parameter, in the two vocabularies at once: CLAP's (an id, a range, a
-/// default) and the effect's (an index into its own block).
+/// default) and the DSP's (an index into a parameter block).
 struct ParamDesc {
     id: clap_id,
     name: &'static [u8],
-    /// Index into the effect's `FX_SLOT_STRIDE`-long parameter block. The CLAP
-    /// value *is* the block value — no unit conversion happens anywhere here,
+    /// Index into the block this plugin's DSP reads — an effect's own
+    /// `FX_SLOT_STRIDE` floats, or the synth's `PARAM_COUNT` ones. The CLAP
+    /// value *is* the block value; no unit conversion happens anywhere here,
     /// because the DSP core does not know units (non-negotiable 1).
     offset: usize,
     min: f64,
     max: f64,
     default: f64,
-    /// Whole numbers only, and each one is a name rather than a quantity.
-    enumerated: Option<&'static [&'static [u8]]>,
+    kind: ParamKind,
 }
 
 impl ParamDesc {
     fn flags(&self) -> u32 {
         let mut f = CLAP_PARAM_IS_AUTOMATABLE;
-        if self.enumerated.is_some() {
-            f |= CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM;
+        match self.kind {
+            ParamKind::Number { .. } => {}
+            ParamKind::Count => f |= CLAP_PARAM_IS_STEPPED,
+            ParamKind::Choice(_) => f |= CLAP_PARAM_IS_STEPPED | CLAP_PARAM_IS_ENUM,
         }
         f
     }
 }
 
+/// What a model actually is once it is running.
+enum Kind {
+    /// Audio in, audio out. One of the chain's effects.
+    Effect(fn(f32) -> Box<dyn Effect>),
+    /// Notes in, audio out. The engine's own voice, as a plugin.
+    Instrument,
+}
+
 /// A plugin this module can make.
 struct Model {
     descriptor: clap_plugin_descriptor,
+    kind: Kind,
     params: &'static [ParamDesc],
-    make: fn(f32) -> Box<dyn Effect>,
+    /// Block values a host never sees and never sets. An effect needs none —
+    /// its whole block is its parameters — while the synth's block has 192
+    /// slots and this plugin exposes a dozen, so the rest have to be given
+    /// sensible values or the patch is a silent one.
+    fixed: &'static [(usize, f32)],
+    /// Audio input ports. Zero for an instrument, which is the case a host
+    /// that assumes "everything has an input" gets wrong.
+    audio_inputs: u32,
+    note_inputs: u32,
 }
 
 /// Raw pointers into `'static` string data. Immutable for the life of the
@@ -116,6 +158,23 @@ struct Model {
 /// AudioWorklet render thread, exactly as `dsp/src/lib.rs` documents.
 struct Statics<T>(T);
 unsafe impl<T> Sync for Statics<T> {}
+
+const NUMBER: ParamKind = ParamKind::Number {
+    decimals: 2,
+    suffix: "",
+};
+const HERTZ: ParamKind = ParamKind::Number {
+    decimals: 0,
+    suffix: " Hz",
+};
+const SECONDS: ParamKind = ParamKind::Number {
+    decimals: 3,
+    suffix: " s",
+};
+const CENTS: ParamKind = ParamKind::Number {
+    decimals: 1,
+    suffix: " ct",
+};
 
 static DIST_MODE_NAMES: [&[u8]; 3] = [b"Tanh\0", b"Fold\0", b"Clip\0"];
 
@@ -127,7 +186,7 @@ static DIST_PARAMS: [ParamDesc; 4] = [
         min: 0.0,
         max: 1.0,
         default: 0.3,
-        enumerated: None,
+        kind: NUMBER,
     },
     ParamDesc {
         id: 1,
@@ -136,7 +195,7 @@ static DIST_PARAMS: [ParamDesc; 4] = [
         min: 0.0,
         max: 1.0,
         default: 1.0,
-        enumerated: None,
+        kind: NUMBER,
     },
     ParamDesc {
         id: 2,
@@ -145,7 +204,7 @@ static DIST_PARAMS: [ParamDesc; 4] = [
         min: 0.0,
         max: 2.0,
         default: 0.0,
-        enumerated: Some(&DIST_MODE_NAMES),
+        kind: ParamKind::Choice(&DIST_MODE_NAMES),
     },
     ParamDesc {
         id: 3,
@@ -154,7 +213,7 @@ static DIST_PARAMS: [ParamDesc; 4] = [
         min: 20.0,
         max: 20_000.0,
         default: 20_000.0,
-        enumerated: None,
+        kind: HERTZ,
     },
 ];
 
@@ -165,23 +224,203 @@ static DIST_FEATURES: Statics<[*const c_char; 4]> = Statics([
     null(),
 ]);
 
-/// Every plugin this module offers, in factory order.
-static MODELS: Statics<[Model; 1]> = Statics([Model {
-    descriptor: clap_plugin_descriptor {
-        clap_version: CLAP_VERSION,
-        id: cstr(b"io.github.ayatough.sheliak.dist\0"),
-        name: cstr(b"Sheliak Distortion\0"),
-        vendor: cstr(b"Sheliak\0"),
-        url: cstr(b"https://github.com/ayatough/Sheliak\0"),
-        manual_url: cstr(b"https://github.com/ayatough/Sheliak\0"),
-        support_url: cstr(b"https://github.com/ayatough/Sheliak/issues\0"),
-        version: cstr(b"0.1.0\0"),
-        description: cstr(b"The distortion from Sheliak's own effect chain.\0"),
-        features: DIST_FEATURES.0.as_ptr(),
+static WAVEFORM_NAMES: [&[u8]; 6] = [
+    b"Sine\0",
+    b"Triangle\0",
+    b"Saw\0",
+    b"Square\0",
+    b"PWM\0",
+    b"Fold\0",
+];
+static FILTER_MODE_NAMES: [&[u8]; 4] = [b"LP 12\0", b"LP 24\0", b"HP 12\0", b"BP 12\0"];
+
+/// The synth's controls: a dozen out of a 192-slot block.
+///
+/// Which dozen is a judgement call, and it is the same one the DSL's `synth`
+/// fence makes — these are the fields a patch actually writes. The rest of the
+/// block is in [`SYNTH_FIXED`], where a host cannot reach it: a CLAP parameter
+/// list is a promise of stable ids, and promising 192 of them for a plugin
+/// nobody has automated yet would be a promise made too early.
+static SYNTH_PARAMS: [ParamDesc; 13] = [
+    ParamDesc {
+        id: 0,
+        name: b"Waveform\0",
+        offset: OSC_A_BASE + OSC_TABLE_ID,
+        min: 0.0,
+        max: 5.0,
+        default: 2.0,
+        kind: ParamKind::Choice(&WAVEFORM_NAMES),
     },
-    params: &DIST_PARAMS,
-    make: |sample_rate| Box::new(Dist::new(sample_rate)),
-}]);
+    ParamDesc {
+        id: 1,
+        name: b"Morph\0",
+        offset: OSC_A_BASE + OSC_MORPH,
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        kind: NUMBER,
+    },
+    ParamDesc {
+        id: 2,
+        name: b"Level\0",
+        offset: OSC_A_BASE + OSC_LEVEL,
+        min: 0.0,
+        max: 1.0,
+        default: 0.8,
+        kind: NUMBER,
+    },
+    ParamDesc {
+        id: 3,
+        name: b"Unison\0",
+        offset: OSC_A_BASE + OSC_UNISON,
+        min: 1.0,
+        max: 7.0,
+        default: 1.0,
+        kind: ParamKind::Count,
+    },
+    ParamDesc {
+        id: 4,
+        name: b"Detune\0",
+        offset: OSC_A_BASE + OSC_DETUNE_CENTS,
+        min: 0.0,
+        max: 50.0,
+        default: 10.0,
+        kind: CENTS,
+    },
+    ParamDesc {
+        id: 5,
+        name: b"Cutoff\0",
+        offset: P_FILTER_CUTOFF_HZ,
+        min: 20.0,
+        max: 20_000.0,
+        default: 8_000.0,
+        kind: HERTZ,
+    },
+    ParamDesc {
+        id: 6,
+        name: b"Resonance\0",
+        offset: P_FILTER_RES,
+        min: 0.0,
+        max: 1.0,
+        default: 0.2,
+        kind: NUMBER,
+    },
+    ParamDesc {
+        id: 7,
+        name: b"Filter Mode\0",
+        offset: P_FILTER_MODE,
+        min: 0.0,
+        max: 3.0,
+        default: 0.0,
+        kind: ParamKind::Choice(&FILTER_MODE_NAMES),
+    },
+    ParamDesc {
+        id: 8,
+        name: b"Attack\0",
+        offset: ENV_AMP_BASE + ENV_A,
+        min: 0.0,
+        max: 4.0,
+        default: 0.005,
+        kind: SECONDS,
+    },
+    ParamDesc {
+        id: 9,
+        name: b"Decay\0",
+        offset: ENV_AMP_BASE + ENV_D,
+        min: 0.0,
+        max: 4.0,
+        default: 0.2,
+        kind: SECONDS,
+    },
+    ParamDesc {
+        id: 10,
+        name: b"Sustain\0",
+        offset: ENV_AMP_BASE + ENV_S,
+        min: 0.0,
+        max: 1.0,
+        default: 0.7,
+        kind: NUMBER,
+    },
+    ParamDesc {
+        id: 11,
+        name: b"Release\0",
+        offset: ENV_AMP_BASE + ENV_R,
+        min: 0.0,
+        max: 8.0,
+        default: 0.3,
+        kind: SECONDS,
+    },
+    ParamDesc {
+        id: 12,
+        name: b"Glide\0",
+        offset: P_GLIDE_S,
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        kind: SECONDS,
+    },
+];
+
+/// Block values the host never sees. Without these the patch is silent (an
+/// oscillator that is not enabled) or unplayable (no polyphony).
+static SYNTH_FIXED: [(usize, f32); 4] = [
+    (OSC_A_BASE + OSC_ENABLED, 1.0),
+    (P_POLYPHONY, 8.0),
+    (P_MASTER_GAIN, 1.0),
+    (ENV_FILTER_BASE + ENV_R, 0.2),
+];
+
+static SYNTH_FEATURES: Statics<[*const c_char; 4]> = Statics([
+    cstr(b"instrument\0"),
+    cstr(b"synthesizer\0"),
+    cstr(b"stereo\0"),
+    null(),
+]);
+
+/// Every plugin this module offers, in factory order.
+static MODELS: Statics<[Model; 2]> = Statics([
+    Model {
+        descriptor: clap_plugin_descriptor {
+            clap_version: CLAP_VERSION,
+            id: cstr(b"io.github.ayatough.sheliak.dist\0"),
+            name: cstr(b"Sheliak Distortion\0"),
+            vendor: cstr(b"Sheliak\0"),
+            url: cstr(b"https://github.com/ayatough/Sheliak\0"),
+            manual_url: cstr(b"https://github.com/ayatough/Sheliak\0"),
+            support_url: cstr(b"https://github.com/ayatough/Sheliak/issues\0"),
+            version: cstr(b"0.1.0\0"),
+            description: cstr(b"The distortion from Sheliak's own effect chain.\0"),
+            features: DIST_FEATURES.0.as_ptr(),
+        },
+        kind: Kind::Effect(|sample_rate| Box::new(Dist::new(sample_rate))),
+        params: &DIST_PARAMS,
+        fixed: &[],
+        audio_inputs: 1,
+        note_inputs: 0,
+    },
+    Model {
+        descriptor: clap_plugin_descriptor {
+            clap_version: CLAP_VERSION,
+            id: cstr(b"io.github.ayatough.sheliak.synth\0"),
+            name: cstr(b"Sheliak Synth\0"),
+            vendor: cstr(b"Sheliak\0"),
+            url: cstr(b"https://github.com/ayatough/Sheliak\0"),
+            manual_url: cstr(b"https://github.com/ayatough/Sheliak\0"),
+            support_url: cstr(b"https://github.com/ayatough/Sheliak/issues\0"),
+            version: cstr(b"0.1.0\0"),
+            description: cstr(b"One track of Sheliak's wavetable engine, as a plugin.\0"),
+            features: SYNTH_FEATURES.0.as_ptr(),
+        },
+        kind: Kind::Instrument,
+        params: &SYNTH_PARAMS,
+        fixed: &SYNTH_FIXED,
+        // An instrument has no audio input, and a host that assumes otherwise
+        // hands it a port it never asked for. That is not a hypothetical: it is
+        // what crashed a third-party instrument in the native renderer.
+        audio_inputs: 0,
+        note_inputs: 1,
+    },
+]);
 
 // -------------------------------------------------------------------- helpers
 
@@ -233,17 +472,37 @@ fn write_text(text: &str, out: *mut c_char, capacity: u32) -> bool {
 
 // ------------------------------------------------------------------ instance
 
+/// The engine's own voice, with the wavetables it needs to speak.
+struct Synth {
+    track: Track,
+    /// ~5.5 MB, built once at `activate()` and read-only afterwards. The
+    /// engine shares one set across sixteen tracks; a plugin instance is one
+    /// track and carries its own, which is the price of being loadable on its
+    /// own.
+    tables: Vec<Table>,
+}
+
+/// What a model is once it is running. Empty until `activate()`, because that
+/// is where the sample rate arrives and therefore where anything can be built.
+enum Running {
+    Idle,
+    Effect(Box<dyn Effect>),
+    Instrument(Box<Synth>),
+}
+
 /// One live plugin. `clap` is first so a host that (wrongly) treats the
 /// `clap_plugin*` as the instance address still lands on something valid.
 struct Instance {
     clap: clap_plugin,
     model: &'static Model,
-    /// The effect's own parameter block — the same numbers, at the same
-    /// offsets, that the engine writes into a track's patch.
-    block: [f32; FX_SLOT_STRIDE],
-    /// Built at `activate()`, where the sample rate is finally known, and
-    /// dropped at `deactivate()`. Allocation lives here and nowhere else.
-    effect: Option<Box<dyn Effect>>,
+    /// The parameter block the DSP reads — the same numbers, at the same
+    /// offsets, the engine writes into a patch. An effect uses the first
+    /// `FX_SLOT_STRIDE` of it and the synth uses all of it; one array keeps
+    /// the parameter path identical for both.
+    block: Box<[f32; PARAM_COUNT]>,
+    /// Built at `activate()` and dropped at `deactivate()`. Allocation lives
+    /// here and nowhere else.
+    running: Running,
     sample_rate: f32,
     /// The next `apply_patch` snaps its smoothers instead of ramping them.
     first: bool,
@@ -253,34 +512,70 @@ struct Instance {
 }
 
 impl Instance {
-    /// Applies one event, ignoring anything that is not a parameter change in
-    /// the core event space — an unknown event is not an error.
+    /// Applies one event, ignoring anything in another event space and any
+    /// type this plugin has no use for — an unknown event is not an error.
     ///
     /// # Safety
     ///
     /// `header` must point at a complete event of the size it declares.
     unsafe fn event(&mut self, header: *const clap_event_header) {
-        if (*header).space_id != CLAP_CORE_EVENT_SPACE_ID
-            || (*header).type_ != CLAP_EVENT_PARAM_VALUE
-        {
+        if (*header).space_id != CLAP_CORE_EVENT_SPACE_ID {
             return;
         }
-        let ev = header as *const clap_event_param_value;
-        let id = (*ev).param_id;
-        let Some(p) = self.model.params.iter().find(|p| p.id == id) else {
-            return;
-        };
-        self.block[p.offset] = (*ev).value.clamp(p.min, p.max) as f32;
+        match (*header).type_ {
+            CLAP_EVENT_PARAM_VALUE => {
+                let ev = header as *const clap_event_param_value;
+                let id = (*ev).param_id;
+                let Some(p) = self.model.params.iter().find(|p| p.id == id) else {
+                    return;
+                };
+                self.block[p.offset] = (*ev).value.clamp(p.min, p.max) as f32;
+            }
+            CLAP_EVENT_NOTE_ON | CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_CHOKE => {
+                let Running::Instrument(synth) = &mut self.running else {
+                    return;
+                };
+                let ev = header as *const clap_event_note;
+                // A key of -1 is CLAP's wildcard and means "every note".
+                let key = (*ev).key;
+                match (*header).type_ {
+                    CLAP_EVENT_NOTE_ON => {
+                        if key >= 0 {
+                            synth
+                                .track
+                                .note_on(key as f32, (*ev).velocity.clamp(0.0, 1.0) as f32);
+                        }
+                    }
+                    _ if key < 0 => synth.track.all_notes_off(),
+                    _ => synth.track.note_off(key as f32),
+                }
+            }
+            _ => {}
+        }
     }
 
-    /// Runs `frames` of the two channels, in place, with the current block.
+    /// Runs one stretch of the block, in place, with the current parameters.
     fn run(&mut self, l: &mut [f32], r: &mut [f32]) {
-        let Some(effect) = self.effect.as_mut() else {
-            return;
-        };
-        effect.apply_patch(&self.block, self.sample_rate, self.first);
+        let sample_rate = self.sample_rate;
+        let first = self.first;
         self.first = false;
-        effect.run(l, r, self.sample_rate);
+        match &mut self.running {
+            Running::Idle => {}
+            Running::Effect(effect) => {
+                effect.apply_patch(&self.block[..FX_SLOT_STRIDE], sample_rate, first);
+                effect.run(l, r, sample_rate);
+            }
+            Running::Instrument(synth) => {
+                synth.track.apply_patch(&self.block);
+                // A track that has never been patched, or whose voices have all
+                // faded, writes nothing at all — which for an instrument means
+                // silence rather than "leave the buffer alone".
+                if !synth.track.process(&synth.tables, l, r) {
+                    l.fill(0.0);
+                    r.fill(0.0);
+                }
+            }
+        }
     }
 }
 
@@ -326,7 +621,13 @@ unsafe extern "C" fn plugin_activate(
         return false;
     };
     inst.sample_rate = sample_rate as f32;
-    inst.effect = Some((inst.model.make)(inst.sample_rate));
+    inst.running = match inst.model.kind {
+        Kind::Effect(make) => Running::Effect(make(inst.sample_rate)),
+        Kind::Instrument => Running::Instrument(Box::new(Synth {
+            track: Track::new(inst.sample_rate),
+            tables: tables::build_all(),
+        })),
+    };
     inst.first = true;
     inst.scratch = vec![0.0; max_frames.max(MAX_BLOCK as u32) as usize];
     true
@@ -334,7 +635,7 @@ unsafe extern "C" fn plugin_activate(
 
 unsafe extern "C" fn plugin_deactivate(plugin: *const clap_plugin) {
     if let Some(inst) = instance(plugin) {
-        inst.effect = None;
+        inst.running = Running::Idle;
         inst.scratch = Vec::new();
     }
 }
@@ -347,8 +648,10 @@ unsafe extern "C" fn plugin_stop_processing(_plugin: *const clap_plugin) {}
 
 unsafe extern "C" fn plugin_reset(plugin: *const clap_plugin) {
     if let Some(inst) = instance(plugin) {
-        if let Some(effect) = inst.effect.as_mut() {
-            effect.reset();
+        match &mut inst.running {
+            Running::Idle => {}
+            Running::Effect(effect) => effect.reset(),
+            Running::Instrument(synth) => synth.track.all_notes_off(),
         }
         inst.first = true;
     }
@@ -357,7 +660,7 @@ unsafe extern "C" fn plugin_reset(plugin: *const clap_plugin) {
 unsafe extern "C" fn plugin_on_main_thread(_plugin: *const clap_plugin) {}
 
 unsafe extern "C" fn plugin_get_extension(
-    _plugin: *const clap_plugin,
+    plugin: *const clap_plugin,
     id: *const c_char,
 ) -> *const c_void {
     if cstr_is(id, CLAP_EXT_AUDIO_PORTS.to_bytes_with_nul()) {
@@ -365,6 +668,13 @@ unsafe extern "C" fn plugin_get_extension(
     }
     if cstr_is(id, CLAP_EXT_PARAMS.to_bytes_with_nul()) {
         return &PARAMS.0 as *const clap_plugin_params as *const c_void;
+    }
+    // Only an instrument answers here. An effect that advertised a note port
+    // it does not read would make a host route notes into nothing.
+    if cstr_is(id, CLAP_EXT_NOTE_PORTS.to_bytes_with_nul())
+        && instance(plugin).is_some_and(|inst| inst.model.note_inputs > 0)
+    {
+        return &NOTE_PORTS.0 as *const clap_plugin_note_ports as *const c_void;
     }
     null()
 }
@@ -505,27 +815,36 @@ unsafe extern "C" fn plugin_process(
 
 // ------------------------------------------------------------- audio-ports ext
 
-unsafe extern "C" fn ports_count(_plugin: *const clap_plugin, _is_input: bool) -> u32 {
-    1
+unsafe extern "C" fn ports_count(plugin: *const clap_plugin, is_input: bool) -> u32 {
+    let Some(inst) = instance(plugin) else {
+        return 0;
+    };
+    if is_input {
+        inst.model.audio_inputs
+    } else {
+        1
+    }
 }
 
 unsafe extern "C" fn ports_get(
-    _plugin: *const clap_plugin,
+    plugin: *const clap_plugin,
     index: u32,
     is_input: bool,
     info: *mut clap_audio_port_info,
 ) -> bool {
-    if index != 0 || info.is_null() {
+    if index >= ports_count(plugin, is_input) || info.is_null() {
         return false;
     }
+    let has_input = ports_count(plugin, true) > 0;
     let info = &mut *info;
     info.id = 0;
     info.flags = CLAP_AUDIO_PORT_IS_MAIN;
     info.channel_count = 2;
     info.port_type = CLAP_PORT_STEREO.as_ptr();
     // Both ports carry id 0, so this says "in-place with the other side's
-    // port 0" — which `plugin_process` handles by skipping the copy.
-    info.in_place_pair = 0;
+    // port 0" — which `plugin_process` handles by skipping the copy. An
+    // instrument has no other side, and must say so.
+    info.in_place_pair = if has_input { 0 } else { CLAP_INVALID_ID };
     write_name(
         &mut info.name,
         if is_input { b"Input\0" } else { b"Output\0" },
@@ -536,6 +855,43 @@ unsafe extern "C" fn ports_get(
 static AUDIO_PORTS: Statics<clap_plugin_audio_ports> = Statics(clap_plugin_audio_ports {
     count: Some(ports_count),
     get: Some(ports_get),
+});
+
+// -------------------------------------------------------------- note-ports ext
+
+unsafe extern "C" fn note_ports_count(plugin: *const clap_plugin, is_input: bool) -> u32 {
+    let Some(inst) = instance(plugin) else {
+        return 0;
+    };
+    if is_input {
+        inst.model.note_inputs
+    } else {
+        0
+    }
+}
+
+unsafe extern "C" fn note_ports_get(
+    plugin: *const clap_plugin,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_note_port_info,
+) -> bool {
+    if index >= note_ports_count(plugin, is_input) || info.is_null() {
+        return false;
+    }
+    let info = &mut *info;
+    info.id = 0;
+    // CLAP notes only. MIDI would mean parsing bytes to reach the same two
+    // numbers this plugin uses, and a host that has notes has CLAP notes.
+    info.supported_dialects = CLAP_NOTE_DIALECT_CLAP;
+    info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
+    write_name(&mut info.name, b"Notes\0");
+    true
+}
+
+static NOTE_PORTS: Statics<clap_plugin_note_ports> = Statics(clap_plugin_note_ports {
+    count: Some(note_ports_count),
+    get: Some(note_ports_get),
 });
 
 // ------------------------------------------------------------------ params ext
@@ -601,14 +957,13 @@ unsafe extern "C" fn params_value_to_text(
     let Some(desc) = inst.model.params.iter().find(|p| p.id == id) else {
         return false;
     };
-    let text = match desc.enumerated {
-        Some(names) => {
+    let text = match desc.kind {
+        ParamKind::Choice(names) => {
             let i = value.round().clamp(0.0, (names.len() - 1) as f64) as usize;
             String::from_utf8_lossy(&names[i][..names[i].len() - 1]).into_owned()
         }
-        // Two decimals for a 0..1 control, none for anything measured in Hz.
-        None if desc.max <= 1.0 => format!("{value:.2}"),
-        None => format!("{value:.0}"),
+        ParamKind::Count => format!("{:.0}", value.round()),
+        ParamKind::Number { decimals, suffix } => format!("{value:.decimals$}{suffix}"),
     };
     write_text(&text, out, capacity)
 }
@@ -632,7 +987,7 @@ unsafe extern "C" fn params_text_to_value(
         return false;
     };
     let text = text.trim();
-    if let Some(names) = desc.enumerated {
+    if let ParamKind::Choice(names) = desc.kind {
         for (i, name) in names.iter().enumerate() {
             let name = &name[..name.len() - 1];
             if text.as_bytes().eq_ignore_ascii_case(name) {
@@ -641,6 +996,11 @@ unsafe extern "C" fn params_text_to_value(
             }
         }
     }
+    // "8000 Hz" and "0.30 s" are what `value_to_text` produced, so they are
+    // what a host is most likely to hand back.
+    let text = text
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic())
+        .trim();
     let Ok(value) = text.parse::<f64>() else {
         return false;
     };
@@ -705,7 +1065,10 @@ unsafe extern "C" fn factory_create(
         return null();
     };
 
-    let mut block = [0.0f32; FX_SLOT_STRIDE];
+    let mut block = Box::new([0.0f32; PARAM_COUNT]);
+    for &(offset, value) in model.fixed {
+        block[offset] = value;
+    }
     for p in model.params {
         block[p.offset] = p.default as f32;
     }
@@ -727,7 +1090,7 @@ unsafe extern "C" fn factory_create(
         },
         model,
         block,
-        effect: None,
+        running: Running::Idle,
         sample_rate: 48_000.0,
         first: true,
         scratch: Vec::new(),
