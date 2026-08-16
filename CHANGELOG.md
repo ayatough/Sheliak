@@ -13,6 +13,21 @@ policy.
 ## [Unreleased]
 
 ### Added
+- **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
+  plugin track shows one control per CLAP parameter: the plugin's own names, its
+  ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —
+  because `value_to_text` is the only label Sheliak has for a control it knows
+  nothing about. Turning one rewrites exactly the line it belongs to and nothing
+  else, **keeping the spelling that line already used**: `cutoff: 40%` stays a
+  percentage, `cutoff: 8000` stays a number.
+
+  A moved knob reaches the running plugin as a CLAP event rather than rebuilding
+  it, so scrubbing a control during playback does not cut the note it is holding.
+
+  One thing is guessed rather than known: whether a slider is linear or
+  logarithmic. CLAP carries no unit and no hint, so a range spanning a factor of
+  a hundred or more gets a log slider. It is a guess about feel — the value
+  written is identical either way.
 - **A `plugin` track plays — in the browser and in `sheliak render`.** The fence
   was already notation; now it makes sound, for any plugin Sheliak ships as a
   `.wclap`:

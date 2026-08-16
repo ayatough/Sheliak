@@ -237,6 +237,11 @@ through as written and resolved there. A misspelling is reported by whatever
 loads the plugin, naming the plugin and listing the parameters it does have,
 rather than by the editor.
 
+The GUI panel writes back here. A plugin Sheliak can load gets a control per
+parameter, generated from the plugin's own list — its names, its ranges, and its
+own spelling of a value (`8000 Hz`, `Square`) — and turning one rewrites exactly
+the line it belongs to, keeping the spelling that line already used.
+
 **Where a plugin track plays depends on what kind of plugin it is.**
 
 A plugin Sheliak ships as a `.wclap` — WebAssembly, so a browser can load it —

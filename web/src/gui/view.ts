@@ -22,6 +22,13 @@ import {
 } from './sequencer.ts';
 import { buildPanel, type FieldSpec, type PanelSection } from './schema.ts';
 import { toSlider, fromSlider, displayValue, writeField, fieldStatus } from './panel.ts';
+import {
+  currentValue,
+  writePluginField,
+  toSlider as pluginToSlider,
+  fromSlider as pluginFromSlider,
+  type PluginFieldSpec,
+} from './pluginPanel.ts';
 
 export interface GuiHost {
   getDoc(): string;
@@ -52,6 +59,14 @@ export class GuiView {
   /** Set while a control is being manipulated, to defer rebuilds. */
   private dragging = false;
   private pendingResult: CompileResult | null = null;
+  /**
+   * Controls for the plugins this build carries, by plugin id. Filled in from
+   * outside because they come from the plugin itself, over the network, long
+   * after the first render — see `main.ts`.
+   */
+  private pluginSpecs = new Map<string, PluginFieldSpec[]>();
+  /** Why a plugin has no panel, by plugin id. */
+  private pluginNotes = new Map<string, string>();
 
   constructor(
     private readonly el: GuiElements,
@@ -301,7 +316,10 @@ export class GuiView {
     if (this.selectedTrack >= result.trackCount) this.selectedTrack = 0;
 
     for (let track = 0; track < result.trackCount; track++) {
-      const compiled = result.tracks.some((t) => t.track === track);
+      // A plugin track compiles too; it just does not produce a patch.
+      const compiled =
+        result.tracks.some((t) => t.track === track) ||
+        result.pluginTracks.some((t) => t.track === track);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = this.trackId(track);
@@ -316,11 +334,27 @@ export class GuiView {
     }
   }
 
+  /**
+   * Hands the panel what a plugin says about itself. Called once the plugin
+   * modules have loaded, and again if the document names a different one.
+   */
+  setPluginSpecs(specs: Map<string, PluginFieldSpec[]>, notes: Map<string, string>): void {
+    this.pluginSpecs = specs;
+    this.pluginNotes = notes;
+    if (this.result && !this.dragging) this.renderParams();
+  }
+
   private renderParams(): void {
     const result = this.result;
     const params = this.el.params;
     params.textContent = '';
     if (!result) return;
+
+    const plugin = result.pluginTracks.find((t) => t.track === this.selectedTrack);
+    if (plugin) {
+      params.appendChild(this.buildPluginPanel(plugin.from));
+      return;
+    }
 
     const track = result.tracks.find((t) => t.track === this.selectedTrack);
     if (!track) {
@@ -335,6 +369,106 @@ export class GuiView {
     for (const section of buildPanel(track.ir)) {
       params.appendChild(this.buildSection(section, track, compiled));
     }
+  }
+
+  /**
+   * A panel for a track played by a plugin. Every label on it came from the
+   * plugin: Sheliak has no schema for this and is not pretending to.
+   */
+  private buildPluginPanel(id: string): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'psection';
+    const h = document.createElement('h4');
+    h.textContent = id;
+    box.appendChild(h);
+
+    const specs = this.pluginSpecs.get(id);
+    if (specs === undefined || specs.length === 0) {
+      const p = document.createElement('div');
+      p.className = 'gui-hint';
+      p.textContent =
+        this.pluginNotes.get(id) ??
+        (specs === undefined ? 'loading this plugin…' : 'this plugin declares no parameters');
+      box.appendChild(p);
+      return box;
+    }
+    for (const spec of specs) box.appendChild(this.buildPluginField(spec));
+    return box;
+  }
+
+  private buildPluginField(spec: PluginFieldSpec): HTMLElement {
+    const row = document.createElement('div');
+    row.className = 'field';
+
+    const label = document.createElement('label');
+    label.textContent = spec.name;
+    row.appendChild(label);
+
+    const track = this.selectedTrack;
+    const value = document.createElement('div');
+    value.className = 'val';
+    const current = currentValue(this.host.getDoc(), track, spec);
+
+    const write = (v: number) => {
+      const r = writePluginField(this.host.getDoc(), track, spec, v);
+      if (!r.ok) {
+        this.host.hint(r.reason);
+        return;
+      }
+      this.host.setDoc(r.doc);
+    };
+
+    if (spec.kind === 'enum') {
+      const sel = document.createElement('select');
+      (spec.options ?? []).forEach((option, index) => {
+        const o = document.createElement('option');
+        o.value = String(index + Math.round(spec.min));
+        o.textContent = option;
+        if (Math.round(current) === index + Math.round(spec.min)) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change', () => write(Number(sel.value)));
+      row.appendChild(sel);
+      value.textContent = spec.label(current);
+    } else {
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0';
+      slider.max = '1000';
+      slider.step = '1';
+      slider.value = String(Math.round(pluginToSlider(spec, current) * 1000));
+      value.textContent = spec.label(current);
+
+      let last = 0;
+      let pending: number | null = null;
+      const flush = () => {
+        if (pending === null) return;
+        const v = pending;
+        pending = null;
+        last = Date.now();
+        write(v);
+      };
+      slider.addEventListener('pointerdown', () => {
+        this.dragging = true;
+      });
+      slider.addEventListener('input', () => {
+        const v = pluginFromSlider(spec, Number(slider.value) / 1000);
+        value.textContent = spec.label(v);
+        pending = v;
+        if (Date.now() - last >= WRITE_INTERVAL_MS) flush();
+      });
+      const finish = () => {
+        flush();
+        this.endDrag();
+      };
+      slider.addEventListener('change', finish);
+      slider.addEventListener('pointerup', finish);
+      slider.addEventListener('pointercancel', finish);
+      row.appendChild(slider);
+    }
+
+    row.appendChild(value);
+    return row;
   }
 
   private buildSection(section: PanelSection, track: CompiledTrack, compiled: boolean): HTMLElement {

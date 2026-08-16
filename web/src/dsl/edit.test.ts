@@ -13,6 +13,9 @@ import {
   appendLoopLine,
   loopLines,
   resolveField,
+  setPluginParam,
+  getPluginParamText,
+  trackFences,
 } from './edit.ts';
 import { parseYamlite } from './yamlite.ts';
 import {
@@ -140,6 +143,65 @@ describe('setSynthField', () => {
     expect(getSynthFieldText(DOC, 0, ['filter', 'cutoff'])).toBe('800Hz');
     expect(getSynthFieldText(DOC, 0, ['osc', '0', 'unison'])).toBe('7');
     expect(getSynthFieldText(DOC, 1, ['filter', 'res'])).toBeNull();
+  });
+});
+
+describe('a document that mixes plugin and synth fences', () => {
+  // The bug this guards: track indices count every track fence, and the edit
+  // layer used to count only the synth ones. A plugin fence before a synth
+  // fence then made every GUI gesture land on the wrong patch, silently.
+  const mixed = [
+    '```plugin id=pad from=com.example.thing',
+    'cutoff: 40%',
+    '```',
+    '',
+    '```synth id=lead',
+    'filter: { cutoff: 900Hz }',
+    '```',
+  ].join('\n');
+
+  it('counts both kinds, in document order', () => {
+    expect(trackFences(mixed).map((f) => f.lang)).toEqual(['plugin', 'synth']);
+  });
+
+  it('track 1 is the synth fence, because track 0 is the plugin', () => {
+    expect(getSynthFieldText(mixed, 1, ['filter', 'cutoff'])).toBe('900Hz');
+    expect(getSynthFieldText(mixed, 0, ['filter', 'cutoff'])).toBeNull();
+  });
+
+  it('refuses to write a synth field into a plugin fence, by name', () => {
+    const r = setSynthField(mixed, 0, ['filter', 'cutoff'], '1kHz');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('`plugin` fence');
+  });
+
+  it('writes a plugin parameter, and only that token', () => {
+    const r = setPluginParam(mixed, 0, 'cutoff', '55%');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.doc).toBe(mixed.replace('cutoff: 40%', 'cutoff: 55%'));
+  });
+
+  it('matches the parameter name case-insensitively, as the renderer does', () => {
+    expect(getPluginParamText(mixed, 0, 'Cutoff')).toBe('40%');
+  });
+
+  it('appends a parameter the fence does not have', () => {
+    const r = setPluginParam(mixed, 0, 'Resonance', '0.5');
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.doc.split('\n').slice(0, 4)).toEqual([
+      '```plugin id=pad from=com.example.thing',
+      'cutoff: 40%',
+      'Resonance: 0.5',
+      '```',
+    ]);
+  });
+
+  it('refuses a plugin write against a synth fence', () => {
+    const r = setPluginParam(mixed, 1, 'cutoff', '55%');
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('`synth` fence');
   });
 });
 

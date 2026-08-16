@@ -128,19 +128,33 @@ function step(node: YNode, seg: string): YNode | null {
 
 // ---------------------------------------------------------- document editing
 
-/** The synth fences of a document, in track order. */
+/**
+ * Every fence that is a track, in track order.
+ *
+ * A `plugin` fence is a track exactly as a `synth` fence is — it takes an index
+ * in the same sequence — so the index the GUI holds counts both. Filtering to
+ * `synth` here would make every index after a plugin fence point at the wrong
+ * patch, which is a silent wrong-note bug rather than a visible failure.
+ */
+export function trackFences(doc: string): Fence[] {
+  return extractFences(doc).filter((f) => f.lang === 'synth' || f.lang === 'plugin');
+}
+
+/** The synth fences of a document. Indices here are **not** track indices. */
 export function synthFences(doc: string): Fence[] {
   return extractFences(doc).filter((f) => f.lang === 'synth');
 }
 
 /**
- * Write `valueText` at `path` inside the Nth synth fence.
+ * Write `valueText` at `path` inside track `track`'s synth fence.
  * Only that one token (or one inserted pair) changes.
  */
 export function setSynthField(doc: string, track: number, path: string[], valueText: string): EditResult {
-  const fences = synthFences(doc);
-  const fence = fences[track];
+  const fence = trackFences(doc)[track];
   if (!fence) return { ok: false, reason: `no synth fence for track ${track}` };
+  if (fence.lang !== 'synth') {
+    return { ok: false, reason: `track ${track} is a \`${fence.lang}\` fence, not a synth patch` };
+  }
 
   const { root, errors } = parseYamlite(fence.body, fence.bodyStartLine);
   if (!root) return { ok: false, reason: 'fence did not parse' };
@@ -159,12 +173,69 @@ export function setSynthField(doc: string, track: number, path: string[], valueT
 
 /** Read the current text of a field, or null when it is not written out. */
 export function getSynthFieldText(doc: string, track: number, path: string[]): string | null {
-  const fence = synthFences(doc)[track];
-  if (!fence) return null;
+  const fence = trackFences(doc)[track];
+  if (!fence || fence.lang !== 'synth') return null;
   const { root } = parseYamlite(fence.body, fence.bodyStartLine);
   if (!root) return null;
   const target = resolveField(root, path);
   return target.kind === 'replace' ? target.scalar.value : null;
+}
+
+// ------------------------------------------------------------ plugin editing
+
+/**
+ * Read how a plugin parameter is currently written, or null when the fence
+ * does not mention it.
+ *
+ * The lookup is case-insensitive because the name comes from the plugin —
+ * `Cutoff` in its parameter list, `cutoff:` in the document is what anybody
+ * would type, and the renderer already resolves them the same way.
+ */
+export function getPluginParamText(doc: string, track: number, name: string): string | null {
+  const entry = findPluginParam(doc, track, name);
+  return entry === null ? null : entry.scalar.value;
+}
+
+/**
+ * Write a plugin parameter, adding the line if the fence does not have it.
+ *
+ * A plugin fence body is one `name: value` per line rather than the nested
+ * flow maps a synth patch uses, so an absent parameter can simply be appended —
+ * unlike a synth field, where a missing section is refused rather than
+ * synthesized.
+ */
+export function setPluginParam(doc: string, track: number, name: string, valueText: string): EditResult {
+  const fence = trackFences(doc)[track];
+  if (!fence) return { ok: false, reason: `no fence for track ${track}` };
+  if (fence.lang !== 'plugin') {
+    return { ok: false, reason: `track ${track} is a \`${fence.lang}\` fence, not a plugin` };
+  }
+
+  const existing = findPluginParam(doc, track, name);
+  if (existing !== null) return replaceValue(doc, existing.scalar, valueText);
+
+  const { root, errors } = parseYamlite(fence.body, fence.bodyStartLine);
+  if (!root) return { ok: false, reason: 'fence did not parse' };
+  if (errors.length > 0) return { ok: false, reason: 'fence has parse errors — fix the text first' };
+
+  // Append after the last entry, or as the fence's first line when it is empty.
+  const lines = doc.split('\n');
+  const last = root.entries[root.entries.length - 1];
+  const at = last ? (nodeEnd(last.value)?.line ?? fence.bodyStartLine) : fence.bodyStartLine - 1;
+  const pad = ' '.repeat(fence.indent);
+  lines.splice(at, 0, `${pad}${name}: ${valueText}`);
+  return { ok: true, doc: lines.join('\n') };
+}
+
+function findPluginParam(doc: string, track: number, name: string): { scalar: YScalar } | null {
+  const fence = trackFences(doc)[track];
+  if (!fence || fence.lang !== 'plugin') return null;
+  const { root } = parseYamlite(fence.body, fence.bodyStartLine);
+  if (!root) return null;
+  const wanted = name.toLowerCase();
+  const entry = root.entries.find((e) => e.key.toLowerCase() === wanted);
+  if (!entry || !isScalar(entry.value)) return null;
+  return { scalar: entry.value };
 }
 
 // -------------------------------------------------------------- loop editing

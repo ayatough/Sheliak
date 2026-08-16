@@ -1390,12 +1390,16 @@ do not exist in `AudioWorkletGlobalScope`. The host used both, passed every
 test in Node and in a page, and threw on the audio thread where no stack trace
 is visible. It converts UTF-8 itself now.
 
+**The panel is generated from the plugin.** `web/src/gui/pluginPanel.ts` turns
+`clap_plugin_params` into controls and `value_to_text` into their labels, and a
+gesture rewrites the one line it belongs to — keeping the spelling already
+there — which is §3 and non-negotiable 4 meeting: the document stays the state,
+and a knob is a way of typing. A moved knob reaches the plugin as a CLAP event
+rather than rebuilding it, so a control can be scrubbed while a note sounds.
+
 What is left, in the order it makes sense to do it:
 
-1. **A panel from `clap_plugin_params`.** The browser can now read a plugin's
-   parameters, so it can draw them, and `value_to_text` gives every control a
-   label Sheliak did not have to know.
-2. **Plugins as effects (§7).** Needs the chain to accept a foreign entry.
+1. **Plugins as effects (§7).** Needs the chain to accept a foreign entry.
 3. **WASI, when a plugin needs it.** A module that imports anything is refused
    by name today. The reference host implements "the very basics"; expect that
    to be where the time goes.

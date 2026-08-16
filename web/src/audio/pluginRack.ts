@@ -29,6 +29,11 @@ import { WclapModule, type WclapPlugin } from './wclap.ts';
 /** One document's plugin tracks, keyed by track index. */
 export class PluginRack {
   private readonly plugins = new Map<number, WclapPlugin>();
+  /**
+   * The track id and plugin id behind each index, so a later message about one
+   * of them can still say which track and which plugin it means.
+   */
+  private readonly named = new Map<number, { id: string; from: string }>();
 
   private constructor() {}
 
@@ -83,9 +88,25 @@ export class PluginRack {
 
       errors.push(...applyParams(plugin, track));
       rack.plugins.set(track.track, plugin);
+      rack.named.set(track.track, { id: track.id, from: track.from });
     }
 
     return { rack, errors };
+  }
+
+  /**
+   * Sends new values for a track's parameters, without disturbing anything
+   * else — a knob turning while the song plays, which must not restart the
+   * plugin or cut a sounding note.
+   *
+   * Returns the same messages `open` would have: an unknown name is still an
+   * unknown name when it is typed a second time.
+   */
+  setParams(track: number, params: Record<string, PluginParam>): string[] {
+    const plugin = this.plugins.get(track);
+    const named = this.named.get(track);
+    if (plugin === undefined || named === undefined) return [];
+    return applyParams(plugin, { ...named, track, params });
   }
 
   /** Is this track index played by a plugin rather than by the engine? */
@@ -139,6 +160,7 @@ export class PluginRack {
   destroy(): void {
     for (const plugin of this.plugins.values()) plugin.destroy();
     this.plugins.clear();
+    this.named.clear();
   }
 }
 

@@ -90,6 +90,9 @@ class SheliakProcessor extends AudioWorkletProcessor {
       case 'plugins':
         this.setPlugins(msg);
         break;
+      case 'plugin-params':
+        this.setPluginParams(msg);
+        break;
       default:
         break;
     }
@@ -265,6 +268,19 @@ class SheliakProcessor extends AudioWorkletProcessor {
       errors: errors,
       tracks: this.rack ? this.rack.size : 0,
     });
+  }
+
+  /**
+   * New values for one plugin track's parameters, without rebuilding anything.
+   * This is what a knob sends while the song is playing: the plugin keeps its
+   * voices, and CLAP delivers the change at the next block.
+   */
+  setPluginParams(msg) {
+    if (!this.rack || !msg || !msg.params) return;
+    const errors = this.rack.setParams(msg.track | 0, msg.params);
+    if (errors.length > 0) {
+      this.port.postMessage({ type: 'plugin-status', errors: errors, tracks: this.rack.size });
+    }
   }
 
   setLoop(loop) {

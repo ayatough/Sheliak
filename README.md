@@ -216,7 +216,8 @@ is whatever `main` last passed CI on.
 - **Working:** the `synth`, `phrase`, `plugin` and `loop` fences, hot reload,
   eight tracks, the wavetable engine, filter, envelopes, LFO, modulation matrix,
   noise, the eight-effect per-track chain, the two-way-synced step sequencer and
-  parameter panel, the `sheliak` command line (`new`, `check`, `fmt`, `render`,
+  parameter panel — which draws a CLAP plugin's own controls too — the `sheliak`
+  command line (`new`, `check`, `fmt`, `render`,
   `serve`), offline verification, and a GitHub Pages deployment
 - **Also working:** CLAP plugins. A ```` ```plugin ```` fence names an
   instrument that plays a track. Sheliak compiles its own engine to a `.wclap`

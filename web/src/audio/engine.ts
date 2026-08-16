@@ -39,7 +39,9 @@ const WORKLET_URL = `${import.meta.env.BASE_URL}worklet.js?v=${__BUILD_ID__}`;
  * and must not fail to start because a build step nobody needed was skipped.
  */
 const WCLAP_HOST_URL = `${import.meta.env.BASE_URL}wclap-host.js?v=${__BUILD_ID__}`;
-const WCLAP_BUNDLE_URLS = [`${import.meta.env.BASE_URL}sheliak.wclap/module.wasm?v=${__BUILD_ID__}`];
+export const WCLAP_BUNDLE_URLS = [
+  `${import.meta.env.BASE_URL}sheliak.wclap/module.wasm?v=${__BUILD_ID__}`,
+];
 const PROCESSOR_NAME = 'sheliak-processor';
 const READY_TIMEOUT_MS = 10000;
 
@@ -58,6 +60,7 @@ export class AudioEngine {
   private lastLoop: LoopIR | null = null;
   private lastPluginTracks: CompiledPluginTrack[] = [];
   private lastPluginSig = '';
+  private lastPluginShape = '';
   private hasPluginHost = false;
   /** The bundles, fetched once and kept: they are sent on every rebuild. */
   private bundles: ArrayBuffer[] | null = null;
@@ -237,8 +240,26 @@ export class AudioEngine {
   async sendPluginTracks(tracks: readonly CompiledPluginTrack[], force = false): Promise<void> {
     const sig = JSON.stringify(tracks);
     if (!force && sig === this.lastPluginSig) return;
+
+    // Which plugin sits on which track is what a rebuild is for. A parameter
+    // that moved is not: rebuilding on a knob would restart the plugin thirty
+    // times a second and cut every note it was holding.
+    const shape = JSON.stringify(tracks.map((t) => [t.track, t.from, t.id]));
+    const paramsOnly = !force && shape === this.lastPluginShape && this.lastPluginSig !== '';
     this.lastPluginSig = sig;
+    this.lastPluginShape = shape;
     this.lastPluginTracks = [...tracks];
+
+    if (paramsOnly) {
+      for (const track of tracks) {
+        this.node?.port.postMessage({
+          type: 'plugin-params',
+          track: track.track,
+          params: track.params,
+        });
+      }
+      return;
+    }
 
     if (tracks.length === 0) {
       this.node?.port.postMessage({ type: 'plugins', bundles: [], tracks: [] });

@@ -1,7 +1,8 @@
 // UI glue: editor → compile → engine, plus an analyser scope.
 
 import './style.css';
-import { AudioEngine, type EngineState } from './audio/engine.ts';
+import { AudioEngine, WCLAP_BUNDLE_URLS, type EngineState } from './audio/engine.ts';
+import { pluginFields, type PluginFieldSpec } from './gui/pluginPanel.ts';
 import { compile, type CompileResult } from './dsl/compile.ts';
 import { phraseExpandedLines } from './dsl/phrase.ts';
 import { GuiView } from './gui/view.ts';
@@ -134,6 +135,57 @@ let lastLoopSig = '';
 /** What the worklet said about this document's plugin tracks, if anything. */
 let pluginErrors: string[] = [];
 
+/**
+ * The plugins this build carries, for the panel only — the ones that make
+ * sound live in the worklet and cannot be asked questions from here.
+ *
+ * Loaded the first time a document names a plugin, and never otherwise: the
+ * bundle is half a megabyte and most documents have no use for it.
+ */
+let pluginLibrary: import('./audio/pluginLibrary.ts').PluginLibrary | null = null;
+let pluginPanelsFor = '';
+
+/**
+ * The CLAP host is a page of struct offsets that most documents never need, so
+ * it is imported here rather than at the top: a song with no plugin fence never
+ * fetches that chunk at all.
+ */
+async function loadPluginLibrary(): Promise<import('./audio/pluginLibrary.ts').PluginLibrary> {
+  if (pluginLibrary === null) {
+    const { PluginLibrary } = await import('./audio/pluginLibrary.ts');
+    pluginLibrary = new PluginLibrary(WCLAP_BUNDLE_URLS);
+  }
+  return pluginLibrary;
+}
+
+async function refreshPluginPanels(result: CompileResult): Promise<void> {
+  const ids = [...new Set(result.pluginTracks.map((t) => t.from))].sort();
+  const signature = ids.join(' ');
+  if (signature === pluginPanelsFor) return;
+  pluginPanelsFor = signature;
+  if (ids.length === 0) {
+    gui.setPluginSpecs(new Map(), new Map());
+    return;
+  }
+
+  const library = await loadPluginLibrary();
+  await library.load();
+  const specs = new Map<string, PluginFieldSpec[]>();
+  const notes = new Map<string, string>();
+  for (const id of ids) {
+    const plugin = library.get(id);
+    if (plugin === null) {
+      // Not a failure of the document: this plugin is simply not one this
+      // build carries, which the worklet has already said in the error panel.
+      notes.set(id, 'no panel — this plugin is not one this build can load');
+      specs.set(id, []);
+      continue;
+    }
+    specs.set(id, pluginFields(plugin));
+  }
+  gui.setPluginSpecs(specs, notes);
+}
+
 function recompile(force = false): void {
   // Every path that changes the document ends here, so this is the one place
   // the file behind it has to be told. It ignores text it already has.
@@ -151,6 +203,7 @@ function recompile(force = false): void {
   engine.sendClearTracks(result.trackCount);
   // Plugin tracks are rebuilt only when they changed; see the engine.
   void engine.sendPluginTracks(result.pluginTracks);
+  void refreshPluginPanels(result);
   for (const key of [...trackViews.keys()]) {
     if (key >= result.trackCount) trackViews.delete(key);
   }

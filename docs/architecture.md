@@ -245,6 +245,7 @@ main -> worklet:
   { type: 'loop',         loop: LoopIR | null }
   { type: 'transport',    playing: boolean }
   { type: 'plugins',      bundles: ArrayBuffer[], tracks: CompiledPluginTrack[] }
+  { type: 'plugin-params', track: number, params: Record<string, PluginParam> }
 
 worklet -> main:
   { type: 'ready' }
@@ -258,8 +259,11 @@ compiled module sent through `postMessage` without cross-origin isolation
 COOP/COEP, so the worklet compiles the bytes itself.
 
 `plugins` carries the WCLAP bundles as bytes for the same reason `load-wasm`
-does, and it is sent only when the document's plugin tracks changed: rebuilding
-means new plugin instances, and a sounding note stops. The host that runs them
+does, and it is sent only when *which* plugin sits on *which* track changed:
+rebuilding means new plugin instances, and a sounding note stops. A parameter
+that moved goes through `plugin-params` instead, which reaches the running
+plugin as CLAP events — that is what makes a knob usable while the song plays,
+and it is the same path the panel uses for every gesture. The host that runs them
 is TypeScript and reaches the worklet through `globalThis.SheliakWclap`, put
 there by `wclap-host.js` — a second `addModule()` into the same global scope,
 built by `npm run build:worklet-host`. Without that file the app still runs;
