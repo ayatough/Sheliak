@@ -50,6 +50,45 @@ sympathetic resonance between keys, una corda and sostenuto, and repedalling
 half-damping. The top octave's fortissimo levelling leans on the voicing
 table rather than the contact physics.
 
+## Tuning it
+
+Two layers, from cheap to deep.
+
+**In the DAW, live:** `Hammer Hardness` (dark→bright at the source),
+`Brightness` (a plain output lowpass), `Unison Detune` (beating and the
+two-stage decay), `Decay`, `Damper`, `Stretch`, `Dynamics` (velocity curve).
+Hardness, Detune, Stretch, Decay, Damper and Dynamics are read at note-on —
+retrigger the note to hear the change.
+
+**In the source, rebuilt:** the character constants live in two files.
+
+| Knob | Where | Moves the sound |
+|---|---|---|
+| `RADIATION_HZ` (180) | `src/model.rs` | Higher = less low fundamental, lighter bass |
+| `SOUNDBOARD_HZ` (1500) | `src/model.rs` | Higher = brighter, glassier; lower = warmer, darker |
+| Felt loss `0.5 * hammer.vh` | `src/model.rs` (`hammer_step`) | More = duller attack, tamer treble lobes |
+| `sigma2` anchors | `src/keys.rs` | Higher = treble partials die faster (piano), lower = they ring (harpsichord) |
+| `t60` anchors | `src/keys.rs` | Overall note length per register |
+| `hammer_k` / `hammer_p` anchors | `src/keys.rs` | Felt stiffness curve: brightness vs velocity |
+| `strike_pos` (0.12…0.10) | `src/keys.rs` | Comb position: which partials the hammer misses |
+| `detune_cents`, polarisation `0.4 * detune` | `src/keys.rs`, `src/model.rs` | Unison shimmer and bass aftersound |
+| `b` anchors (inharmonicity) | `src/keys.rs` | Metallic stretch of the partial series |
+| `velocity_floor` | `src/keys.rs` | Treble dynamic-range compression |
+
+The listening loop:
+
+```bash
+cargo run --release --example bass_demo     # or render_wav — writes a WAV
+# edit, listen, repeat…
+cargo run --release --example levels -- --retrim   # after level-shifting changes
+# paste the printed block over OUTPUT_TRIM in src/keys.rs, then once more:
+cargo test                                  # tuning/decay/level tests still hold?
+./scripts/build-piano-clap.sh               # rebuild the .clap for the DAW
+```
+
+`--retrim` re-levels the keyboard after any change that shifts loudness
+(damping, radiation, hammer curves). Skip it for pitch-only changes.
+
 ## Determinism
 
 The same events at the same sample rate render bit-identical audio: nothing
