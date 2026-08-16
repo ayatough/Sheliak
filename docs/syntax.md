@@ -231,16 +231,31 @@ a unit is how the document stops you confusing milliseconds with seconds; here
 Sheliak does not know what the parameter measures, and writing a unit would be a
 promise it cannot keep.
 
-**The parameter names are not checked.** Sheliak cannot know what
-`studio.kx.distrho.Kars` has — the answer is inside a dynamic library, which the
-browser cannot open at all — so a name is carried through as written and
-resolved where the plugin is loaded. A misspelling is reported by the renderer,
-naming the plugin, rather than by the editor.
+**The parameter names are not checked by the parser.** Sheliak cannot know what
+`studio.kx.distrho.Kars` has until the plugin is loaded, so a name is carried
+through as written and resolved there. A misspelling is reported by whatever
+loads the plugin, naming the plugin and listing the parameters it does have,
+rather than by the editor.
 
-**A plugin track is silent in the browser**, and in `sheliak render`, because
-both drive the engine and neither can load a `.clap`. The other tracks play
-normally; `sheliak check` says which track is silent and why. To hear it, render
-through the native renderer:
+**Where a plugin track plays depends on what kind of plugin it is.**
+
+A plugin Sheliak ships as a `.wclap` — WebAssembly, so a browser can load it —
+plays everywhere: the app, `sheliak render`, and the native renderer.
+`io.github.ayatough.sheliak.synth` is one, and `sheliak check` lists any that
+are not available. For example:
+
+````markdown
+```plugin id=lead from=io.github.ayatough.sheliak.synth
+waveform: 3
+cutoff:   40%
+release:  0.4
+```
+````
+
+**A `.clap` installed on your machine is a dynamic library**, which no browser
+can open, so a track naming one is silent in the app and in `sheliak render`.
+The other tracks play normally; `sheliak check` says which track is silent and
+why. To hear it, render through the native renderer:
 
 ```bash
 sheliak render song.md --emit-job job.json

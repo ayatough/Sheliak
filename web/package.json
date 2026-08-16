@@ -4,12 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "npm run build:worklet-host && vite",
+    "build": "npm run build:worklet-host && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "build:cli": "vite build --config vite.cli.config.ts",
-    "prepare": "npm run build:cli"
+    "prepare": "npm run build:cli && npm run build:worklet-host",
+    "build:worklet-host": "vite build --config vite.worklet.config.ts"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

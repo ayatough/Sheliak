@@ -21,6 +21,7 @@ out="dist-release"
 echo "building $name"
 
 ./scripts/build-wasm.sh >/dev/null
+./scripts/build-wclap.sh >/dev/null
 (cd web && npm run build >/dev/null && npm run build:cli >/dev/null)
 
 rm -rf "$out"
@@ -37,6 +38,8 @@ cp README.md LICENSE "$out/$name/"
 
 test -f "$out/$name/app/dsp.wasm" || { echo "error: app/dsp.wasm missing" >&2; exit 1; }
 test -f "$out/$name/app/index.html" || { echo "error: app/index.html missing" >&2; exit 1; }
+# `sheliak render` resolves this the same way it resolves app/dsp.wasm.
+test -f "$out/$name/app/sheliak.wclap/module.wasm" || { echo "error: app/sheliak.wclap missing" >&2; exit 1; }
 
 tar -czf "$out/$name.tar.gz" -C "$out" "$name"
 (cd "$out" && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")

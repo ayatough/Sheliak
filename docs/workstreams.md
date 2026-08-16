@@ -833,14 +833,15 @@ of the field rather than corrupting memory in a worklet.
 
 ### What is not built
 
-- **The worklet does not host plugins yet.** `wclap.ts` is TypeScript so the
-  test suite and `tsc` cover it; `public/worklet.js` is bundler-free plain JS.
-  Wiring the two needs the host bundled into the worklet's scope (a build step,
-  like `dsp.wasm` and the brand artwork) — the host itself is browser-ready and
-  uses no Node API.
+- **A plugin cannot be an *effect* yet.** A `plugin` fence is a track's voice;
+  putting one in an `fx:` chain (§7) needs the chain to accept a foreign entry,
+  and the chain lives inside the engine. The notation is reserved and unbuilt.
 - **No WASI.** A module that imports anything is refused by name. That is honest
   today and a wall tomorrow: a plugin built against a C sysroot imports
   `wasi_snapshot_preview1`, and most will be.
+- **A microtonal note reaches a plugin rounded.** A CLAP note event carries an
+  integer key; Sheliak's own notes are fractional. Fixing it needs note
+  expression, and pretending otherwise would be worse than saying so.
 - **Two plugins out of nine possible ones.** `MODELS` in `wclap/src/lib.rs` is a
   list; another effect is a descriptor, a parameter table and a constructor.
 - **The synth exposes thirteen parameters of a 192-slot block.** The rest are
@@ -1378,13 +1379,23 @@ recipe and the patch exporter.
 **Does not touch** `web/src/dsl/`, `dsp/src/` (the `abi` feature split was a
 one-off crossing, already made).
 
+**The browser plays them.** `npm run build:worklet-host` bundles the host into
+`public/wclap-host.js`, the engine loads it with its own `addModule()` call
+before the worklet's, and a `plugin` fence naming a bundled plugin sounds — in
+the app, in `sheliak render`, and in `scripts/check-worklet-plugin.sh`, which
+renders one in a real browser because nothing else covers the audio thread.
+
+That last script earned its place immediately: `TextEncoder` and `TextDecoder`
+do not exist in `AudioWorkletGlobalScope`. The host used both, passed every
+test in Node and in a page, and threw on the audio thread where no stack trace
+is visible. It converts UTF-8 itself now.
+
 What is left, in the order it makes sense to do it:
 
-1. **Wire the host into the worklet.** The host is TypeScript and the worklet is
-   bundler-free plain JS; closing that gap is a build step, not a rewrite.
-2. **A panel from `clap_plugin_params`.** Once the browser can read a plugin's
-   parameters it can draw them, and `value_to_text` gives every control a label
-   Sheliak did not have to know.
+1. **A panel from `clap_plugin_params`.** The browser can now read a plugin's
+   parameters, so it can draw them, and `value_to_text` gives every control a
+   label Sheliak did not have to know.
+2. **Plugins as effects (§7).** Needs the chain to accept a foreign entry.
 3. **WASI, when a plugin needs it.** A module that imports anything is refused
    by name today. The reference host implements "the very basics"; expect that
    to be where the time goes.

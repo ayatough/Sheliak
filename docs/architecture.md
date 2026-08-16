@@ -92,6 +92,8 @@ note_on(track: u32, note: f32, velocity: f32, glide_s: f32, legato: u32)
 note_off(track: u32, note: f32)
 all_notes_off()                 fast fade to silence on every track
 process(nframes: u32)           nframes <= 128; writes out_l / out_r
+master_guard(nframes: u32)      re-apply the master guard to out_l / out_r,
+                                for a host that added audio of its own
 out_l_ptr() -> u32              f32 x 128
 out_r_ptr() -> u32              f32 x 128
 out_track_l_ptr(track: u32)     f32 x 128 — that track's own output for the
@@ -242,16 +244,30 @@ main -> worklet:
   { type: 'clear-tracks', keep: number }
   { type: 'loop',         loop: LoopIR | null }
   { type: 'transport',    playing: boolean }
+  { type: 'plugins',      bundles: ArrayBuffer[], tracks: CompiledPluginTrack[] }
 
 worklet -> main:
   { type: 'ready' }
   { type: 'position', samples: number, loopLen: number }
+  { type: 'plugin-status', tracks: number, errors: string[] }
 ```
 
 `load-wasm` transfers **bytes, not a `WebAssembly.Module`**. Chrome drops a
 compiled module sent through `postMessage` without cross-origin isolation
 (COOP/COEP), silently, and the worklet never boots. Sheliak deliberately avoids
 COOP/COEP, so the worklet compiles the bytes itself.
+
+`plugins` carries the WCLAP bundles as bytes for the same reason `load-wasm`
+does, and it is sent only when the document's plugin tracks changed: rebuilding
+means new plugin instances, and a sounding note stops. The host that runs them
+is TypeScript and reaches the worklet through `globalThis.SheliakWclap`, put
+there by `wclap-host.js` — a second `addModule()` into the same global scope,
+built by `npm run build:worklet-host`. Without that file the app still runs;
+a document that names a plugin gets a `plugin-status` saying why it is silent.
+
+A plugin track's audio is added into the engine's own output buffers and the
+total goes back through `master_guard`, because audio that did not come from the
+engine is outside the bound the engine promised.
 
 ```ts
 interface LoopIR {

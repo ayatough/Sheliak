@@ -12,4 +12,6 @@
 
 # WCLAP bundle, built by scripts/build-wclap.sh
 /web/public/*.wclap/
+# The CLAP host, bundled for the worklet by `npm run build:worklet-host`
+/web/public/wclap-host.js
 /wclap/target/

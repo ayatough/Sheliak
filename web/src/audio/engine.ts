@@ -6,6 +6,7 @@
 // but Chrome silently drops Module postMessage without cross-origin isolation
 // (COOP/COEP), which we deliberately avoid (docs/architecture.md).
 
+import type { CompiledPluginTrack } from '../dsl/compile.ts';
 import type { LoopIR } from '../dsl/loop.ts';
 import { MAX_TRACKS } from '../shared/params.ts';
 
@@ -14,6 +15,12 @@ export type EngineState = 'idle' | 'loading' | 'ready' | 'error';
 export interface EngineEvents {
   onState?: (state: EngineState, detail: string) => void;
   onPosition?: (samples: number, loopLen: number) => void;
+  /**
+   * What happened to the document's plugin tracks. Empty errors and a count
+   * mean they are playing; anything else is a track the listener will not
+   * hear, with the reason.
+   */
+  onPlugins?: (tracks: number, errors: string[]) => void;
 }
 
 // Injected by vite.config.ts at build time.
@@ -25,6 +32,14 @@ declare const __BUILD_ID__: string;
 // bundle with a stale cached worklet or wasm binary.
 const WASM_URL = `${import.meta.env.BASE_URL}dsp.wasm?v=${__BUILD_ID__}`;
 const WORKLET_URL = `${import.meta.env.BASE_URL}worklet.js?v=${__BUILD_ID__}`;
+/**
+ * The CLAP host, bundled for the worklet by `npm run build:worklet-host`, and
+ * the WCLAP bundle Sheliak ships. Both are fetched only when a document
+ * actually names a plugin — the app must not pay for a feature it is not using,
+ * and must not fail to start because a build step nobody needed was skipped.
+ */
+const WCLAP_HOST_URL = `${import.meta.env.BASE_URL}wclap-host.js?v=${__BUILD_ID__}`;
+const WCLAP_BUNDLE_URLS = [`${import.meta.env.BASE_URL}sheliak.wclap/module.wasm?v=${__BUILD_ID__}`];
 const PROCESSOR_NAME = 'sheliak-processor';
 const READY_TIMEOUT_MS = 10000;
 
@@ -41,6 +56,11 @@ export class AudioEngine {
   private lastParams: (Float32Array | null)[] = new Array(MAX_TRACKS).fill(null);
   private lastKeep = MAX_TRACKS;
   private lastLoop: LoopIR | null = null;
+  private lastPluginTracks: CompiledPluginTrack[] = [];
+  private lastPluginSig = '';
+  private hasPluginHost = false;
+  /** The bundles, fetched once and kept: they are sent on every rebuild. */
+  private bundles: ArrayBuffer[] | null = null;
 
   constructor(private readonly events: EngineEvents = {}) {}
 
@@ -93,6 +113,16 @@ export class AudioEngine {
     const bytes = await this.fetchWasm();
 
     this.setState('loading', 'loading worklet…');
+    // The CLAP host first, into the same global scope: `worklet.js` looks for
+    // it on `globalThis` rather than importing it. Its absence is not fatal —
+    // a checkout that skipped `npm run build:worklet-host` still plays
+    // everything except plugin tracks, and says so when one is declared.
+    try {
+      await ctx.audioWorklet.addModule(WCLAP_HOST_URL);
+      this.hasPluginHost = true;
+    } catch {
+      this.hasPluginHost = false;
+    }
     try {
       await ctx.audioWorklet.addModule(WORKLET_URL);
     } catch (e) {
@@ -108,7 +138,14 @@ export class AudioEngine {
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('worklet did not report ready in time')), READY_TIMEOUT_MS);
       node.port.onmessage = (ev: MessageEvent) => {
-        const msg = ev.data as { type?: string; message?: string; samples?: number; loopLen?: number };
+        const msg = ev.data as {
+          type?: string;
+          message?: string;
+          samples?: number;
+          loopLen?: number;
+          tracks?: number;
+          errors?: string[];
+        };
         if (msg?.type === 'ready') {
           clearTimeout(timer);
           resolve();
@@ -121,6 +158,10 @@ export class AudioEngine {
         }
         if (msg?.type === 'position') {
           this.events.onPosition?.(msg.samples ?? 0, msg.loopLen ?? 0);
+          return;
+        }
+        if (msg?.type === 'plugin-status') {
+          this.events.onPlugins?.(msg.tracks ?? 0, msg.errors ?? []);
         }
       };
     });
@@ -145,6 +186,7 @@ export class AudioEngine {
       if (params) this.sendPatch(t, params);
     }
     this.sendClearTracks(this.lastKeep);
+    if (this.lastPluginTracks.length > 0) await this.sendPluginTracks(this.lastPluginTracks, true);
     if (this.lastLoop) this.sendLoop(this.lastLoop);
     if (this.playing) this.setPlaying(true);
   }
@@ -182,6 +224,62 @@ export class AudioEngine {
     this.lastKeep = keep;
     for (let t = keep; t < MAX_TRACKS; t++) this.lastParams[t] = null;
     this.node?.port.postMessage({ type: 'clear-tracks', keep });
+  }
+
+  /**
+   * Hands the worklet the document's plugin tracks, fetching the WCLAP bundles
+   * the first time one is needed.
+   *
+   * Sent only when the tracks actually changed: rebuilding means new plugin
+   * instances, which means a sounding note stops. A document with no plugin
+   * track costs one comparison and no network.
+   */
+  async sendPluginTracks(tracks: readonly CompiledPluginTrack[], force = false): Promise<void> {
+    const sig = JSON.stringify(tracks);
+    if (!force && sig === this.lastPluginSig) return;
+    this.lastPluginSig = sig;
+    this.lastPluginTracks = [...tracks];
+
+    if (tracks.length === 0) {
+      this.node?.port.postMessage({ type: 'plugins', bundles: [], tracks: [] });
+      return;
+    }
+    if (!this.hasPluginHost) {
+      this.events.onPlugins?.(0, [
+        'the CLAP host is missing, so a plugin track is silent — ' +
+          'run `npm run build:worklet-host` (it writes public/wclap-host.js)',
+      ]);
+      return;
+    }
+
+    let bundles: ArrayBuffer[];
+    try {
+      bundles = await this.fetchBundles();
+    } catch (e) {
+      this.events.onPlugins?.(0, [message(e)]);
+      return;
+    }
+    // Copies, because a transferred ArrayBuffer is detached here and these are
+    // sent again on every rebuild.
+    this.node?.port.postMessage({
+      type: 'plugins',
+      bundles: bundles.map((b) => b.slice(0)),
+      tracks: this.lastPluginTracks,
+    });
+  }
+
+  private async fetchBundles(): Promise<ArrayBuffer[]> {
+    if (this.bundles) return this.bundles;
+    const out: ArrayBuffer[] = [];
+    for (const url of WCLAP_BUNDLE_URLS) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`could not fetch ${url} (HTTP ${res.status}) — run ./scripts/build-wclap.sh first`);
+      }
+      out.push(await res.arrayBuffer());
+    }
+    this.bundles = out;
+    return out;
   }
 
   sendLoop(loop: LoopIR | null): void {

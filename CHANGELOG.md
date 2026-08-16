@@ -13,6 +13,31 @@ policy.
 ## [Unreleased]
 
 ### Added
+- **A `plugin` track plays — in the browser and in `sheliak render`.** The fence
+  was already notation; now it makes sound, for any plugin Sheliak ships as a
+  `.wclap`:
+
+  ````markdown
+  ```plugin id=lead from=io.github.ayatough.sheliak.synth
+  waveform: 3
+  cutoff:   40%
+  release:  0.4
+  ```
+  ````
+
+  The parameters are resolved by name against the plugin's own list, sent as
+  CLAP events, and a name it does not have — or a value outside the range it
+  declares — is reported by the plugin's name rather than by the line, because
+  the line was written before anyone could know. The notes come from the same
+  `loop` line as any other track. A plugin the machine does not have is still
+  reported and still silent, and the rest of the document plays.
+
+  The audio thread runs it: `wclap-host.js` (built by
+  `npm run build:worklet-host`) puts the CLAP host in the worklet's scope, and
+  `scripts/check-worklet-plugin.sh` renders a plugin track in a real browser to
+  prove it. A plugin track's output is added to the engine's mix and the total
+  goes back through the master guard, which is now exported as `master_guard` —
+  audio the engine did not make is outside the bound the engine promised.
 - **Sheliak compiles a CLAP plugin, and hosts one in the browser.** Two halves
   of the same experiment, and they meet in the middle:
 
@@ -43,8 +68,8 @@ policy.
   input — an instrument has none, and handing it one is what crashed a
   third-party instrument in the native renderer.
 
-  Nothing in the app uses this yet — the worklet does not host plugins, and a
-  module that needs WASI is refused by name. See docs/workstreams.md §8.
+  A module that needs WASI is refused by name, which is most third-party
+  plugins for now. See docs/workstreams.md §8.
 - **A track can be played by a CLAP plugin, named in the document.** A new
   ```` ```plugin ```` fence is a track like a ```` ```synth ```` fence is,
   taking an index in the same sequence and binding to a `loop` line the same
@@ -66,9 +91,11 @@ policy.
   naming the plugin. `sheliak-render --list-clap <file> --clap-id <id>` prints
   the names, ranges and defaults.
 
-  **A plugin track is silent in the browser and in `sheliak render`**, because
-  both drive the engine and neither can load a `.clap`. The other tracks play
-  normally, and `sheliak check` warns which track is silent and how to hear it.
+  **A `.clap` installed on this machine plays through `sheliak-render` only** —
+  it is a dynamic library, and neither the browser nor `sheliak render` can load
+  one. A plugin Sheliak ships as a `.wclap` plays everywhere (see the entry
+  above). The other tracks play normally either way, and `sheliak check` says
+  which track is silent here and how to hear it.
 - **A native renderer, and CLAP effects on the mix.** `sheliak render song.md
   --emit-job job.json` compiles a document to a render job — the flat parameter
   block per track and the loop's events, no Markdown — and `sheliak-render

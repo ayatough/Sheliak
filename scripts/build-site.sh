@@ -26,6 +26,9 @@ esac
 echo "building the site into $target (base ${VITE_BASE:-/}, channel ${VITE_SITE_CHANNEL:-none})"
 
 ./scripts/build-wasm.sh >/dev/null
+# The WCLAP bundle ships with the app: a `plugin` fence naming one of Sheliak's
+# own plugins is played in the browser, and cannot be without this.
+./scripts/build-wclap.sh >/dev/null
 (cd web && npm ci --no-audit --no-fund >/dev/null && npm run build >/dev/null)
 
 # Cleared and rewritten, so a file dropped from the app does not linger in a
@@ -37,3 +40,5 @@ cp -R web/dist/. "$target/"
 
 test -f "$target/index.html" || { echo "error: no index.html in $target" >&2; exit 1; }
 test -f "$target/dsp.wasm" || { echo "error: no dsp.wasm in $target" >&2; exit 1; }
+test -f "$target/wclap-host.js" || { echo "error: no wclap-host.js in $target" >&2; exit 1; }
+test -f "$target/sheliak.wclap/module.wasm" || { echo "error: no sheliak.wclap in $target" >&2; exit 1; }

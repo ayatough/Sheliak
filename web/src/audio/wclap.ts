@@ -31,6 +31,84 @@
 // the plugin's table. That is why the draft requires the table to be exported
 // and growable.
 
+// -------------------------------------------------------------------- text
+//
+// `TextEncoder` and `TextDecoder` are **not** in `AudioWorkletGlobalScope`.
+// They are in every other scope this file runs in — a page, a worker, Node —
+// which is exactly why this is worth writing out: the host worked everywhere
+// it was tested and threw on the audio thread, where nobody can see a stack
+// trace. So the conversion is done here, in about thirty lines, and behaves
+// the same in all four places.
+//
+// It is not on the audio path: strings cross this boundary when a plugin is
+// created and when its parameters are read, never per block.
+
+/** UTF-8 bytes for a string, surrogate pairs included. */
+function encodeUtf8(text: string): Uint8Array {
+  const out: number[] = [];
+  for (const character of text) {
+    let code = character.codePointAt(0)!;
+    if (code < 0x80) {
+      out.push(code);
+    } else if (code < 0x800) {
+      out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else if (code < 0x10000) {
+      out.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    } else {
+      out.push(
+        0xf0 | (code >> 18),
+        0x80 | ((code >> 12) & 0x3f),
+        0x80 | ((code >> 6) & 0x3f),
+        0x80 | (code & 0x3f),
+      );
+      code = 0;
+    }
+  }
+  return new Uint8Array(out);
+}
+
+/** A string from UTF-8 bytes. Anything malformed becomes U+FFFD, never a throw. */
+function decodeUtf8(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; ) {
+    const byte = bytes[i]!;
+    let code: number;
+    let length: number;
+    if (byte < 0x80) {
+      code = byte;
+      length = 1;
+    } else if ((byte & 0xe0) === 0xc0) {
+      code = byte & 0x1f;
+      length = 2;
+    } else if ((byte & 0xf0) === 0xe0) {
+      code = byte & 0x0f;
+      length = 3;
+    } else if ((byte & 0xf8) === 0xf0) {
+      code = byte & 0x07;
+      length = 4;
+    } else {
+      out += '�';
+      i++;
+      continue;
+    }
+    if (i + length > bytes.length) {
+      out += '�';
+      break;
+    }
+    for (let k = 1; k < length; k++) {
+      const next = bytes[i + k]!;
+      if ((next & 0xc0) !== 0x80) {
+        code = -1;
+        break;
+      }
+      code = (code << 6) | (next & 0x3f);
+    }
+    out += code < 0 || code > 0x10ffff ? '�' : String.fromCodePoint(code);
+    i += length;
+  }
+  return out;
+}
+
 /** The layout of every CLAP struct this host touches, on wasm32. */
 const L = {
   entry: { init: 12, deinit: 16, getFactory: 20 },
@@ -176,7 +254,7 @@ function vec(items: number[][]): number[] {
 }
 
 function name(s: string): number[] {
-  const bytes = [...new TextEncoder().encode(s)];
+  const bytes = [...encodeUtf8(s)];
   return [...uleb(bytes.length), ...bytes];
 }
 
@@ -235,7 +313,6 @@ export class WclapModule {
   private bytesView: Uint8Array;
   private readonly entry: number;
   private factoryPtr = 0;
-  private readonly decoder = new TextDecoder();
 
   private constructor(instance: WebAssembly.Instance) {
     this.exports = instance.exports as unknown as ModuleExports;
@@ -314,7 +391,7 @@ export class WclapModule {
 
   /** Writes a NUL-terminated string into the plugin and returns its address. */
   str(text: string): number {
-    const bytes = new TextEncoder().encode(text);
+    const bytes = encodeUtf8(text);
     const ptr = this.alloc(bytes.length + 1);
     this.bytesView.set(bytes, ptr);
     return ptr;
@@ -327,7 +404,7 @@ export class WclapModule {
     let end = ptr;
     const stop = Math.min(ptr + limit, this.bytesView.length);
     while (end < stop && this.bytesView[end] !== 0) end++;
-    return this.decoder.decode(this.bytesView.subarray(ptr, end));
+    return decodeUtf8(this.bytesView.subarray(ptr, end));
   }
 
   /** The function a pointer-sized field points at, or null for a null one. */

@@ -65,6 +65,13 @@ const engine = new AudioEngine({
     posEl.style.width = loopLen > 0 && engine.isPlaying ? `${((samples / loopLen) * 100).toFixed(1)}%` : '0%';
     gui.setPlayhead(samples, loopLen, engine.isPlaying);
   },
+  onPlugins: (_tracks, errors) => {
+    // A plugin that could not be loaded is not a syntax error — the document is
+    // fine and this machine is not — so it is reported beside the compiler's
+    // list rather than inside it, and it is not cleared by the next keystroke.
+    pluginErrors = errors;
+    if (lastResult) renderErrors(lastResult);
+  },
 });
 
 // ---------------------------------------------------------------------- gui
@@ -124,6 +131,8 @@ function currentSampleRate(): number {
 
 let lastResult: CompileResult | null = null;
 let lastLoopSig = '';
+/** What the worklet said about this document's plugin tracks, if anything. */
+let pluginErrors: string[] = [];
 
 function recompile(force = false): void {
   // Every path that changes the document ends here, so this is the one place
@@ -137,9 +146,11 @@ function recompile(force = false): void {
     engine.sendPatch(track.track, track.params);
     trackViews.set(track.track, { id: track.id, json: JSON.stringify(track.expanded, null, 2) });
   }
-  if (result.tracks.length > 0) lastValidPatchAt++;
+  if (result.tracks.length + result.pluginTracks.length > 0) lastValidPatchAt++;
   // Drop tracks the document no longer declares.
   engine.sendClearTracks(result.trackCount);
+  // Plugin tracks are rebuilt only when they changed; see the engine.
+  void engine.sendPluginTracks(result.pluginTracks);
   for (const key of [...trackViews.keys()]) {
     if (key >= result.trackCount) trackViews.delete(key);
   }
@@ -228,27 +239,36 @@ function renderTracks(result: CompileResult): void {
 // ------------------------------------------------------------------- render
 
 function renderErrors(result: CompileResult): void {
-  if (result.errors.length === 0) {
+  if (result.errors.length === 0 && pluginErrors.length === 0) {
     errorsEl.hidden = true;
     errorsEl.innerHTML = '';
     return;
   }
   errorsEl.hidden = false;
-  const keepsPlaying = result.tracks.length < result.trackCount && lastValidPatchAt > 0;
+  // Plugin tracks count too, or a document whose only track is a plugin looks
+  // like a document with a broken synth fence.
+  const declared = result.tracks.length + result.pluginTracks.length;
+  const keepsPlaying = declared < result.trackCount && lastValidPatchAt > 0;
   const items = result.errors
     .map(
       (e) =>
         `<li><span class="loc">${e.line}:${e.col}</span>${escapeHtml(e.message)}</li>`,
     )
     .join('');
+  // No line and column: the plugin is missing from the machine, not from the
+  // document, and pointing at a line would blame the wrong thing.
+  const plugins = pluginErrors
+    .map((e) => `<li><span class="loc">plugin</span>${escapeHtml(e)}</li>`)
+    .join('');
   const hint = keepsPlaying ? '<div class="hint">still playing the last valid patch</div>' : '';
-  errorsEl.innerHTML = `${hint}<ul>${items}</ul>`;
+  errorsEl.innerHTML = `${hint}<ul>${items}${plugins}</ul>`;
 }
 
 function renderMeta(result: CompileResult): void {
   const bits: string[] = [];
   if (result.loopMeta) bits.push(`${result.loopMeta.bpm}bpm`, `${result.loopMeta.bars}bar`);
-  bits.push(`${result.tracks.length}/${result.trackCount} track${result.trackCount === 1 ? '' : 's'}`);
+  const compiled = result.tracks.length + result.pluginTracks.length;
+  bits.push(`${compiled}/${result.trackCount} track${result.trackCount === 1 ? '' : 's'}`);
   if (engine.sampleRate) bits.push(`${engine.sampleRate}Hz`);
   bits.push(`${result.errors.length} error${result.errors.length === 1 ? '' : 's'}`);
   metaEl.textContent = bits.join('  ·  ');
@@ -272,7 +292,8 @@ function renderStatus(): void {
       isError = true;
       break;
   }
-  if (!isError && lastResult && lastResult.tracks.length < lastResult.trackCount && lastValidPatchAt > 0) {
+  const compiled = lastResult ? lastResult.tracks.length + lastResult.pluginTracks.length : 0;
+  if (!isError && lastResult && compiled < lastResult.trackCount && lastValidPatchAt > 0) {
     text += ' — playing last valid patch';
   }
   statusEl.textContent = guiHint ? `${text} — ${guiHint}` : text;

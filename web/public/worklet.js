@@ -5,8 +5,16 @@
  * imports: bundlers rewrite module graphs in ways that break worklet scope.
  *
  * Protocol (docs/architecture.md §6):
- *   main → worklet: 'load-wasm' | 'patch' | 'clear-tracks' | 'loop' | 'transport'
- *   worklet → main: 'ready' | 'position' | 'error'
+ *   main → worklet: 'load-wasm' | 'patch' | 'clear-tracks' | 'loop' |
+ *                   'transport' | 'plugins'
+ *   worklet → main: 'ready' | 'position' | 'error' | 'plugin-status'
+ *
+ * Plugin tracks: a `plugin` fence is a track whose voice is a CLAP plugin
+ * compiled to wasm. The host that runs one is TypeScript and arrives through
+ * `globalThis.SheliakWclap`, put there by `wclap-host.js` — a second
+ * `addModule()` into this same global scope, because a worklet cannot import.
+ * Everything about it is optional: without that file, or without a document
+ * that names a plugin, this processor behaves exactly as it did before.
  *
  * v0.3 is multi-track: 'patch' carries a track index, params_ptr/apply_patch/
  * note_on/note_off are all track-indexed, and 'clear-tracks' disables the
@@ -54,6 +62,10 @@ class SheliakProcessor extends AudioWorkletProcessor {
     this.pendingParams = new Array(MAX_TRACKS).fill(null);
     this.pendingClear = -1;
 
+    // Plugin tracks. `rack` is null until a document declares one.
+    this.rack = null;
+    this.pendingPlugins = null;
+
     this.port.onmessage = (event) => this.onMessage(event.data);
   }
 
@@ -74,6 +86,9 @@ class SheliakProcessor extends AudioWorkletProcessor {
         break;
       case 'transport':
         this.setPlaying(!!msg.playing);
+        break;
+      case 'plugins':
+        this.setPlugins(msg);
         break;
       default:
         break;
@@ -100,6 +115,7 @@ class SheliakProcessor extends AudioWorkletProcessor {
         'note_off',
         'all_notes_off',
         'process',
+        'master_guard',
         'out_l_ptr',
         'out_r_ptr',
       ];
@@ -128,6 +144,11 @@ class SheliakProcessor extends AudioWorkletProcessor {
         const keep = this.pendingClear;
         this.pendingClear = -1;
         this.clearTracks(keep);
+      }
+      if (this.pendingPlugins) {
+        const pending = this.pendingPlugins;
+        this.pendingPlugins = null;
+        this.setPlugins(pending);
       }
     } catch (e) {
       this.ready = false;
@@ -182,11 +203,76 @@ class SheliakProcessor extends AudioWorkletProcessor {
     }
   }
 
+  /**
+   * Rebuilds the plugin tracks from the document.
+   *
+   * Everything is replaced rather than diffed: a plugin's state is its own and
+   * there is no way to move it from an old instance to a new one, so pretending
+   * to update in place would be a lie about what the listener hears. The main
+   * thread only sends this when the plugin tracks actually changed, which is
+   * what keeps a keystroke from restarting a synth.
+   */
+  setPlugins(msg) {
+    const tracks = (msg && msg.tracks) || [];
+    const bundles = (msg && msg.bundles) || [];
+
+    if (this.rack) {
+      this.rack.destroy();
+      this.rack = null;
+    }
+    if (tracks.length === 0) {
+      this.port.postMessage({ type: 'plugin-status', errors: [], tracks: 0 });
+      return;
+    }
+    if (!this.ready) {
+      // The engine is still loading; the sample rate is not settled either.
+      this.pendingPlugins = msg;
+      return;
+    }
+
+    const host = globalThis.SheliakWclap;
+    if (!host) {
+      this.port.postMessage({
+        type: 'plugin-status',
+        errors: [
+          'the CLAP host is not loaded, so a plugin track is silent — ' +
+            'run `npm run build:worklet-host` (it writes public/wclap-host.js)',
+        ],
+        tracks: 0,
+      });
+      return;
+    }
+
+    const errors = [];
+    const modules = [];
+    for (let i = 0; i < bundles.length; i++) {
+      try {
+        modules.push(host.WclapModule.instantiate(new Uint8Array(bundles[i])));
+      } catch (e) {
+        errors.push(String((e && e.message) || e));
+      }
+    }
+
+    try {
+      const opened = host.PluginRack.open(modules, tracks, sampleRate, MAX_BLOCK);
+      this.rack = opened.rack;
+      errors.push(...opened.errors);
+    } catch (e) {
+      errors.push(String((e && e.message) || e));
+    }
+    this.port.postMessage({
+      type: 'plugin-status',
+      errors: errors,
+      tracks: this.rack ? this.rack.size : 0,
+    });
+  }
+
   setLoop(loop) {
     if (!loop || !loop.events || !loop.lengthSamples) {
       this.loop = null;
       this.evIdx = 0;
       if (this.ready) this.exports.all_notes_off();
+      if (this.rack) this.rack.allNotesOff();
       return;
     }
     this.loop = loop;
@@ -203,6 +289,7 @@ class SheliakProcessor extends AudioWorkletProcessor {
     this.counter = 0;
     this.evIdx = 0;
     if (!playing && this.ready) this.exports.all_notes_off();
+    if (!playing && this.rack) this.rack.allNotesOff();
   }
 
   // --------------------------------------------------------------- render
@@ -240,8 +327,16 @@ class SheliakProcessor extends AudioWorkletProcessor {
           // patch's own `voice.glide` and 0 for a normal retrigger, which is
           // what every event carries until the note layer emits glissandi
           // (docs/workstreams.md §10).
-          if (ev.kind === 0) this.exports.note_on(track, ev.note, ev.velocity, -1, 0);
-          else this.exports.note_off(track, ev.note);
+          if (this.rack && this.rack.has(track)) {
+            // A plugin track's notes go to the plugin: the engine has no voice
+            // at that index and would render silence for it.
+            if (ev.kind === 0) this.rack.noteOn(track, ev.note, ev.velocity);
+            else this.rack.noteOff(track, ev.note);
+          } else if (ev.kind === 0) {
+            this.exports.note_on(track, ev.note, ev.velocity, -1, 0);
+          } else {
+            this.exports.note_off(track, ev.note);
+          }
         }
 
         // Render only up to the next boundary (next event, or the loop wrap).
@@ -258,6 +353,13 @@ class SheliakProcessor extends AudioWorkletProcessor {
 
       this.exports.process(n);
       this.ensureViews();
+      // Plugin tracks are added into the engine's own output buffers, and the
+      // total goes back through the master guard: audio that did not come from
+      // the engine is outside the bound the engine promised, and the browser
+      // hard-clips anything past full scale.
+      if (this.rack && this.rack.add(n, this.outL.subarray(0, n), this.outR.subarray(0, n))) {
+        this.exports.master_guard(n);
+      }
       left.set(this.outL.subarray(0, n), frame);
       if (right) right.set(this.outR.subarray(0, n), frame);
       frame += n;

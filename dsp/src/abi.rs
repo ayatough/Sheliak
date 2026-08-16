@@ -130,6 +130,30 @@ pub extern "C" fn process(nframes: u32) {
     }
 }
 
+/// Puts the output buffers back through the master guard, in place.
+///
+/// The engine already guards its own sum, so a host that only plays the engine
+/// never needs this. A host that *adds* to the mix does: a plugin track's audio
+/// arrives after `process()` has finished, the total is then outside the
+/// bound the engine promised, and hard clipping is what a listener hears. The
+/// guard is transparent below `CLIP_KNEE`, so calling it on a quiet mix costs
+/// nothing and changes nothing — but calling it on a mix nothing was added to
+/// is still avoidable work, and a renderer that skips it stays bit-identical
+/// to one that never had plugins at all.
+///
+/// It is exported rather than reimplemented on the host side because the curve
+/// uses `tanh`: two implementations would agree to about one bit, and one bit
+/// is exactly what this project's determinism tests are about.
+#[no_mangle]
+pub extern "C" fn master_guard(nframes: u32) {
+    let n = (nframes as usize).min(MAX_BLOCK);
+    let s = shell();
+    for i in 0..n {
+        s.out_l[i] = crate::multi::soft_clip_master(s.out_l[i]);
+        s.out_r[i] = crate::multi::soft_clip_master(s.out_r[i]);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn out_l_ptr() -> *const f32 {
     shell().out_l.as_ptr()

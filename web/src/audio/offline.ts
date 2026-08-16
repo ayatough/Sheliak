@@ -14,6 +14,7 @@
 import type { CompiledTrack } from '../dsl/compile.ts';
 import type { LoopIR } from '../dsl/loop.ts';
 import { PARAM_COUNT } from '../shared/params.ts';
+import type { PluginRack } from './pluginRack.ts';
 
 /** The wasm exports, as documented in docs/architecture.md. */
 export interface DspExports {
@@ -25,6 +26,8 @@ export interface DspExports {
   note_off(track: number, note: number): void;
   all_notes_off(): void;
   process(nframes: number): void;
+  /** Only for a caller that added audio of its own — see `PluginRack`. */
+  master_guard(nframes: number): void;
   out_l_ptr(): number;
   out_r_ptr(): number;
   /** One track's own output for the block just rendered — its stem. */
@@ -89,6 +92,7 @@ export function renderLoop(
   total: number,
   sampleRate: number,
   stemTracks: readonly number[] = [],
+  rack?: PluginRack,
 ): Rendered {
   dsp.init(sampleRate);
   for (const track of tracks) {
@@ -105,15 +109,24 @@ export function renderLoop(
   while (written < total) {
     while (evIdx < loop.events.length && loop.events[evIdx]!.offsetSamples <= counter) {
       const ev = loop.events[evIdx++]!;
-      // -1 / 0, exactly as worklet.js sends them: use the patch's glide, no legato.
-      if (ev.kind === 0) dsp.note_on(ev.track, ev.note, ev.velocity, -1, 0);
-      else dsp.note_off(ev.track, ev.note);
+      // A plugin track's notes go to the plugin instead of the engine — the
+      // engine has no voice for that index and would play silence.
+      if (rack?.has(ev.track)) {
+        if (ev.kind === 0) rack.noteOn(ev.track, ev.note, ev.velocity);
+        else rack.noteOff(ev.track, ev.note);
+      } else if (ev.kind === 0) {
+        // -1 / 0, exactly as worklet.js sends them: use the patch's glide, no legato.
+        dsp.note_on(ev.track, ev.note, ev.velocity, -1, 0);
+      } else {
+        dsp.note_off(ev.track, ev.note);
+      }
     }
     let boundary = loop.lengthSamples;
     if (evIdx < loop.events.length) boundary = Math.min(boundary, loop.events[evIdx]!.offsetSamples);
     let n = Math.min(BLOCK, total - written, boundary - counter);
     if (n <= 0) n = 1;
     dsp.process(n);
+    mix(dsp, rack, n);
     l.set(new Float32Array(dsp.memory.buffer, dsp.out_l_ptr(), n), written);
     r.set(new Float32Array(dsp.memory.buffer, dsp.out_r_ptr(), n), written);
     collectStems(dsp, stems, n, written);
@@ -128,13 +141,33 @@ export function renderLoop(
 }
 
 /**
+ * Adds the plugin tracks into the block the engine just rendered, in the
+ * engine's own buffers, and puts the total back through the master guard.
+ *
+ * Stems are deliberately left alone: `collectStems` reads the per-track taps,
+ * and a plugin track has none — its audio never passed through the engine.
+ */
+function mix(dsp: DspExports, rack: PluginRack | undefined, n: number): void {
+  if (rack === undefined || rack.size === 0) return;
+  const l = new Float32Array(dsp.memory.buffer, dsp.out_l_ptr(), n);
+  const r = new Float32Array(dsp.memory.buffer, dsp.out_r_ptr(), n);
+  if (rack.add(n, l, r)) dsp.master_guard(n);
+}
+
+/**
  * Renders `total` samples with every note released at the start, which is how a
  * tail is produced: the loop has stopped, the effects and release stages have
  * not. Continues from the state `renderLoop` left behind, so it must be called
  * on the same instance and nothing may re-`init()` in between.
  */
-export function renderTail(dsp: DspExports, total: number, stemTracks: readonly number[] = []): Rendered {
+export function renderTail(
+  dsp: DspExports,
+  total: number,
+  stemTracks: readonly number[] = [],
+  rack?: PluginRack,
+): Rendered {
   dsp.all_notes_off();
+  rack?.allNotesOff();
   const l = new Float32Array(total);
   const r = new Float32Array(total);
   const stems = newStems(stemTracks, total);
@@ -142,6 +175,7 @@ export function renderTail(dsp: DspExports, total: number, stemTracks: readonly 
   while (written < total) {
     const n = Math.min(BLOCK, total - written);
     dsp.process(n);
+    mix(dsp, rack, n);
     l.set(new Float32Array(dsp.memory.buffer, dsp.out_l_ptr(), n), written);
     r.set(new Float32Array(dsp.memory.buffer, dsp.out_r_ptr(), n), written);
     collectStems(dsp, stems, n, written);

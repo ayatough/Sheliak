@@ -11,6 +11,7 @@
 // silence is the one failure the compiler has no way to call an error.
 
 import { readFileSync } from 'node:fs';
+import { availablePluginIds } from './bundles.ts';
 import { compile, type CompileResult } from '../dsl/compile.ts';
 import { sortErrors } from '../dsl/errors.ts';
 
@@ -187,20 +188,26 @@ function silenceWarnings(result: CompileResult): Finding[] {
     });
   }
 
-  // A plugin track is silent in the browser and in `sheliak render`, because
-  // both drive the engine and neither can load a `.clap`. Saying so is the
-  // difference between a known limitation and a mystery.
-  for (const track of result.pluginTracks) {
-    const fence = trackFences[track.track];
-    out.push({
-      severity: 'warning',
-      line: fence?.fenceLine ?? 1,
-      col: 1,
-      message:
-        `track \`${track.id}\` is played by the plugin \`${track.from}\`, which the engine ` +
-        'cannot load — it is silent here and in the browser. `sheliak render --emit-job` ' +
-        'and `sheliak-render` play it',
-    });
+  // Whether a plugin track can be heard depends on where the plugin lives. A
+  // WCLAP bundled with Sheliak plays in `sheliak render` and in the browser; a
+  // `.clap` installed on this machine plays only through `sheliak-render`, and
+  // saying which is which is the difference between a known limitation and a
+  // mystery. The bundles are only opened when a document has a plugin track.
+  if (result.pluginTracks.length > 0) {
+    const available = availablePluginIds();
+    for (const track of result.pluginTracks) {
+      if (available.has(track.from)) continue;
+      const fence = trackFences[track.track];
+      out.push({
+        severity: 'warning',
+        line: fence?.fenceLine ?? 1,
+        col: 1,
+        message:
+          `track \`${track.id}\` is played by the plugin \`${track.from}\`, which is not one ` +
+          'Sheliak ships as a `.wclap` — it is silent here and in the browser. ' +
+          '`sheliak render --emit-job` and `sheliak-render` play a `.clap` installed on this machine',
+      });
+    }
   }
 
   return out;

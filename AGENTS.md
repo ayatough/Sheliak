@@ -87,9 +87,16 @@ cargo fmt --manifest-path wclap/Cargo.toml --all -- --check
 ./scripts/build-wclap.sh                             # also checks the wasm32 struct layouts
 ```
 
-The bundle it writes is what `web/src/audio/wclap.test.ts` loads, the same way
-`integration.test.ts` loads `dsp.wasm`: without it those tests skip rather than
-fail, so run the script before believing a green suite.
+The bundle it writes is what `web/src/audio/wclap.test.ts` and
+`pluginRack.test.ts` load, the same way `integration.test.ts` loads `dsp.wasm`:
+without it those tests skip rather than fail, so run the script before believing
+a green suite.
+
+If you touched `web/public/worklet.js` or anything it reaches on the audio
+thread, also run **`./scripts/check-worklet-plugin.sh`** (needs Playwright). No
+test covers `AudioWorkletGlobalScope`, and it is not the scope you think it is:
+`TextEncoder` and `TextDecoder` are missing from it, and the host that used them
+passed every test in Node and in a page before throwing there.
 
 If you touched the artwork, also:
 

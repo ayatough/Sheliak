@@ -218,11 +218,12 @@ is whatever `main` last passed CI on.
   noise, the eight-effect per-track chain, the two-way-synced step sequencer and
   parameter panel, the `sheliak` command line (`new`, `check`, `fmt`, `render`,
   `serve`), offline verification, and a GitHub Pages deployment
-- **Also working, outside the browser:** `sheliak-render` renders a song
-  natively and hosts CLAP plugins — a `.clap` is a dynamic library, so this is
-  the only place one can be loaded. A ```` ```plugin ```` fence names an
-  instrument that plays a track; `--clap` puts an effect on the mix. Such a
-  track is silent in the browser, which says so rather than leaving it a mystery
+- **Also working:** CLAP plugins. A ```` ```plugin ```` fence names an
+  instrument that plays a track. Sheliak compiles its own engine to a `.wclap`
+  (CLAP for WebAssembly) and hosts it in the AudioWorklet, so such a track plays
+  in the browser; a `.clap` installed on your machine is a dynamic library no
+  browser can open, and plays through `sheliak-render`, which also puts an
+  effect on the mix with `--clap`
 - **Next:** the same for effects — a namespaced plugin id inside `fx:`, where
   the spelling is already reserved
 - **After that:** frontmatter as a song header, headings as arrangement sections,

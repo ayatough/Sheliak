@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { buildJob } from './job.ts';
 import { compile } from '../dsl/compile.ts';
 import { instantiateDsp, renderLoop, renderTail } from '../audio/offline.ts';
+import { PluginRack } from '../audio/pluginRack.ts';
+import { bundlePaths, loadBundles } from './bundles.ts';
 import { sortErrors } from '../dsl/errors.ts';
 import { encodeWav, peakOf } from './wav.ts';
 
@@ -101,8 +103,10 @@ export function render(source: string, opts: RenderOptions): RenderResult {
   if (result.loop === undefined) {
     throw new Error('no `loop` fence: nothing is scheduled, so there is nothing to render');
   }
-  if (result.tracks.length === 0) {
-    throw new Error('no `synth` fence: the document declares no track, so there is nothing to render');
+  if (result.tracks.length === 0 && result.pluginTracks.length === 0) {
+    throw new Error(
+      'no `synth` or `plugin` fence: the document declares no track, so there is nothing to render',
+    );
   }
 
   if (opts.emitJob !== undefined) {
@@ -135,16 +139,36 @@ export function render(source: string, opts: RenderOptions): RenderResult {
   }
 
   const dsp = instantiateDsp(wasm);
+
+  // Plugin tracks, if the document has any. Only then is a bundle even looked
+  // for: a document without one must not be able to fail on a missing plugin.
+  let rack: PluginRack | undefined;
+  const pluginErrors: string[] = [];
+  if (result.pluginTracks.length > 0) {
+    const bundles = loadBundles(bundlePaths());
+    pluginErrors.push(...bundles.errors);
+    const opened = PluginRack.open(bundles.modules, result.pluginTracks, opts.sampleRate, 128);
+    pluginErrors.push(...opened.errors);
+    rack = opened.rack;
+  }
+  if (pluginErrors.length > 0) {
+    throw new Error(
+      `the document names a plugin this renderer cannot play:\n${pluginErrors
+        .map((e) => `  ${e}`)
+        .join('\n')}`,
+    );
+  }
+
   const stemTracks = opts.stems ? result.tracks.map((t) => t.track) : [];
   const loopFrames = result.loop.lengthSamples * opts.loops;
-  const body = renderLoop(dsp, result.tracks, result.loop, loopFrames, opts.sampleRate, stemTracks);
+  const body = renderLoop(dsp, result.tracks, result.loop, loopFrames, opts.sampleRate, stemTracks, rack);
 
   const tailFrames = Math.round(opts.tailSeconds * opts.sampleRate);
   const l = concat(body.l, tailFrames);
   const r = concat(body.r, tailFrames);
   const stems = new Map([...body.stems].map(([t, b]) => [t, { l: concat(b.l, tailFrames), r: concat(b.r, tailFrames) }]));
   if (tailFrames > 0) {
-    const tail = renderTail(dsp, tailFrames, stemTracks);
+    const tail = renderTail(dsp, tailFrames, stemTracks, rack);
     l.set(tail.l, loopFrames);
     r.set(tail.r, loopFrames);
     for (const [track, buffers] of stems) {
@@ -155,6 +179,7 @@ export function render(source: string, opts: RenderOptions): RenderResult {
     }
   }
 
+  rack?.destroy();
   writeFileSync(opts.out, encodeWav(l, r, opts.sampleRate));
 
   // Named after the mix, not after the document: `-o mix.wav` should put the
@@ -173,7 +198,7 @@ export function render(source: string, opts: RenderOptions): RenderResult {
     frames: l.length,
     seconds: l.length / opts.sampleRate,
     peak: peakOf(l, r),
-    tracks: result.tracks.length,
+    tracks: result.tracks.length + result.pluginTracks.length,
     bpm: result.bpm,
     stemFiles,
   };

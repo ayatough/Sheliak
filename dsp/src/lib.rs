@@ -20,6 +20,7 @@
 //! note_off(track: u32, note: f32)
 //! all_notes_off()                      // every track
 //! process(nframes: u32)                // nframes ≤ 128, summed master bus
+//! master_guard(nframes: u32)           // only for a host that adds to the mix
 //! out_l_ptr() -> *const f32            // f32 × 128
 //! out_r_ptr() -> *const f32
 //! ```
