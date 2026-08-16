@@ -46,9 +46,17 @@ use crate::keys::{key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
 /// briefly uses two while the first fades.
 pub const MAX_VOICES: usize = 24;
 
-/// Resonators per voice: three strings of 72 partials in the tenor is the
-/// widest layout `keys.rs` hands out.
-const SLOTS: usize = 216;
+/// Resonators per voice: the widest layouts `keys.rs` hands out are three
+/// strings of 72 partials (tenor) and a bass single of 128 partials doubled
+/// by its polarisation bank.
+const SLOTS: usize = 256;
+
+/// Radiation corner in Hz: partials below this radiate progressively worse,
+/// as a soundboard does. This is what keeps a bass note sounding like a
+/// piano rather than an electric bass — on the real instrument the
+/// fundamental of the bottom octave is nearly absent from the sound, and the
+/// pitch is carried by the partials above it.
+const RADIATION_HZ: f32 = 180.0;
 
 /// Partials of the first string, the one the hammer's contact dynamics are
 /// integrated against.
@@ -255,11 +263,25 @@ impl Voice {
         self.quiet_blocks = 0;
 
         // Stretch is a retuning of the whole key; detune separates the
-        // strings of the key around it.
+        // strings of the key around it. A single wound bass string still gets
+        // a second, slightly detuned bank standing in for its horizontal
+        // polarisation: the fundamentals beat too slowly to hear, but the
+        // upper partials shimmer at audible rates, which is what keeps a
+        // lone string from sounding like one oscillator.
         let f0 = scale.f0 * 2.0f32.powf(stretch_cents(key, params.stretch) / 1200.0);
         let detune = scale.detune_cents * params.detune;
-        let string_offsets = [0.0, detune, -0.7 * detune];
-        let string_decay_var = [1.0, 0.93, 1.08];
+        let polarization = scale.strings == 1;
+        let (banks, string_offsets, bank_gain) = if polarization {
+            (2, [0.0, 0.4 * detune, 0.0], [1.0, 0.5, 0.0])
+        } else {
+            (scale.strings, [0.0, detune, -0.7 * detune], [1.0, 1.0, 1.0])
+        };
+        let string_decay_var = if polarization {
+            // The polarisation bank rings longer — the aftersound.
+            [1.0, 0.8, 1.0]
+        } else {
+            [1.0, 0.93, 1.08]
+        };
 
         // Hardness moves the felt along its stiffening curve: log-scaled K
         // and a slightly higher exponent for a harder, brighter hammer.
@@ -292,7 +314,7 @@ impl Voice {
         let nyquist_guard = 0.47 * sample_rate;
 
         let mut m = 0;
-        for s in 0..scale.strings {
+        for s in 0..banks {
             let fs0 = f0 * 2.0f32.powf(string_offsets[s] / 1200.0);
             let svar = string_decay_var[s];
             let mut string_modes = 0;
@@ -325,11 +347,14 @@ impl Voice {
                 self.dec_damped[m] = (-sigma_d * dt).exp();
                 // Output weight carries omega and the modal mass so that,
                 // against the kick below, the radiated level of an impulse is
-                // independent of which key's mass received it.
-                let radiate = omega * scale.modal_mass * OUTPUT_SCALE;
+                // independent of which key's mass received it — then the
+                // soundboard's radiation rolloff, which starves the lowest
+                // partials the way a real instrument does.
+                let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
+                let radiate = omega * scale.modal_mass * OUTPUT_SCALE * radiation * bank_gain[s];
                 self.wo_l[m] = (nf * core::f32::consts::PI * scale.read_l).sin() * radiate;
                 self.wo_r[m] = (nf * core::f32::consts::PI * scale.read_r).sin() * radiate;
-                self.kick[m] = excite / (scale.modal_mass * omega * scale.strings as f32);
+                self.kick[m] = excite / (scale.modal_mass * omega * banks as f32);
                 if s == 0 && string_modes < EXC_SLOTS {
                     self.exc[string_modes] = excite;
                 }
