@@ -27,6 +27,17 @@ import type { EditResult } from '../dsl/edit.ts';
 import { parseScalar } from '../dsl/units.ts';
 import type { WclapParam, WclapPlugin } from '../audio/wclap.ts';
 
+/** Everything the panel needs about one plugin, or why it has nothing. */
+export interface PluginPanel {
+  /** The reverse-domain id the document names. */
+  id: string;
+  /** What the plugin calls itself — the friendlier half of the heading. */
+  name?: string;
+  fields: PluginFieldSpec[];
+  /** Present instead of fields: why this plugin has no panel here. */
+  note?: string;
+}
+
 /** A control drawn for one CLAP parameter. */
 export interface PluginFieldSpec {
   /** The plugin's stable id, which is what a CLAP event carries. */

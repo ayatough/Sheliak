@@ -24,6 +24,12 @@ policy.
   A moved knob reaches the running plugin as a CLAP event rather than rebuilding
   it, so scrubbing a control during playback does not cut the note it is holding.
 
+  A plugin track is now visible as one: its tab carries a mark, the panel's
+  heading is the plugin's own name with its id under it, and the meta line reads
+  `1 plugin playing` — counted from what the audio thread actually loaded, not
+  from what the document asked for, so a plugin that failed to load says
+  `0/1 plugins playing` rather than nothing at all.
+
   One thing is guessed rather than known: whether a slider is linear or
   logarithmic. CLAP carries no unit and no hint, so a range spanning a factor of
   a hundred or more gets a log slider. It is a guess about feel — the value

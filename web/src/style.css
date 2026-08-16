@@ -552,6 +552,21 @@ label.num input {
   color: var(--err);
 }
 
+/* A track played by a plugin: the sound comes from a program the engine knows
+   nothing about, and the tab says so before you click it. */
+.track-tabs button.plugin::before {
+  content: '◈ ';
+  color: var(--accent);
+}
+
+/* The plugin's reverse-domain id, under its name in the panel heading. */
+.plugin-id {
+  margin-top: -6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  word-break: break-all;
+}
+
 .params {
   display: flex;
   flex-direction: column;

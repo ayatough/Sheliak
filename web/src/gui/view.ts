@@ -28,6 +28,7 @@ import {
   toSlider as pluginToSlider,
   fromSlider as pluginFromSlider,
   type PluginFieldSpec,
+  type PluginPanel,
 } from './pluginPanel.ts';
 
 export interface GuiHost {
@@ -64,9 +65,7 @@ export class GuiView {
    * outside because they come from the plugin itself, over the network, long
    * after the first render — see `main.ts`.
    */
-  private pluginSpecs = new Map<string, PluginFieldSpec[]>();
-  /** Why a plugin has no panel, by plugin id. */
-  private pluginNotes = new Map<string, string>();
+  private pluginPanels = new Map<string, PluginPanel>();
 
   constructor(
     private readonly el: GuiElements,
@@ -305,7 +304,10 @@ export class GuiView {
 
   private trackId(track: number): string {
     const t = this.result?.tracks.find((x) => x.track === track);
-    return t ? t.id : `track${track}`;
+    if (t) return t.id;
+    // A plugin track has an id like any other track; only its voice differs.
+    const plugin = this.result?.pluginTracks.find((x) => x.track === track);
+    return plugin ? plugin.id : `track${track}`;
   }
 
   private renderTrackTabs(): void {
@@ -320,11 +322,18 @@ export class GuiView {
       const compiled =
         result.tracks.some((t) => t.track === track) ||
         result.pluginTracks.some((t) => t.track === track);
+      const plugin = result.pluginTracks.find((t) => t.track === track);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = this.trackId(track);
       btn.className = track === this.selectedTrack ? 'on' : '';
       if (!compiled) btn.classList.add('broken');
+      // A track played by a plugin looks different, because it *is* different:
+      // its sound comes from a program the engine knows nothing about.
+      if (plugin) {
+        btn.classList.add('plugin');
+        btn.title = `played by the plugin ${plugin.from}`;
+      }
       btn.addEventListener('click', () => {
         this.selectedTrack = track;
         this.renderTrackTabs();
@@ -338,9 +347,8 @@ export class GuiView {
    * Hands the panel what a plugin says about itself. Called once the plugin
    * modules have loaded, and again if the document names a different one.
    */
-  setPluginSpecs(specs: Map<string, PluginFieldSpec[]>, notes: Map<string, string>): void {
-    this.pluginSpecs = specs;
-    this.pluginNotes = notes;
+  setPluginPanels(panels: Map<string, PluginPanel>): void {
+    this.pluginPanels = panels;
     if (this.result && !this.dragging) this.renderParams();
   }
 
@@ -378,21 +386,27 @@ export class GuiView {
   private buildPluginPanel(id: string): HTMLElement {
     const box = document.createElement('div');
     box.className = 'psection';
-    const h = document.createElement('h4');
-    h.textContent = id;
-    box.appendChild(h);
+    const panel = this.pluginPanels.get(id);
 
-    const specs = this.pluginSpecs.get(id);
-    if (specs === undefined || specs.length === 0) {
+    const h = document.createElement('h4');
+    h.textContent = panel?.name ?? id;
+    box.appendChild(h);
+    // The id under the name: it is what the document says and what has to be
+    // typed, and the name alone would not identify the plugin.
+    const from = document.createElement('div');
+    from.className = 'gui-hint plugin-id';
+    from.textContent = id;
+    box.appendChild(from);
+
+    if (panel === undefined || panel.fields.length === 0) {
       const p = document.createElement('div');
       p.className = 'gui-hint';
       p.textContent =
-        this.pluginNotes.get(id) ??
-        (specs === undefined ? 'loading this plugin…' : 'this plugin declares no parameters');
+        panel?.note ?? (panel === undefined ? 'loading this plugin…' : 'this plugin declares no parameters');
       box.appendChild(p);
       return box;
     }
-    for (const spec of specs) box.appendChild(this.buildPluginField(spec));
+    for (const spec of panel.fields) box.appendChild(this.buildPluginField(spec));
     return box;
   }
 

@@ -2,7 +2,7 @@
 
 import './style.css';
 import { AudioEngine, WCLAP_BUNDLE_URLS, type EngineState } from './audio/engine.ts';
-import { pluginFields, type PluginFieldSpec } from './gui/pluginPanel.ts';
+import { pluginFields, type PluginPanel } from './gui/pluginPanel.ts';
 import { compile, type CompileResult } from './dsl/compile.ts';
 import { phraseExpandedLines } from './dsl/phrase.ts';
 import { GuiView } from './gui/view.ts';
@@ -66,7 +66,10 @@ const engine = new AudioEngine({
     posEl.style.width = loopLen > 0 && engine.isPlaying ? `${((samples / loopLen) * 100).toFixed(1)}%` : '0%';
     gui.setPlayhead(samples, loopLen, engine.isPlaying);
   },
-  onPlugins: (_tracks, errors) => {
+  onPlugins: (tracks, errors) => {
+    pluginsPlaying = tracks;
+    renderStatus();
+    if (lastResult) renderMeta(lastResult);
     // A plugin that could not be loaded is not a syntax error — the document is
     // fine and this machine is not — so it is reported beside the compiler's
     // list rather than inside it, and it is not cleared by the next keystroke.
@@ -134,6 +137,8 @@ let lastResult: CompileResult | null = null;
 let lastLoopSig = '';
 /** What the worklet said about this document's plugin tracks, if anything. */
 let pluginErrors: string[] = [];
+/** How many plugin tracks the audio thread is actually running. */
+let pluginsPlaying = 0;
 
 /**
  * The plugins this build carries, for the panel only — the ones that make
@@ -164,26 +169,28 @@ async function refreshPluginPanels(result: CompileResult): Promise<void> {
   if (signature === pluginPanelsFor) return;
   pluginPanelsFor = signature;
   if (ids.length === 0) {
-    gui.setPluginSpecs(new Map(), new Map());
+    gui.setPluginPanels(new Map());
     return;
   }
 
   const library = await loadPluginLibrary();
   await library.load();
-  const specs = new Map<string, PluginFieldSpec[]>();
-  const notes = new Map<string, string>();
+  const panels = new Map<string, PluginPanel>();
   for (const id of ids) {
     const plugin = library.get(id);
     if (plugin === null) {
       // Not a failure of the document: this plugin is simply not one this
       // build carries, which the worklet has already said in the error panel.
-      notes.set(id, 'no panel — this plugin is not one this build can load');
-      specs.set(id, []);
+      panels.set(id, {
+        id,
+        fields: [],
+        note: 'no panel — this plugin is not one this build can load',
+      });
       continue;
     }
-    specs.set(id, pluginFields(plugin));
+    panels.set(id, { id, name: plugin.descriptor().name, fields: pluginFields(plugin) });
   }
-  gui.setPluginSpecs(specs, notes);
+  gui.setPluginPanels(panels);
 }
 
 function recompile(force = false): void {
@@ -322,6 +329,16 @@ function renderMeta(result: CompileResult): void {
   if (result.loopMeta) bits.push(`${result.loopMeta.bpm}bpm`, `${result.loopMeta.bars}bar`);
   const compiled = result.tracks.length + result.pluginTracks.length;
   bits.push(`${compiled}/${result.trackCount} track${result.trackCount === 1 ? '' : 's'}`);
+  // Only when the document asks for one: a song with no plugin fence should
+  // not have to read a count of something it is not using.
+  if (result.pluginTracks.length > 0) {
+    const wanted = result.pluginTracks.length;
+    bits.push(
+      pluginsPlaying === wanted
+        ? `${wanted} plugin${wanted === 1 ? '' : 's'} playing`
+        : `${pluginsPlaying}/${wanted} plugins playing`,
+    );
+  }
   if (engine.sampleRate) bits.push(`${engine.sampleRate}Hz`);
   bits.push(`${result.errors.length} error${result.errors.length === 1 ? '' : 's'}`);
   metaEl.textContent = bits.join('  ·  ');
