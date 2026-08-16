@@ -15,6 +15,19 @@ The order the synth fences appear in is the track index (0..7); each loop line
 binds a track to a phrase by id. A fence that fails to parse keeps playing its
 last valid patch, and only that fence freezes.
 
+A track can be played by a CLAP plugin instead of by the engine. Replace a
+\`synth\` fence with a \`plugin\` fence naming one — \`io.github.ayatough.sheliak.synth\`
+ships with Sheliak and runs in this tab. Copy it without the indentation:
+indented, it is an example rather than a track.
+
+    ${F}plugin id=lead from=io.github.ayatough.sheliak.synth
+    waveform: 3
+    cutoff:   40%
+    ${F}
+
+The meta line then reads \`1 plugin playing\`, and the panel fills with that
+plugin's own controls.
+
 ${F}synth id=lead seed=42
 osc:
   - { table: basic/saw,    level: -3dB,  morph: 0%,  unison: 5, detune: 18c, spread: 80% }
