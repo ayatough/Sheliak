@@ -58,6 +58,12 @@ const SLOTS: usize = 256;
 /// pitch is carried by the partials above it.
 const RADIATION_HZ: f32 = 180.0;
 
+/// The other side of the soundboard's shaping: above this corner its
+/// response falls away at 6 dB per octave. The string's bridge force is
+/// bright — without this rolloff the instrument reads as a harpsichord,
+/// all sustained treble partials and no warmth.
+const SOUNDBOARD_HZ: f32 = 1500.0;
+
 /// Partials of the first string, the one the hammer's contact dynamics are
 /// integrated against.
 const EXC_SLOTS: usize = 128;
@@ -351,7 +357,10 @@ impl Voice {
                 // soundboard's radiation rolloff, which starves the lowest
                 // partials the way a real instrument does.
                 let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
-                let radiate = omega * scale.modal_mass * OUTPUT_SCALE * radiation * bank_gain[s];
+                let soundboard =
+                    1.0 / (1.0 + (fn_hz / SOUNDBOARD_HZ) * (fn_hz / SOUNDBOARD_HZ)).sqrt();
+                let radiate =
+                    omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard * bank_gain[s];
                 self.wo_l[m] = (nf * core::f32::consts::PI * scale.read_l).sin() * radiate;
                 self.wo_r[m] = (nf * core::f32::consts::PI * scale.read_r).sin() * radiate;
                 self.kick[m] = excite / (scale.modal_mass * omega * banks as f32);
