@@ -537,3 +537,54 @@ fn state_round_trips_the_parameters() {
         (*plugin).destroy.unwrap()(plugin);
     }
 }
+
+#[test]
+fn state_survives_into_a_fresh_instance() {
+    // The clap-validator scenario: randomise parameters on one instance via
+    // process events, save, destroy it, create a fresh instance, load, and
+    // expect the values back — across instances, not within one.
+    unsafe {
+        let a = open();
+        assert!((*a).activate.unwrap()(a, SR as f64, 1, N as u32));
+        let (mut l, mut r) = ([0.0f32; N], [0.0f32; N]);
+        let events = Events::new(&[
+            Ev::Param(P_GAIN_DB, -21.33, 0),
+            Ev::Param(1, 0.18, 0),
+            Ev::Param(3, 8458.78, 0),
+        ]);
+        render(a, &mut l, &mut r, &events, N as u32);
+
+        let state_a =
+            (*a).get_extension.unwrap()(a, c"clap.state".as_ptr()) as *const clap_plugin_state;
+        let mut blob = Blob {
+            bytes: Vec::new(),
+            at: 0,
+        };
+        let ostream = clap_ostream {
+            ctx: &mut blob as *mut Blob as *mut c_void,
+            write: Some(blob_write),
+        };
+        assert!((*state_a).save.unwrap()(a, &ostream));
+        (*a).destroy.unwrap()(a);
+
+        let b = open();
+        let state_b =
+            (*b).get_extension.unwrap()(b, c"clap.state".as_ptr()) as *const clap_plugin_state;
+        let istream = clap_istream {
+            ctx: &mut blob as *mut Blob as *mut c_void,
+            read: Some(blob_read),
+        };
+        assert!((*state_b).load.unwrap()(b, &istream), "state.load failed");
+        let params =
+            (*b).get_extension.unwrap()(b, c"clap.params".as_ptr()) as *const clap_plugin_params;
+        let mut value = 0.0;
+        assert!((*params).get_value.unwrap()(b, P_GAIN_DB, &mut value));
+        assert!((value - -21.33).abs() < 1.0e-9, "gain came back as {value}");
+        assert!((*params).get_value.unwrap()(b, 3, &mut value));
+        assert!(
+            (value - 8458.78).abs() < 1.0e-9,
+            "brightness came back as {value}"
+        );
+        (*b).destroy.unwrap()(b);
+    }
+}

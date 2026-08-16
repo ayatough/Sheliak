@@ -37,8 +37,8 @@ use clap_sys::ext::note_ports::{
     CLAP_NOTE_DIALECT_MIDI,
 };
 use clap_sys::ext::params::{
-    clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE,
-    CLAP_PARAM_IS_STEPPED,
+    clap_host_params, clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS,
+    CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED, CLAP_PARAM_RESCAN_VALUES,
 };
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
@@ -259,6 +259,10 @@ fn write_text(text: &str, out: *mut c_char, capacity: u32) -> bool {
 /// `clap_plugin*` as the instance address still lands on something valid.
 struct Instance {
     clap: clap_plugin,
+    /// The host that created us — needed to announce that parameter values
+    /// changed on the plugin's initiative (a state load), which a host has
+    /// no other way of noticing.
+    host: *const clap_host,
     /// Parameter values, authoritative even while deactivated — state saves
     /// and loads read and write these, engine or no engine.
     values: [f64; PARAM_COUNT],
@@ -852,6 +856,20 @@ unsafe extern "C" fn state_load(plugin: *const clap_plugin, stream: *const clap_
         }
         at += 12;
     }
+
+    // The values just changed on the plugin's initiative, and a host only
+    // learns that by being told. `load` is a main-thread call, which is the
+    // thread `rescan` wants.
+    if !inst.host.is_null() {
+        if let Some(get_extension) = (*inst.host).get_extension {
+            let ext = get_extension(inst.host, CLAP_EXT_PARAMS.as_ptr()) as *const clap_host_params;
+            if !ext.is_null() {
+                if let Some(rescan) = (*ext).rescan {
+                    rescan(inst.host, CLAP_PARAM_RESCAN_VALUES);
+                }
+            }
+        }
+    }
     true
 }
 
@@ -879,7 +897,7 @@ unsafe extern "C" fn factory_descriptor(
 
 unsafe extern "C" fn factory_create(
     _factory: *const clap_plugin_factory,
-    _host: *const clap_host,
+    host: *const clap_host,
     id: *const c_char,
 ) -> *const clap_plugin {
     if !cstr_is(id, CStr::from_ptr(DESCRIPTOR.0.id).to_bytes_with_nul()) {
@@ -906,6 +924,7 @@ unsafe extern "C" fn factory_create(
             get_extension: Some(plugin_get_extension),
             on_main_thread: Some(plugin_on_main_thread),
         },
+        host,
         values,
         engine: None,
     });
