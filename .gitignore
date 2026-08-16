@@ -15,3 +15,7 @@
 # The CLAP host, bundled for the worklet by `npm run build:worklet-host`
 /web/public/wclap-host.js
 /wclap/target/
+
+# The physically modelled piano: build tree and the packaged .clap
+/piano/target/
+/piano/dist/

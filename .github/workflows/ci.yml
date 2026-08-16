@@ -54,6 +54,22 @@ jobs:
       - name: build the CLAP plugin (wclap bundle)
         run: ./scripts/build-wclap.sh
 
+      # The physically modelled piano, a native CLAP instrument. Its model
+      # tests are the substitute for ears (determinism, tuning, decay, the
+      # pedal); its native tests drive the plugin through the CLAP ABI the
+      # way a DAW would.
+      - name: check piano formatting
+        run: cargo fmt --manifest-path piano/Cargo.toml --all -- --check
+
+      - name: clippy the piano
+        run: cargo clippy --manifest-path piano/Cargo.toml --all-targets
+
+      - name: test the piano
+        run: cargo test --manifest-path piano/Cargo.toml
+
+      - name: build the piano (.clap)
+        run: ./scripts/build-piano-clap.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22

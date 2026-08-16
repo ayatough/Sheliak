@@ -13,6 +13,18 @@ policy.
 ## [Unreleased]
 
 ### Added
+- **A physically modelled piano, as a native CLAP instrument** (`piano/`,
+  built by `scripts/build-piano-clap.sh` into `piano/dist/`). Modal strings —
+  up to three per key, detuned, with a stiff-string inharmonicity curve and a
+  Railsback stretch — struck by a simulated nonlinear felt hammer, so
+  velocity changes timbre and not just level. Dampers fall at note-off (the
+  top octaves have none, as on the real instrument), the sustain pedal
+  arrives as MIDI CC 64 or as an automatable parameter, and parameter state
+  survives a DAW project reload. Deterministic by construction: the same
+  events at the same sample rate render bit-identical audio, so
+  `sheliak-render` can treat it as a `pinned` plugin rather than an
+  audition. No samples anywhere; where to listen:
+  `cargo run --release --example render_wav --manifest-path piano/Cargo.toml`.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —

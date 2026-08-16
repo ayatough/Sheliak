@@ -1,0 +1,27 @@
+[package]
+name = "sheliak-piano"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "A physically modelled piano as a native CLAP instrument."
+
+[lib]
+# `cdylib` is the shippable artifact — a `.clap` is this shared library under
+# another name. `rlib` is what `tests/` links against, so the whole entry point
+# can be driven natively, where a debugger and a backtrace still exist.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clap-sys = "0.5"
+
+# The model tests render seconds of audio through hundreds of resonators per
+# voice; unoptimised they take minutes, optimised they take seconds. This does
+# not weaken the tests — it is the same code, faster.
+[profile.test]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
