@@ -31,7 +31,7 @@ fn main() -> std::io::Result<()> {
         (14.8, 21, 0.9, 3.5),
         (14.8, 33, 0.85, 3.5),
     ];
-    let pedal = vec![(7.0, true), (11.0, false), (14.8, true)];
+    let pedal = [(7.0, true), (11.0, false), (14.8, true)];
 
     let seconds = 19.0f32;
     let frames = (seconds * SR) as usize;
