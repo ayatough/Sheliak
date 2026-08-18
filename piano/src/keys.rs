@@ -31,10 +31,21 @@ pub struct KeyScaling {
     /// String linear density times speaking length over two — the modal mass,
     /// identical for every mode of an ideal string.
     pub modal_mass: f32,
-    /// Decay rate of the fundamental while the key is held, in 1/s.
+    /// Early decay rate of the fundamental while the key is held, in 1/s —
+    /// the first stage of the two-stage decay: the attack bloom that dies
+    /// within seconds. Measured from the Salamander Grand reference set
+    /// (see `sigma_late0` for the second stage).
     pub sigma0: f32,
-    /// Frequency-dependent extra decay, applied as `sigma2·(f/1kHz)²`.
+    /// Frequency-dependent extra early decay, applied as `sigma2·(f/1kHz)²`.
     pub sigma2: f32,
+    /// Late (aftersound) decay rate in 1/s: the quiet second stage that
+    /// carries the singing tail. On the real instrument it comes from the
+    /// horizontal string polarisation and detuned-unison coupling.
+    pub sigma_late0: f32,
+    /// Radiated level of the aftersound bank relative to the primary
+    /// strings. Near unity at the bottom of the keyboard (those notes are
+    /// nearly single-stage) and tens of dB down in the treble.
+    pub after_gain: f32,
     /// How many strings this key strikes: one wound bass string, two in the
     /// tenor break, three above it.
     pub strings: usize,
@@ -45,11 +56,6 @@ pub struct KeyScaling {
     pub detune_cents: f32,
     /// Hammer strike point as a fraction of string length.
     pub strike_pos: f32,
-    /// Output readout points (left/right channel) as fractions of length —
-    /// two nearby points near the bridge, whose different partial weightings
-    /// are what decorrelates the channels.
-    pub read_l: f32,
-    pub read_r: f32,
     /// Hammer head mass in kg.
     pub hammer_mass: f32,
     /// Felt stiffness `K` in `F = K·compression^p`.
@@ -94,94 +100,94 @@ pub struct KeyScaling {
 // A measured value is allowed to land near π — 3.140 is a trim, not geometry.
 #[allow(clippy::approx_constant)]
 const OUTPUT_TRIM: [f32; 88] = [
-    0.240, // key 21
-    0.249, // key 22
-    0.265, // key 23
-    0.271, // key 24
-    0.270, // key 25
-    0.245, // key 26
-    0.247, // key 27
-    0.276, // key 28
-    0.350, // key 29
-    0.274, // key 30
-    0.268, // key 31
-    0.300, // key 32
-    0.354, // key 33
-    0.283, // key 34
-    0.303, // key 35
-    0.304, // key 36
-    0.362, // key 37
-    0.418, // key 38
-    0.396, // key 39
-    0.425, // key 40
-    0.433, // key 41
-    0.482, // key 42
-    0.473, // key 43
-    0.296, // key 44
-    0.335, // key 45
-    0.365, // key 46
-    0.350, // key 47
-    0.415, // key 48
-    0.433, // key 49
-    0.479, // key 50
-    0.530, // key 51
-    0.540, // key 52
-    0.596, // key 53
-    0.611, // key 54
-    0.717, // key 55
-    0.790, // key 56
-    0.828, // key 57
-    0.862, // key 58
-    0.843, // key 59
-    1.052, // key 60
-    1.088, // key 61
-    0.883, // key 62
-    1.175, // key 63
-    1.250, // key 64
-    1.085, // key 65
-    0.915, // key 66
-    1.240, // key 67
-    1.177, // key 68
-    0.953, // key 69
-    0.839, // key 70
-    1.328, // key 71
-    1.273, // key 72
-    1.271, // key 73
-    1.688, // key 74
-    0.792, // key 75
-    1.280, // key 76
-    1.454, // key 77
-    1.437, // key 78
-    1.391, // key 79
-    2.138, // key 80
-    1.591, // key 81
-    1.689, // key 82
-    1.674, // key 83
-    2.090, // key 84
-    2.424, // key 85
-    1.816, // key 86
-    3.520, // key 87
-    3.374, // key 88
-    2.919, // key 89
-    3.182, // key 90
-    2.701, // key 91
-    2.981, // key 92
-    2.895, // key 93
-    3.811, // key 94
-    3.871, // key 95
-    3.496, // key 96
-    4.710, // key 97
-    4.084, // key 98
-    5.667, // key 99
-    3.150, // key 100
-    6.025, // key 101
-    2.758, // key 102
-    0.748, // key 103
-    4.606, // key 104
-    2.149, // key 105
-    1.314, // key 106
-    6.735, // key 107
-    3.140, // key 108
+    0.192, // key 21
+    0.204, // key 22
+    0.213, // key 23
+    0.208, // key 24
+    0.182, // key 25
+    0.223, // key 26
+    0.220, // key 27
+    0.220, // key 28
+    0.245, // key 29
+    0.252, // key 30
+    0.252, // key 31
+    0.258, // key 32
+    0.274, // key 33
+    0.192, // key 34
+    0.199, // key 35
+    0.194, // key 36
+    0.230, // key 37
+    0.211, // key 38
+    0.225, // key 39
+    0.230, // key 40
+    0.233, // key 41
+    0.231, // key 42
+    0.302, // key 43
+    0.209, // key 44
+    0.231, // key 45
+    0.264, // key 46
+    0.240, // key 47
+    0.273, // key 48
+    0.289, // key 49
+    0.286, // key 50
+    0.340, // key 51
+    0.371, // key 52
+    0.378, // key 53
+    0.467, // key 54
+    0.360, // key 55
+    0.531, // key 56
+    0.500, // key 57
+    0.691, // key 58
+    0.705, // key 59
+    0.576, // key 60
+    0.797, // key 61
+    0.676, // key 62
+    0.809, // key 63
+    0.618, // key 64
+    0.652, // key 65
+    0.668, // key 66
+    0.533, // key 67
+    0.874, // key 68
+    1.079, // key 69
+    1.086, // key 70
+    0.984, // key 71
+    1.370, // key 72
+    1.894, // key 73
+    1.369, // key 74
+    1.572, // key 75
+    1.709, // key 76
+    1.723, // key 77
+    2.051, // key 78
+    1.769, // key 79
+    2.372, // key 80
+    1.574, // key 81
+    2.916, // key 82
+    2.355, // key 83
+    1.783, // key 84
+    2.003, // key 85
+    0.953, // key 86
+    1.563, // key 87
+    2.296, // key 88
+    1.686, // key 89
+    1.088, // key 90
+    1.274, // key 91
+    1.338, // key 92
+    1.180, // key 93
+    1.530, // key 94
+    1.845, // key 95
+    1.432, // key 96
+    1.952, // key 97
+    2.464, // key 98
+    1.879, // key 99
+    1.167, // key 100
+    1.479, // key 101
+    2.207, // key 102
+    1.426, // key 103
+    1.622, // key 104
+    2.003, // key 105
+    1.773, // key 106
+    1.434, // key 107
+    2.580, // key 108
 ];
 
 /// Piecewise-linear interpolation over `(midi_key, value)` anchor points.
@@ -248,20 +254,59 @@ pub fn key_scaling(key: i16) -> KeyScaling {
     let length = piecewise_log(k, &[(21.0, 0.29), (60.0, -0.18), (108.0, -1.27)]);
     let modal_mass = mu * length / 2.0;
 
-    // Decay time of the held fundamental: half a minute in the bass, under a
-    // second at the top. sigma = ln(1000)/T60.
-    let t60 = piecewise(
+    // The two-stage decay, fitted to the Salamander Grand reference
+    // recordings (per-partial envelope slopes, median over the sounding
+    // partials; see ROADMAP workstream 5). The early stage is the loud
+    // attack bloom — 5 dB/s at the bottom of the keyboard, 40 dB/s by C6 —
+    // and the late stage is the quiet aftersound that remains once the
+    // vertical polarisation has spent itself. sigma = ln(1000)/T60, and
+    // dB/s = 60/T60.
+    let t60_early = piecewise(
         k,
         &[
-            (21.0, 28.0),
-            (45.0, 20.0),
-            (60.0, 13.0),
-            (84.0, 4.0),
-            (108.0, 0.85),
+            (21.0, 14.0),
+            (27.0, 14.0),
+            (36.0, 3.0),
+            (45.0, 5.0),
+            (52.0, 4.5),
+            (60.0, 2.3),
+            (72.0, 1.7),
+            (84.0, 1.5),
+            (108.0, 0.6),
         ],
     );
-    let sigma0 = 6.9078 / t60;
-    let sigma2 = piecewise(k, &[(21.0, 0.30), (108.0, 0.55)]);
+    let sigma0 = 6.9078 / t60_early;
+    // The early stage's frequency term is shallow: on the reference set the
+    // fast first-stage rate is nearly flat along the partial series and
+    // only the treble's highest partials add to it.
+    let sigma2 = piecewise(k, &[(21.0, 0.10), (108.0, 0.10)]);
+    let t60_late = piecewise(
+        k,
+        &[
+            (21.0, 18.0),
+            (36.0, 24.0),
+            (48.0, 13.0),
+            (60.0, 9.0),
+            (72.0, 6.3),
+            (84.0, 5.5),
+            (108.0, 3.0),
+        ],
+    );
+    let sigma_late0 = 6.9078 / t60_late;
+    // Aftersound level: late-stage intercept minus early-stage intercept in
+    // the reference set, smoothed. log10 anchors.
+    let after_gain = piecewise_log(
+        k,
+        &[
+            (21.0, -0.05),
+            (36.0, -0.50),
+            (48.0, -0.48),
+            (60.0, -0.87),
+            (72.0, -1.05),
+            (84.0, -1.35),
+            (108.0, -1.60),
+        ],
+    );
 
     let (strings, mode_cap) = match key {
         ..=33 => (1, 128),
@@ -289,14 +334,18 @@ pub fn key_scaling(key: i16) -> KeyScaling {
         modal_mass,
         sigma0,
         sigma2,
+        sigma_late0,
+        after_gain,
         strings,
         mode_cap,
         detune_cents: 0.5 + 1.0 * along,
         strike_pos: 0.120 - 0.020 * along + jitter(key, 1) * 0.004,
-        read_l: 0.93 + jitter(key, 2) * 0.02,
-        read_r: 0.89 + jitter(key, 3) * 0.02,
         hammer_mass: 0.0118 - 0.0066 * along,
-        hammer_k: piecewise_log(k, &[(21.0, 8.6), (108.0, 11.0)]),
+        // Fitted to the reference attack spectra: a softer (longer-contact)
+        // bass hammer rolls the wound keys off above ~300 Hz the way the
+        // recordings do, and a stiffer middle keeps C4's partials 9-16
+        // present at forte.
+        hammer_k: piecewise_log(k, &[(21.0, 7.2), (60.0, 10.8), (108.0, 11.0)]),
         hammer_p: 2.2 + 0.8 * along,
         long_f1,
         long_modes,

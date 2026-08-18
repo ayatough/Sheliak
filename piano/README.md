@@ -28,9 +28,19 @@ writes `piano-demo.wav`.
 - **Strings.** Each key drives one to three detuned strings, each a bank of
   modal resonators (up to 128 partials in the bass). Partial frequencies
   follow the stiff-string law `f_n = n·f0·√(1+Bn²)` with a per-key
-  inharmonicity curve; decay rates grow along the partial series and with
-  frequency, and the detuned unison produces the beating and two-stage decay
-  of a real key. Tuning follows a Railsback-style stretch curve.
+  inharmonicity curve. Tuning follows a Railsback-style stretch curve.
+- **Two-stage decay, measured.** Every key runs its primary strings at a
+  fast early decay rate and one quiet, slightly detuned aftersound bank at
+  a slow late rate — the loud attack bloom that sinks into a singing tail.
+  Both rates and the aftersound level are fitted per register to the
+  Salamander Grand reference recordings (CC-BY Yamaha C5); without the
+  fast first stage a piano note reads as a sustained, plucked string.
+- **A soundboard band shape, measured.** Radiation falls below ~105 Hz and
+  declines through the midrange (≈10 dB/octave above 200 Hz, shelving at
+  −20 dB near the board's critical frequency), with a hashed per-mode
+  mobility ripple standing in for the board's resonance peaks — different
+  per channel, which is what decorrelates the stereo image. The shape is
+  fitted so each note's partial profile matches the reference recordings.
 - **Hammer.** A mass with a nonlinear felt spring (`F = K·ξ^p`, after
   Chaigne & Askenfelt) with Hunt–Crossley felt loss, integrated against the
   string's displacement at the strike point, sub-stepped during the
@@ -83,11 +93,12 @@ change.
 | `KNOCK_SCALE`, `KNOCK_LP_*`, `KNOCK_TAU_*` | `src/model.rs` | Strike-noise level, colour and length per register |
 | `LONG_SCALE`, `LONG_SIGMA` | `src/model.rs` | Bass metallic bite: level and ring time |
 | `long_f1` (`c_long` anchors) | `src/keys.rs` | Pitch of the bass bite cluster |
-| `RADIATION_HZ` (180) | `src/model.rs` | Higher = less low fundamental, lighter bass |
-| `SOUNDBOARD_HZ` (1500) | `src/model.rs` | Higher = brighter, glassier; lower = warmer, darker |
+| `RADIATION_HZ` (105) | `src/model.rs` | Higher = less low fundamental, lighter bass |
+| `SOUNDBOARD_HZ`/`_POW`/`_FLOOR` (200/0.85/0.1) | `src/model.rs` | The board's midrange decline and treble shelf |
 | Felt loss `0.5 * hammer.vh` | `src/model.rs` (`hammer_step`) | More = duller attack, tamer treble lobes |
-| `sigma2` anchors | `src/keys.rs` | Higher = treble partials die faster (piano), lower = they ring (harpsichord) |
-| `t60` anchors | `src/keys.rs` | Overall note length per register |
+| `sigma2` anchors | `src/keys.rs` | Extra early decay of high partials |
+| `t60_early` anchors | `src/keys.rs` | Attack-bloom length per register (fitted) |
+| `t60_late`, `after_gain` anchors | `src/keys.rs` | Aftersound length and level (fitted) |
 | `hammer_k` / `hammer_p` anchors | `src/keys.rs` | Felt stiffness curve: brightness vs velocity |
 | `strike_pos` (0.12…0.10) | `src/keys.rs` | Comb position: which partials the hammer misses |
 | `detune_cents`, polarisation `0.4 * detune` | `src/keys.rs`, `src/model.rs` | Unison shimmer and bass aftersound |
@@ -108,6 +119,24 @@ cargo test                                  # tuning/decay/level tests still hol
 `--retrim` re-levels the keyboard after any change that shifts loudness
 (damping, radiation, hammer curves). Skip it for pitch-only changes.
 
+**Fitting to a reference recording** (ROADMAP workstream 5) closes the loop
+with measurement instead of guesses:
+
+```bash
+cargo run --release --example note_wav -- 36 1.0 5.0 model_C2.wav  # model
+cargo run --release --example analyze -- model_C2.wav 36           # measure it
+cargo run --release --example analyze -- real_C2.wav  36           # measure the reference
+# move the keys.rs anchors toward the reference's numbers, rebuild, repeat
+```
+
+`analyze` prints per-partial attack levels and early/late decay slopes
+(dB/s = 60/T60) plus band medians — the exact quantities the `t60_early`,
+`t60_late`, `after_gain`, soundboard and hammer anchors were fitted from.
+References must be WAV (convert FLAC with `ffmpeg -i in.flac out.wav`). The
+current anchors were fitted against the Salamander Grand Piano set
+(CC-BY, `sfzinstruments/salamandergrandpiano`), keys A0–C6, and the fit is
+sample-set agnostic: point the same loop at recordings of any piano.
+
 ## Determinism
 
 The same events at the same sample rate render bit-identical audio: nothing
@@ -124,5 +153,7 @@ verifiable render rather than an audition.
 | `src/lib.rs` | The CLAP shell: entry, ports, params, state, MIDI |
 | `examples/levels.rs` | The keyboard-balance survey behind the voicing table |
 | `examples/render_wav.rs` | A demo passage to WAV, for ears |
+| `examples/analyze.rs` | Per-partial measurement of a note — the fitting loop |
+| `examples/note_wav.rs` | One key to WAV, the render half of that loop |
 | `tests/model.rs` | Determinism, tuning, decay, pedal, boundedness |
 | `tests/native.rs` | The plugin driven through the CLAP ABI, as a DAW would |

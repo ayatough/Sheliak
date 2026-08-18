@@ -53,7 +53,7 @@ fn main() {
             } else {
                 t_ff
             };
-            let trim = (key_scaling(key).output_trim * correction).clamp(0.2, 14.0);
+            let trim = (key_scaling(key).output_trim * correction).clamp(0.05, 14.0);
             println!("    {trim:.3}, // key {key}");
         }
         println!("];");

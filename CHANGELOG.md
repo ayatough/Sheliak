@@ -41,6 +41,17 @@ policy.
   square of the contact force, so the metallic bite appears at forte and
   vanishes at piano, which is the perceptual signature that separates a
   piano bass from a bass guitar.
+- **The piano is now fitted to real recordings.** The decay, radiation and
+  hammer parameters are measured against the Salamander Grand Piano
+  reference set (CC-BY Yamaha C5) instead of hand-guessed: every key gains
+  the real instrument's two-stage decay (a fast attack bloom over a quiet
+  aftersound bank — the missing first stage was why notes read as
+  sustained, plucked strings), the soundboard's midrange decline and treble
+  shelf replace the flat band, and a hashed per-mode mobility ripple
+  replaces the bridge-readout combs that had hollowed out the low partials.
+  `examples/analyze.rs` (per-partial measurement) and
+  `examples/note_wav.rs` (single-key render) make the fitting loop
+  repeatable against any reference piano.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —

@@ -44,17 +44,27 @@ mechanism per round, so the author can hear what changed.
    calibration put the burst peak at roughly 0.3–0.5 of the string peak at
    fortissimo; the author's ears have not yet judged it.
 4. *"High notes are a piano now, but the low notes are still a bass — a
-   plucked string."* → **addressed, awaiting the verdict.** The classic
-   symptom of missing longitudinal string modes (Bank & Lehtonen's
-   perception result): a bank of them now rides every wound key (≤ G2),
-   driven by the square of the contact force — `impulse²/dt`, summing to
-   ∫F²dt — so the metallic bite appears at forte and vanishes at piano.
-   `keys.rs` sets the longitudinal fundamental from string length and an
-   effective wave speed (700–1800 Hz across the wound range); `LONG_SCALE`
-   and `LONG_SIGMA` in `model.rs` set its level and ring time. First
-   calibration: the bite's measured energy sits 12–18 dB under the note at
-   fortissimo, flat across the wound range, quadratic in touch (verified by
-   `a_bass_note_bites_at_forte_with_longitudinal_partials`).
+   plucked string."* → **first addressed blind, then diagnosed by
+   measurement** (see 5).
+5. *"Still completely unchanged — a bass."* → the author asked whether the
+   simulator could be tuned toward reference recordings instead. It can,
+   and the measurement explained every earlier verdict at once: against
+   the Salamander Grand set, the model's early decay was 5–10× too slow on
+   every key (a piano note is a fast-dying attack bloom over a quiet
+   aftersound; ours was all aftersound — hence "sustained, plucked"), the
+   bridge readout sines imposed a spurious ∝n tilt that hollowed out the
+   low partials, and the board's midrange decline was missing. Workstream
+   5 below is now the process: the decay/radiation/hammer anchors are
+   fitted to the reference set, and `examples/analyze.rs` +
+   `examples/note_wav.rs` are the measuring loop. Awaiting ears on the
+   result.
+
+   (The blind attempt at 4 — a longitudinal-mode bank on the wound keys,
+   after Bank & Lehtonen, driven by `impulse²/dt` so its bite is quadratic
+   in touch — remains in the model and is real physics, verified by
+   `a_bass_note_bites_at_forte_with_longitudinal_partials`. But it was
+   garnish at −15 dB under a wrong core envelope, which is why it changed
+   nothing audibly. Lesson recorded: measure before adding mechanisms.)
 
 ## Workstreams, in order of audible payoff
 
@@ -135,6 +145,29 @@ source. Afterwards, re-measure (`--retrim`) and expect to *reduce* the
 table's spread — that is the success metric, alongside the ears.
 
 ### 5. Data-driven voicing — the Pianoteq lever
+
+**In progress — the pipeline exists and the first fit has landed.**
+`examples/analyze.rs` measures a note (per-partial frequencies → `B`,
+attack profile, early/late decay slopes in dB/s) and `examples/note_wav.rs`
+renders the model's version of the same key; the loop is: measure the
+reference, measure the render, move the anchors, repeat. The first fit ran
+against the Salamander Grand Piano set (CC-BY,
+`sfzinstruments/salamandergrandpiano`, keys A0–C6 at v16 plus C2/C4
+velocity layers) and produced: the two-stage decay (`t60_early`,
+`t60_late`, `after_gain`), the radiation corner (105 Hz), the soundboard
+midrange decline and shelf (`SOUNDBOARD_*`), the hashed mobility ripple
+replacing the bridge-readout sines, and refitted hammer stiffness anchors.
+After the fit, band medians at A0/C2/A2/C5 sit within a few dB of the
+reference in both attack shape and both decay stages.
+
+Still open in this workstream: C4's and C6's upper partials (n9–16) remain
+too weak at forte — likely hammer contact length vs the board shelf, worth
+fitting `hammer_k`/`hammer_p` against the C4 velocity layers; the velocity
+map itself (compare v2/v8/v16 brightness against the model's); and
+per-key `B`/stretch fits (measured `B` is available in `analyze` output but
+the `b` anchors were not yet refitted).
+
+The original brief, kept for context:
 
 Hand-set anchor curves in `keys.rs` are guesses refined by two listening
 rounds. The systematic route: fit them to real recordings.

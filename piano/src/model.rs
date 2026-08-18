@@ -42,27 +42,45 @@
 
 use crate::keys::{key_hash, key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
 
+/// Deterministic per-mode radiation ripple, standing in for the soundboard's
+/// mobility peaks and dips: log-uniform within about ±4 dB, hashed from the
+/// key, the partial number and a channel salt — no random source anywhere.
+fn mobility(key: i16, n: u32, salt: u32) -> f32 {
+    let h = key_hash(key, salt.wrapping_add(97 * n));
+    10.0f32.powf(((h & 0xFFFF) as f32 / 32768.0 - 1.0) * 0.2)
+}
+
 /// Simultaneous voices. A voice is one key strike; the same key struck twice
 /// briefly uses two while the first fades.
 pub const MAX_VOICES: usize = 24;
 
-/// Resonators per voice: the widest layouts `keys.rs` hands out are three
-/// strings of 72 partials (tenor) and a bass single of 128 partials doubled
-/// by its polarisation bank, plus the longitudinal bank on wound keys.
-const SLOTS: usize = 288;
+/// Resonators per voice: the widest layouts `keys.rs` hands out are a bass
+/// single of 128 partials doubled by its aftersound bank, and a tenor pair
+/// of 96 partials with aftersound — each plus the longitudinal bank on
+/// wound keys (2·96 + 96 + 12 = 300).
+const SLOTS: usize = 304;
 
 /// Radiation corner in Hz: partials below this radiate progressively worse,
-/// as a soundboard does. This is what keeps a bass note sounding like a
-/// piano rather than an electric bass — on the real instrument the
-/// fundamental of the bottom octave is nearly absent from the sound, and the
-/// pitch is carried by the partials above it.
-const RADIATION_HZ: f32 = 180.0;
+/// as a soundboard does. Fitted against the reference recordings: at 105 Hz
+/// the model's low-partial levels match the measured ones — A0's
+/// fundamental lands ~22 dB down, exactly where the real instrument has it,
+/// while C2's second partial (131 Hz), the loudest line of that note on the
+/// real piano, keeps its body.
+const RADIATION_HZ: f32 = 105.0;
 
 /// The other side of the soundboard's shaping: above this corner its
-/// response falls away at 6 dB per octave. The string's bridge force is
-/// bright — without this rolloff the instrument reads as a harpsichord,
-/// all sustained treble partials and no warmth.
-const SOUNDBOARD_HZ: f32 = 1500.0;
+/// response falls away. Fitted against the reference recordings — the real
+/// board's radiativity already declines through the midrange, which is what
+/// keeps a note's energy concentrated in its lowest partials. The exponent
+/// makes the slope steeper than one pole (≈10 dB/octave); the per-key
+/// output trim absorbs the absolute level, so only the shape within each
+/// note matters here.
+const SOUNDBOARD_HZ: f32 = 200.0;
+const SOUNDBOARD_POW: f32 = 0.85;
+/// The decline bottoms out near the board's critical frequency, where
+/// radiation efficiency recovers: a -20 dB shelf floor, fitted so the
+/// treble keys keep their upper partials the way the recordings do.
+const SOUNDBOARD_FLOOR: f32 = 0.1;
 
 /// Partials of the first string, the one the hammer's contact dynamics are
 /// integrated against.
@@ -88,6 +106,10 @@ const KNOCK_LP_HIGH_HZ: f32 = 3000.0;
 /// milliseconds, the treble knock is over almost at once.
 const KNOCK_TAU_LOW_S: f32 = 0.0035;
 const KNOCK_TAU_HIGH_S: f32 = 0.0010;
+/// Body corner of the knock path. The impact thump reaches the listener
+/// through the case and board more directly than the strings' bridge force
+/// does, so it keeps a wider band than the string radiation path.
+const KNOCK_BODY_HZ: f32 = 1500.0;
 
 // The longitudinal bank — the metallic bite of a struck wound string. The
 // transverse deflection stretches the string along its length, driving a
@@ -102,6 +124,11 @@ const LONG_SCALE: f32 = 0.0035;
 /// Base decay rate (1/s) of the longitudinal modes: they ring well under a
 /// second, a metallic halo on the attack rather than a second tone.
 const LONG_SIGMA: f32 = 9.0;
+
+/// Frequency-dependent extra decay of the aftersound bank, the counterpart
+/// of `sigma2` for the late stage — measured shallower than the early
+/// stage's on the reference set.
+const SIGMA_LATE2: f32 = 0.2;
 
 /// Per-sample extra decay while a voice is being faded out (a steal or a
 /// restrike): about 40 ms to -60 dB at 48 kHz.
@@ -338,25 +365,32 @@ impl Voice {
         self.quiet_blocks = 0;
 
         // Stretch is a retuning of the whole key; detune separates the
-        // strings of the key around it. A single wound bass string still gets
-        // a second, slightly detuned bank standing in for its horizontal
-        // polarisation: the fundamentals beat too slowly to hear, but the
-        // upper partials shimmer at audible rates, which is what keeps a
-        // lone string from sounding like one oscillator.
+        // strings of the key around it.
+        //
+        // Every key is two stages of physics: the primary string banks (the
+        // vertical polarisation of the unison, radiating hard into the
+        // bridge and dying at the fast early rate) and one quiet aftersound
+        // bank — the horizontal polarisation and residual unison coupling,
+        // slightly detuned, ringing long. Their crossfade is the two-stage
+        // decay measured on the reference recordings; without the fast
+        // first stage a piano note reads as a sustained (plucked) string.
         let f0 = scale.f0 * 2.0f32.powf(stretch_cents(key, params.stretch) / 1200.0);
         let detune = scale.detune_cents * params.detune;
-        let polarization = scale.strings == 1;
-        let (banks, string_offsets, bank_gain) = if polarization {
-            (2, [0.0, 0.4 * detune, 0.0], [1.0, 0.5, 0.0])
-        } else {
-            (scale.strings, [0.0, detune, -0.7 * detune], [1.0, 1.0, 1.0])
-        };
-        let string_decay_var = if polarization {
-            // The polarisation bank rings longer — the aftersound.
-            [1.0, 0.8, 1.0]
-        } else {
-            [1.0, 0.93, 1.08]
-        };
+        let banks = scale.strings + 1;
+        let after = scale.strings;
+        let mut string_offsets = [0.0f32; 4];
+        let mut bank_gain = [1.0f32; 4];
+        let mut string_decay_var = [1.0f32; 4];
+        if scale.strings >= 2 {
+            string_offsets[1] = detune;
+            string_decay_var[1] = 0.93;
+        }
+        if scale.strings >= 3 {
+            string_offsets[2] = -0.7 * detune;
+            string_decay_var[2] = 1.08;
+        }
+        string_offsets[after] = 0.4 * detune;
+        bank_gain[after] = scale.after_gain;
 
         // Hardness moves the felt along its stiffening curve: log-scaled K
         // and a slightly higher exponent for a harder, brighter hammer.
@@ -406,7 +440,7 @@ impl Voice {
         let pole = |hz: f32| 1.0 - (-core::f32::consts::TAU * hz * dt).exp();
         self.knock_lp_c = pole(lp_hz);
         self.knock_hp_c = pole(RADIATION_HZ);
-        self.knock_sb_c = pole(SOUNDBOARD_HZ);
+        self.knock_sb_c = pole(KNOCK_BODY_HZ);
         self.knock_lp1 = 0.0;
         self.knock_lp2 = 0.0;
         self.knock_hp1 = 0.0;
@@ -433,12 +467,19 @@ impl Voice {
                 }
                 let omega = core::f32::consts::TAU * fn_hz;
 
-                // Held-key decay: the fundamental's rate, growing along the
-                // partial series and with frequency; the Decay parameter
+                // Held-key decay: the early rate for the primary strings,
+                // the late rate for the aftersound bank, each growing along
+                // the partial series and with frequency; the Decay parameter
                 // stretches or shrinks every time constant together.
-                let sigma = (scale.sigma0 * (1.0 + 0.05 * (nf - 1.0)) * svar
-                    + scale.sigma2 * (fn_hz / 1000.0) * (fn_hz / 1000.0))
-                    / params.decay;
+                let sigma = if s == after {
+                    (scale.sigma_late0 * (1.0 + 0.02 * (nf - 1.0))
+                        + SIGMA_LATE2 * (fn_hz / 1000.0) * (fn_hz / 1000.0))
+                        / params.decay
+                } else {
+                    (scale.sigma0 * (1.0 + 0.05 * (nf - 1.0)) * svar
+                        + scale.sigma2 * (fn_hz / 1000.0) * (fn_hz / 1000.0))
+                        / params.decay
+                };
                 let sigma_d = if scale.has_damper {
                     sigma + sigma_damper * (1.0 + 0.02 * (nf - 1.0))
                 } else {
@@ -452,15 +493,19 @@ impl Voice {
                 // Output weight carries omega and the modal mass so that,
                 // against the kick below, the radiated level of an impulse is
                 // independent of which key's mass received it — then the
-                // soundboard's radiation rolloff, which starves the lowest
-                // partials the way a real instrument does.
+                // soundboard's band shape (radiation rolloff below, declining
+                // radiativity above), and a hashed per-mode mobility ripple
+                // standing in for the board's resonance peaks and dips. The
+                // ripple differs between the channels, which is what
+                // decorrelates them.
                 let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
-                let soundboard =
-                    1.0 / (1.0 + (fn_hz / SOUNDBOARD_HZ) * (fn_hz / SOUNDBOARD_HZ)).sqrt();
+                let soundboard = (1.0 / (1.0 + (fn_hz / SOUNDBOARD_HZ) * (fn_hz / SOUNDBOARD_HZ)))
+                    .powf(SOUNDBOARD_POW)
+                    .max(SOUNDBOARD_FLOOR);
                 let radiate =
                     omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard * bank_gain[s];
-                self.wo_l[m] = (nf * core::f32::consts::PI * scale.read_l).sin() * radiate;
-                self.wo_r[m] = (nf * core::f32::consts::PI * scale.read_r).sin() * radiate;
+                self.wo_l[m] = mobility(key, n as u32, 6) * radiate;
+                self.wo_r[m] = mobility(key, n as u32, 7) * radiate;
                 self.kick[m] = excite / (scale.modal_mass * omega * banks as f32);
                 if s == 0 && string_modes < EXC_SLOTS {
                     self.exc[string_modes] = excite;
@@ -506,11 +551,14 @@ impl Voice {
             self.e[m] = 2.0 * (0.5 * omega * dt).sin();
             self.dec_free[m] = (-sigma * dt).exp();
             self.dec_damped[m] = (-sigma_d * dt).exp();
+            // Longitudinal force drives the bridge end-on, which the board
+            // radiates far better at these frequencies than it does the
+            // transverse midrange — hence the gentler body corner here.
             let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
-            let soundboard = 1.0 / (1.0 + (fn_hz / SOUNDBOARD_HZ) * (fn_hz / SOUNDBOARD_HZ)).sqrt();
+            let soundboard = 1.0 / (1.0 + (fn_hz / KNOCK_BODY_HZ) * (fn_hz / KNOCK_BODY_HZ)).sqrt();
             let radiate = omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard;
-            self.wo_l[m] = (nf * core::f32::consts::PI * scale.read_l).sin() * radiate;
-            self.wo_r[m] = (nf * core::f32::consts::PI * scale.read_r).sin() * radiate;
+            self.wo_l[m] = mobility(key, n as u32, 8) * radiate;
+            self.wo_r[m] = mobility(key, n as u32, 9) * radiate;
             self.kick[m] = LONG_SCALE * long_gain * excite / (scale.modal_mass * omega);
             self.q[m] = 0.0;
             self.v[m] = 0.0;
