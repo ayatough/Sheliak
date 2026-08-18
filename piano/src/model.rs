@@ -40,7 +40,7 @@
 //! — the per-key variation in `keys.rs` is hashed from the key number — so
 //! the same events at the same sample rate render the same samples.
 
-use crate::keys::{key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
+use crate::keys::{key_hash, key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
 
 /// Simultaneous voices. A voice is one key strike; the same key struck twice
 /// briefly uses two while the first fades.
@@ -71,6 +71,24 @@ const EXC_SLOTS: usize = 128;
 /// Hammer integration substeps per audio sample while in contact.
 const HAMMER_SUBSTEPS: u32 = 8;
 
+// The strike noise — key knock, hammer-shank thunk, soundboard thump — as a
+// deterministic noise burst fired at the moment of first felt contact and
+// routed through the same radiation/soundboard shaping as the strings, so it
+// sits inside the instrument rather than on top of it. The burst's level
+// rises faster with hammer velocity than the string tone does: it dominates
+// a fortissimo attack and all but vanishes at pianissimo.
+
+/// Burst level at fortissimo, before the `Knock` parameter scales it.
+const KNOCK_SCALE: f32 = 1.1;
+/// Colour of the burst, low key to high: a dark bass thump to a brighter,
+/// clickier treble knock (one-pole lowpass corner, applied twice).
+const KNOCK_LP_LOW_HZ: f32 = 300.0;
+const KNOCK_LP_HIGH_HZ: f32 = 3000.0;
+/// Length of the burst, low key to high: the bass thump breathes for a few
+/// milliseconds, the treble knock is over almost at once.
+const KNOCK_TAU_LOW_S: f32 = 0.0035;
+const KNOCK_TAU_HIGH_S: f32 = 0.0010;
+
 /// Per-sample extra decay while a voice is being faded out (a steal or a
 /// restrike): about 40 ms to -60 dB at 48 kHz.
 const FADE: f32 = 0.9985;
@@ -92,7 +110,8 @@ pub const P_DAMPER_S: u32 = 5;
 pub const P_STRETCH: u32 = 6;
 pub const P_DYNAMICS: u32 = 7;
 pub const P_SUSTAIN: u32 = 8;
-pub const PARAM_COUNT: usize = 9;
+pub const P_KNOCK: u32 = 9;
+pub const PARAM_COUNT: usize = 10;
 
 /// The playing parameters, in their own units (the CLAP value is this value).
 ///
@@ -109,6 +128,7 @@ pub struct Params {
     pub stretch: f32,
     pub dynamics: f32,
     pub sustain: f32,
+    pub knock: f32,
 }
 
 impl Default for Params {
@@ -123,6 +143,7 @@ impl Default for Params {
             stretch: 1.0,
             dynamics: 0.5,
             sustain: 0.0,
+            knock: 1.0,
         }
     }
 }
@@ -140,6 +161,7 @@ impl Params {
             P_STRETCH => self.stretch = v.clamp(0.0, 2.0),
             P_DYNAMICS => self.dynamics = v.clamp(0.0, 1.0),
             P_SUSTAIN => self.sustain = if v >= 0.5 { 1.0 } else { 0.0 },
+            P_KNOCK => self.knock = v.clamp(0.0, 2.0),
             _ => {}
         }
     }
@@ -155,6 +177,7 @@ impl Params {
             P_STRETCH => self.stretch,
             P_DYNAMICS => self.dynamics,
             P_SUSTAIN => self.sustain,
+            P_KNOCK => self.knock,
             _ => 0.0,
         }) as f64
     }
@@ -202,6 +225,22 @@ struct Voice {
     hammer: Hammer,
     pan_l: f32,
     pan_r: f32,
+    // The strike-noise burst: a keyed deterministic noise sequence, an
+    // exponential envelope armed at note-on and fired at first felt contact,
+    // and the one-pole chain that shapes it (colour lowpass twice, the
+    // strings' radiation highpass twice, the soundboard corner once).
+    knock_rng: u32,
+    knock_amp: f32,
+    knock_env: f32,
+    knock_decay: f32,
+    knock_lp_c: f32,
+    knock_hp_c: f32,
+    knock_sb_c: f32,
+    knock_lp1: f32,
+    knock_lp2: f32,
+    knock_hp1: f32,
+    knock_hp2: f32,
+    knock_sb: f32,
     // Modal state and per-mode constants, laid out as parallel arrays so the
     // per-sample loop is a straight vectorisable sweep.
     q: [f32; SLOTS],
@@ -241,6 +280,18 @@ impl Voice {
             },
             pan_l: 0.0,
             pan_r: 0.0,
+            knock_rng: 1,
+            knock_amp: 0.0,
+            knock_env: 0.0,
+            knock_decay: 0.0,
+            knock_lp_c: 0.0,
+            knock_hp_c: 0.0,
+            knock_sb_c: 0.0,
+            knock_lp1: 0.0,
+            knock_lp2: 0.0,
+            knock_hp1: 0.0,
+            knock_hp2: 0.0,
+            knock_sb: 0.0,
             q: [0.0; SLOTS],
             v: [0.0; SLOTS],
             e: [0.0; SLOTS],
@@ -314,6 +365,35 @@ impl Voice {
         let angle = (scale.pan + 1.0) * core::f32::consts::FRAC_PI_4;
         self.pan_l = angle.cos();
         self.pan_r = angle.sin();
+
+        // Arm the strike noise. `strike` is the note-on velocity through the
+        // Dynamics curve (0..1); raising it past 1 makes the burst grow
+        // faster with touch than the string tone, whose level follows the
+        // hammer speed itself.
+        let along = (key - FIRST_KEY) as f32 / (LAST_KEY - FIRST_KEY) as f32;
+        let strike = ((self.hammer.vh - scale.velocity_floor) / (7.0 - scale.velocity_floor))
+            .clamp(0.0, 1.0);
+        // Register weight, measured against each key's own string peak: the
+        // bottom octave's thump is lifted, and the top octaves are pulled
+        // back — their string tone is weak enough that a flat burst level
+        // would read as all click.
+        let register = 1.0 + 0.5 * ((0.2 - along) / 0.2).max(0.0)
+            - 0.6 * ((along - 0.55) / 0.2).clamp(0.0, 1.0);
+        self.knock_rng = key_hash(key, 4) | 1;
+        self.knock_amp = KNOCK_SCALE * params.knock * register * strike.powf(1.4);
+        self.knock_env = 0.0;
+        let tau = KNOCK_TAU_LOW_S + (KNOCK_TAU_HIGH_S - KNOCK_TAU_LOW_S) * along;
+        self.knock_decay = (-dt / tau).exp();
+        let lp_hz = KNOCK_LP_LOW_HZ * (KNOCK_LP_HIGH_HZ / KNOCK_LP_LOW_HZ).powf(along);
+        let pole = |hz: f32| 1.0 - (-core::f32::consts::TAU * hz * dt).exp();
+        self.knock_lp_c = pole(lp_hz);
+        self.knock_hp_c = pole(RADIATION_HZ);
+        self.knock_sb_c = pole(SOUNDBOARD_HZ);
+        self.knock_lp1 = 0.0;
+        self.knock_lp2 = 0.0;
+        self.knock_hp1 = 0.0;
+        self.knock_hp2 = 0.0;
+        self.knock_sb = 0.0;
 
         let sigma_damper = 6.9078 / params.damper_s;
         let inv_b1 = 1.0 / (1.0 + scale.b);
@@ -676,10 +756,14 @@ impl Piano {
             let mut level = 0.0f32;
 
             for i in 0..frames {
+                let pre_contact = voice.hammer.contacted;
                 let impulse = voice.hammer_step(dt);
                 if impulse != 0.0 {
                     for (v, kick) in voice.v[..m].iter_mut().zip(&voice.kick[..m]) {
                         *v += impulse * kick;
+                    }
+                    if !pre_contact {
+                        voice.knock_env = voice.knock_amp;
                     }
                 }
 
@@ -705,6 +789,28 @@ impl Piano {
                     *v *= g;
                     sum_l += wl * *v;
                     sum_r += wr * *v;
+                }
+
+                // The strike noise, while its burst still breathes. The
+                // xorshift step is a fixed sequence from the key's seed, so
+                // the "noise" renders the same samples every strike.
+                if voice.knock_env > 1.0e-9 {
+                    let mut s = voice.knock_rng;
+                    s ^= s << 13;
+                    s ^= s >> 17;
+                    s ^= s << 5;
+                    voice.knock_rng = s;
+                    let white = (s as i32 as f32) * (1.0 / 2_147_483_648.0) * voice.knock_env;
+                    voice.knock_env *= voice.knock_decay;
+                    voice.knock_lp1 += voice.knock_lp_c * (white - voice.knock_lp1);
+                    voice.knock_lp2 += voice.knock_lp_c * (voice.knock_lp1 - voice.knock_lp2);
+                    voice.knock_hp1 += voice.knock_hp_c * (voice.knock_lp2 - voice.knock_hp1);
+                    let high1 = voice.knock_lp2 - voice.knock_hp1;
+                    voice.knock_hp2 += voice.knock_hp_c * (high1 - voice.knock_hp2);
+                    let high2 = high1 - voice.knock_hp2;
+                    voice.knock_sb += voice.knock_sb_c * (high2 - voice.knock_sb);
+                    sum_l += voice.knock_sb;
+                    sum_r += voice.knock_sb;
                 }
 
                 left[i] += sum_l * voice.pan_l;

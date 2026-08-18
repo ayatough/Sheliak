@@ -25,6 +25,15 @@ policy.
   `sheliak-render` can treat it as a `pinned` plugin rather than an
   audition. No samples anywhere; where to listen:
   `cargo run --release --example render_wav --manifest-path piano/Cargo.toml`.
+- **The piano strikes with a knock.** A deterministic strike-noise burst —
+  key knock, shank thunk, soundboard thump — fires at the moment of felt
+  contact, shaped per register (a dark few-millisecond thump in the bass, a
+  shorter brighter knock in the treble) and routed through the same
+  radiation and soundboard shaping as the strings. Its level rises faster
+  with velocity than the string tone, so it dominates a fortissimo attack
+  and all but vanishes at pianissimo. A new automatable `Knock` parameter
+  scales it (0–2, default 1). The "noise" is a fixed per-key sequence seeded
+  from the key-number hash, so renders stay bit-identical.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —

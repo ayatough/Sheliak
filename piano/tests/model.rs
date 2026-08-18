@@ -3,7 +3,7 @@
 //! failure modes a diff cannot show.
 
 use sheliak_piano::keys::{key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
-use sheliak_piano::model::{Piano, MAX_VOICES, P_DETUNE, P_STRETCH, P_SUSTAIN};
+use sheliak_piano::model::{Piano, MAX_VOICES, P_DETUNE, P_KNOCK, P_STRETCH, P_SUSTAIN};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 128;
@@ -242,6 +242,51 @@ fn a_louder_note_is_brighter_not_just_louder() {
         loud > soft * 1.5,
         "the felt nonlinearity is not brightening loud notes (pp {soft}, ff {loud})"
     );
+}
+
+// ------------------------------------------------------- the strike noise
+
+/// The knock alone: the same strike rendered with the burst at maximum and
+/// at zero differ by exactly the burst, since it never feeds the strings and
+/// the master path is linear.
+fn knock_alone(key: i16, vel: f32) -> Vec<f32> {
+    let mut piano = Piano::new(SR);
+    piano.set_param(P_KNOCK, 2.0);
+    let with = render(&mut piano, 0.3, key, vel, None);
+    let mut piano = Piano::new(SR);
+    piano.set_param(P_KNOCK, 0.0);
+    let without = render(&mut piano, 0.3, key, vel, None);
+    with.iter().zip(&without).map(|(a, b)| a - b).collect()
+}
+
+#[test]
+fn the_knock_is_a_short_transient_that_vanishes_with_the_touch() {
+    for &key in &[30, 60, 90] {
+        let knock = knock_alone(key, 1.0);
+        let p = peak(&knock);
+        assert!(p > 1.0e-3, "key {key}: no knock at fortissimo: {p}");
+
+        // A transient, not a tone: from its own peak it must fall to −40 dB
+        // inside 20 ms.
+        let peak_at = knock
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .map(|(i, _)| i)
+            .unwrap();
+        let tail = peak(&knock[peak_at + (0.02 * SR) as usize..]);
+        assert!(
+            tail < p * 0.01,
+            "key {key}: the knock rings past 20 ms (peak {p}, tail {tail})"
+        );
+
+        // And it must all but vanish when the key is barely touched.
+        let silent = peak(&knock_alone(key, 0.005));
+        assert!(
+            silent < p * 1.0e-3,
+            "key {key}: a near-zero-velocity strike still knocks: {silent}"
+        );
+    }
 }
 
 // ------------------------------------------------------- clicks, DC, voices

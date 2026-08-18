@@ -44,9 +44,15 @@ writes `piano-demo.wav`.
 - **Voicing.** The per-key physical parameters are interpolated from anchors
   set by the published measurements, then levelled by a measured 88-entry
   output trim (`keys.rs`), the same job a technician's voicing does.
+- **Strike noise.** A deterministic noise burst — key knock, shank thunk,
+  soundboard thump — fires at the moment of felt contact, shaped per
+  register (a dark few-millisecond thump in the bass, a shorter brighter
+  knock in the treble) and routed through the same radiation and soundboard
+  shaping as the strings. Its level rises faster with velocity than the
+  string tone does, so it dominates a fortissimo attack and all but
+  vanishes at pianissimo. The `Knock` parameter scales it.
 
-Not modelled yet, in honesty: the strike noise (key knock and soundboard
-thump — the biggest audible gap), a resonating soundboard (a tone filter
+Not modelled yet, in honesty: a resonating soundboard (a tone filter
 stands in for it), sympathetic resonance between keys, una corda and
 sostenuto, and repedalling half-damping. The top octave's fortissimo
 levelling leans on the voicing table rather than the contact physics.
@@ -59,14 +65,16 @@ Two layers, from cheap to deep.
 
 **In the DAW, live:** `Hammer Hardness` (dark→bright at the source),
 `Brightness` (a plain output lowpass), `Unison Detune` (beating and the
-two-stage decay), `Decay`, `Damper`, `Stretch`, `Dynamics` (velocity curve).
-Hardness, Detune, Stretch, Decay, Damper and Dynamics are read at note-on —
-retrigger the note to hear the change.
+two-stage decay), `Decay`, `Damper`, `Stretch`, `Dynamics` (velocity curve),
+`Knock` (the strike-noise level). Hardness, Detune, Stretch, Decay, Damper,
+Dynamics and Knock are read at note-on — retrigger the note to hear the
+change.
 
 **In the source, rebuilt:** the character constants live in two files.
 
 | Knob | Where | Moves the sound |
 |---|---|---|
+| `KNOCK_SCALE`, `KNOCK_LP_*`, `KNOCK_TAU_*` | `src/model.rs` | Strike-noise level, colour and length per register |
 | `RADIATION_HZ` (180) | `src/model.rs` | Higher = less low fundamental, lighter bass |
 | `SOUNDBOARD_HZ` (1500) | `src/model.rs` | Higher = brighter, glassier; lower = warmer, darker |
 | Felt loss `0.5 * hammer.vh` | `src/model.rs` (`hammer_step`) | More = duller attack, tamer treble lobes |

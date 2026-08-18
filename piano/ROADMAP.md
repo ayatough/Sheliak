@@ -37,14 +37,30 @@ mechanism per round, so the author can hear what changed.
    rolloff below 180 Hz, polarisation bank on single strings.
 2. *"Now it sounds like a harpsichord"* → fixed: treble partials decayed an
    order too slowly (`sigma2` ×3), soundboard rolloff above 1.5 kHz.
-3. *"Quality is still low; is it the missing hammer knock?"* → **open, and
-   the author is right.** The strike transient is pure string vibration;
-   every percussive noise component of a real strike is absent. This is
-   workstream 1.
+3. *"Quality is still low; is it the missing hammer knock?"* → **implemented,
+   awaiting the author's verdict.** Workstream 1 below is now in the model: a
+   deterministic strike-noise burst at felt contact, register-shaped, scaled
+   faster with velocity than the tone, with a `Knock` parameter. The first
+   calibration put the burst peak at roughly 0.3–0.5 of the string peak at
+   fortissimo; the author's ears have not yet judged it.
 
 ## Workstreams, in order of audible payoff
 
 ### 1. The strike noise — key knock, shank thunk, soundboard thump
+
+**Done (first pass; level and colour still subject to the listening loop).**
+Implemented as written below: a per-key xorshift sequence seeded from
+`keys.rs::key_hash`, fired at the moment of first felt contact, two colour
+lowpasses (300 Hz bass → 3 kHz treble), the strings' own radiation highpass
+(twice, matching their `f²/(f²+f_c²)` magnitude) and the soundboard corner,
+an exponential envelope (3.5 ms bass → 1 ms treble), level ∝ (velocity
+through the Dynamics curve)^1.4 with a register weight, and a `Knock`
+parameter (id 9, 0–2). Verified by `the_knock_is_a_short_transient_that_
+vanishes_with_the_touch` in `tests/model.rs` plus the existing determinism/
+click/DC suite; the trim table was re-measured. What remains is the ears'
+side of the loop: the burst's level, colour and length per register.
+
+The original brief, kept for context:
 
 The single biggest gap. A real note is *strike noise + string tone*; we
 synthesise only the tone, so the onset reads as a pluck.

@@ -180,6 +180,14 @@ static PARAMS_DESC: [ParamDesc; PARAM_COUNT] = [
         default: 0.0,
         kind: ParamKind::Choice(&PEDAL_NAMES),
     },
+    ParamDesc {
+        id: model::P_KNOCK,
+        name: b"Knock\0",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        kind: NUMBER,
+    },
 ];
 
 /// Raw pointers into `'static` string data — immutable for the life of the
