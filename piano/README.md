@@ -45,10 +45,13 @@ writes `piano-demo.wav`.
   set by the published measurements, then levelled by a measured 88-entry
   output trim (`keys.rs`), the same job a technician's voicing does.
 
-Not modelled yet, in honesty: a soundboard (a tone filter stands in for it),
-sympathetic resonance between keys, una corda and sostenuto, and repedalling
-half-damping. The top octave's fortissimo levelling leans on the voicing
-table rather than the contact physics.
+Not modelled yet, in honesty: the strike noise (key knock and soundboard
+thump — the biggest audible gap), a resonating soundboard (a tone filter
+stands in for it), sympathetic resonance between keys, una corda and
+sostenuto, and repedalling half-damping. The top octave's fortissimo
+levelling leans on the voicing table rather than the contact physics.
+[ROADMAP.md](ROADMAP.md) is the ordered plan for closing these gaps,
+written to be picked up by a fresh agent.
 
 ## Tuning it
 
