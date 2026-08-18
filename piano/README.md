@@ -15,7 +15,22 @@ The plugin lands in `piano/dist/` — `sheliak-piano.clap` on Linux and
 Windows, a `Sheliak Piano.clap` bundle on macOS. Copy it into your host's
 CLAP search path (`~/.clap` or `/usr/lib/clap` on Linux, `~/Library/Audio/
 Plug-Ins/CLAP` on macOS, `%COMMONPROGRAMFILES%\CLAP` on Windows), rescan,
-and play. To hear it without a DAW:
+and play.
+
+**Building in WSL for a Windows DAW?** A plain build in WSL produces a
+*Linux* binary, and a Windows host's scan will just say "failed" on it.
+Cross-build instead:
+
+```bash
+sudo apt install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+./scripts/build-piano-clap.sh --windows
+```
+
+then copy `piano/dist/sheliak-piano.clap` to
+`C:\Program Files\Common Files\CLAP\` and rescan.
+
+To hear it without a DAW:
 
 ```bash
 cargo run --release --example render_wav --manifest-path piano/Cargo.toml
