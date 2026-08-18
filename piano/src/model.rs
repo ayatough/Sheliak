@@ -48,8 +48,8 @@ pub const MAX_VOICES: usize = 24;
 
 /// Resonators per voice: the widest layouts `keys.rs` hands out are three
 /// strings of 72 partials (tenor) and a bass single of 128 partials doubled
-/// by its polarisation bank.
-const SLOTS: usize = 256;
+/// by its polarisation bank, plus the longitudinal bank on wound keys.
+const SLOTS: usize = 288;
 
 /// Radiation corner in Hz: partials below this radiate progressively worse,
 /// as a soundboard does. This is what keeps a bass note sounding like a
@@ -88,6 +88,20 @@ const KNOCK_LP_HIGH_HZ: f32 = 3000.0;
 /// milliseconds, the treble knock is over almost at once.
 const KNOCK_TAU_LOW_S: f32 = 0.0035;
 const KNOCK_TAU_HIGH_S: f32 = 0.0010;
+
+// The longitudinal bank — the metallic bite of a struck wound string. The
+// transverse deflection stretches the string along its length, driving a
+// second, much higher mode series (`keys.rs` sets its fundamental and
+// count). The stretch grows with the square of the contact force, so these
+// modes are driven by `impulse²/dt`: twice the dB-per-dB slope of the tone,
+// which is why a forte bass note bites and a piano one stays round — and
+// why a model without them reads as a plucked bass.
+
+/// Longitudinal drive relative to the transverse kick.
+const LONG_SCALE: f32 = 0.0035;
+/// Base decay rate (1/s) of the longitudinal modes: they ring well under a
+/// second, a metallic halo on the attack rather than a second tone.
+const LONG_SIGMA: f32 = 9.0;
 
 /// Per-sample extra decay while a voice is being faded out (a steal or a
 /// restrike): about 40 ms to -60 dB at 48 kHz.
@@ -222,6 +236,9 @@ struct Voice {
     /// Modes belonging to the first string — the slice of `q` the hammer's
     /// contact displacement is read from.
     string0_modes: usize,
+    /// Index of the first longitudinal mode; `long_start..mode_count` is the
+    /// longitudinal bank, driven quadratically instead of by the impulse.
+    long_start: usize,
     hammer: Hammer,
     pan_l: f32,
     pan_r: f32,
@@ -266,6 +283,7 @@ impl Voice {
             quiet_blocks: 0,
             mode_count: 0,
             string0_modes: 0,
+            long_start: 0,
             hammer: Hammer {
                 active: false,
                 contacted: false,
@@ -456,6 +474,48 @@ impl Voice {
                 self.string0_modes = string_modes.min(EXC_SLOTS);
             }
         }
+        self.long_start = m;
+
+        // The longitudinal bank, where `keys.rs` grants one: a harmonic
+        // series on the longitudinal fundamental, radiated through the same
+        // soundboard shaping as the strings. Its kick is scaled for the
+        // quadratic drive (`impulse²/dt`) it receives in `process`.
+        for n in 1..=scale.long_modes {
+            if m >= SLOTS {
+                break;
+            }
+            let nf = n as f32;
+            let fn_hz = nf * scale.long_f1;
+            if fn_hz > nyquist_guard {
+                break;
+            }
+            let omega = core::f32::consts::TAU * fn_hz;
+            let sigma = (LONG_SIGMA + 0.3 * (fn_hz / 1000.0) * (fn_hz / 1000.0)) / params.decay;
+            let sigma_d = if scale.has_damper {
+                sigma + sigma_damper
+            } else {
+                sigma
+            };
+            let excite =
+                (nf * core::f32::consts::PI * scale.strike_pos).sin() / (1.0 + 0.15 * (nf - 1.0));
+            // ∫F²dt grows steeply toward the bottom of the keyboard (heavier
+            // hammer, larger forces, longer contact), which left alone makes
+            // the lowest keys all bite; this tilt levels the bank's measured
+            // prominence across the wound range.
+            let long_gain = 10.0f32.powf(0.045 * (key as f32 - 36.0));
+            self.e[m] = 2.0 * (0.5 * omega * dt).sin();
+            self.dec_free[m] = (-sigma * dt).exp();
+            self.dec_damped[m] = (-sigma_d * dt).exp();
+            let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
+            let soundboard = 1.0 / (1.0 + (fn_hz / SOUNDBOARD_HZ) * (fn_hz / SOUNDBOARD_HZ)).sqrt();
+            let radiate = omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard;
+            self.wo_l[m] = (nf * core::f32::consts::PI * scale.read_l).sin() * radiate;
+            self.wo_r[m] = (nf * core::f32::consts::PI * scale.read_r).sin() * radiate;
+            self.kick[m] = LONG_SCALE * long_gain * excite / (scale.modal_mass * omega);
+            self.q[m] = 0.0;
+            self.v[m] = 0.0;
+            m += 1;
+        }
         self.mode_count = m;
 
         // Level the keyboard. A bass key radiates through a hundred partials
@@ -464,8 +524,15 @@ impl Voice {
         // response to a unit impulse — an incoherent (power) sum, since the
         // partials' phases decohere within the first cycle — anchored to the
         // hammer momentum a fortissimo strike delivers.
+        // The longitudinal modes are excluded from the impulse response —
+        // their kick answers a different (quadratic) drive — but their
+        // output weights are normalised along with everything else, so the
+        // bank rides the voicing.
         let mut power = 0.0f32;
-        for (wl, kick) in self.wo_l[..m].iter().zip(&self.kick[..m]) {
+        for (wl, kick) in self.wo_l[..self.long_start]
+            .iter()
+            .zip(&self.kick[..self.long_start])
+        {
             let c = wl * kick;
             power += c * c;
         }
@@ -759,8 +826,17 @@ impl Piano {
                 let pre_contact = voice.hammer.contacted;
                 let impulse = voice.hammer_step(dt);
                 if impulse != 0.0 {
-                    for (v, kick) in voice.v[..m].iter_mut().zip(&voice.kick[..m]) {
+                    let ls = voice.long_start;
+                    for (v, kick) in voice.v[..ls].iter_mut().zip(&voice.kick[..ls]) {
                         *v += impulse * kick;
+                    }
+                    // The longitudinal bank takes the square of the contact
+                    // force: `impulse²/dt` sums to ∫F²dt over the contact,
+                    // which is what keeps the drive — and the pitch of the
+                    // bite — independent of the sample rate.
+                    let drive = impulse * impulse / dt;
+                    for (v, kick) in voice.v[ls..m].iter_mut().zip(&voice.kick[ls..m]) {
+                        *v += drive * kick;
                     }
                     if !pre_contact {
                         voice.knock_env = voice.knock_amp;

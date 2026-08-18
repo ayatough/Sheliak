@@ -43,6 +43,18 @@ mechanism per round, so the author can hear what changed.
    faster with velocity than the tone, with a `Knock` parameter. The first
    calibration put the burst peak at roughly 0.3–0.5 of the string peak at
    fortissimo; the author's ears have not yet judged it.
+4. *"High notes are a piano now, but the low notes are still a bass — a
+   plucked string."* → **addressed, awaiting the verdict.** The classic
+   symptom of missing longitudinal string modes (Bank & Lehtonen's
+   perception result): a bank of them now rides every wound key (≤ G2),
+   driven by the square of the contact force — `impulse²/dt`, summing to
+   ∫F²dt — so the metallic bite appears at forte and vanishes at piano.
+   `keys.rs` sets the longitudinal fundamental from string length and an
+   effective wave speed (700–1800 Hz across the wound range); `LONG_SCALE`
+   and `LONG_SIGMA` in `model.rs` set its level and ring time. First
+   calibration: the bite's measured energy sits 12–18 dB under the note at
+   fortissimo, flat across the wound range, quadratic in touch (verified by
+   `a_bass_note_bites_at_forte_with_longitudinal_partials`).
 
 ## Workstreams, in order of audible payoff
 

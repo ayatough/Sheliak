@@ -244,6 +244,52 @@ fn a_louder_note_is_brighter_not_just_louder() {
     );
 }
 
+// ---------------------------------------------------- the longitudinal bite
+
+#[test]
+fn a_bass_note_bites_at_forte_with_longitudinal_partials() {
+    // The wound range carries a longitudinal bank; the plain trichords do not.
+    assert!(key_scaling(43).long_modes > 0);
+    assert_eq!(key_scaling(44).long_modes, 0);
+
+    for &key in &[24i16, 36] {
+        let scale = key_scaling(key);
+        // Energy summed over the first longitudinal partials, against the
+        // same measurement 37 Hz off (the transverse leak) and against the
+        // fundamental.
+        let cluster = |vel: f32| -> (f32, f32, f32) {
+            let mut piano = Piano::new(SR);
+            let out = render(&mut piano, 0.5, key, vel, None);
+            let early = &out[..(0.4 * SR) as usize];
+            let (mut on, mut off) = (0.0f32, 0.0f32);
+            for n in 1..=3 {
+                let f = n as f32 * scale.long_f1;
+                on += goertzel(early, f);
+                off += goertzel(early, f + 37.0);
+            }
+            (on, off, goertzel(early, scale.f0))
+        };
+
+        // At fortissimo the longitudinal partials stand above the leak…
+        let (on_ff, off_ff, fund_ff) = cluster(1.0);
+        assert!(
+            on_ff > off_ff * 1.2,
+            "key {key}: no longitudinal bite at ff (on {on_ff}, leak {off_ff})"
+        );
+
+        // …and their level grows much faster with touch than the tone —
+        // the quadratic drive.
+        let (on_pp, _, fund_pp) = cluster(0.3);
+        let long_growth = on_ff / on_pp.max(1.0e-30);
+        let fund_growth = fund_ff / fund_pp.max(1.0e-30);
+        assert!(
+            long_growth > 5.0 * fund_growth,
+            "key {key}: the bite does not scale quadratically \
+             (long ×{long_growth}, tone ×{fund_growth})"
+        );
+    }
+}
+
 // ------------------------------------------------------- the strike noise
 
 /// The knock alone: the same strike rendered with the burst at maximum and

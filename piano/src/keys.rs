@@ -61,6 +61,14 @@ pub struct KeyScaling {
     /// Stereo position, -1 (left) to 1 (right) — bass keys sit to the
     /// player's left.
     pub pan: f32,
+    /// Fundamental of the string's longitudinal modes in Hz, and how many of
+    /// them the voice runs — zero outside the wound-string range. A struck
+    /// wound string also compresses along its length, and those modes (around
+    /// a kilohertz for the longest bass strings) are much of what separates
+    /// "struck piano bass" from "plucked bass": they are driven by the square
+    /// of the contact force, so they bite at forte and vanish at piano.
+    pub long_f1: f32,
+    pub long_modes: usize,
     /// Slowest hammer speed (m/s) this key is struck with. Raised toward the
     /// treble: a very slow hammer on a very short string spends so many
     /// string periods in contact that almost nothing transfers, which turns
@@ -83,95 +91,97 @@ pub struct KeyScaling {
 /// correction alone above that, where the lobes are steepest at full force.
 /// Regenerate it after any change to the model or to `key_scaling` — the
 /// numbers are downstream of both.
+// A measured value is allowed to land near π — 3.140 is a trim, not geometry.
+#[allow(clippy::approx_constant)]
 const OUTPUT_TRIM: [f32; 88] = [
-    0.238, // key 21
-    0.246, // key 22
+    0.240, // key 21
+    0.249, // key 22
     0.265, // key 23
     0.271, // key 24
     0.270, // key 25
     0.245, // key 26
     0.247, // key 27
     0.276, // key 28
-    0.349, // key 29
+    0.350, // key 29
     0.274, // key 30
     0.268, // key 31
     0.300, // key 32
     0.354, // key 33
     0.283, // key 34
     0.303, // key 35
-    0.303, // key 36
+    0.304, // key 36
     0.362, // key 37
     0.418, // key 38
     0.396, // key 39
     0.425, // key 40
-    0.436, // key 41
+    0.433, // key 41
     0.482, // key 42
     0.473, // key 43
-    0.300, // key 44
-    0.337, // key 45
+    0.296, // key 44
+    0.335, // key 45
     0.365, // key 46
-    0.352, // key 47
-    0.416, // key 48
-    0.434, // key 49
+    0.350, // key 47
+    0.415, // key 48
+    0.433, // key 49
     0.479, // key 50
     0.530, // key 51
-    0.541, // key 52
-    0.599, // key 53
-    0.616, // key 54
+    0.540, // key 52
+    0.596, // key 53
+    0.611, // key 54
     0.717, // key 55
     0.790, // key 56
     0.828, // key 57
-    0.869, // key 58
-    0.859, // key 59
+    0.862, // key 58
+    0.843, // key 59
     1.052, // key 60
     1.088, // key 61
-    0.908, // key 62
-    1.180, // key 63
-    1.254, // key 64
-    1.093, // key 65
-    0.948, // key 66
-    1.244, // key 67
-    1.186, // key 68
-    1.016, // key 69
-    0.919, // key 70
+    0.883, // key 62
+    1.175, // key 63
+    1.250, // key 64
+    1.085, // key 65
+    0.915, // key 66
+    1.240, // key 67
+    1.177, // key 68
+    0.953, // key 69
+    0.839, // key 70
     1.328, // key 71
-    1.278, // key 72
-    1.314, // key 73
+    1.273, // key 72
+    1.271, // key 73
     1.688, // key 74
-    0.936, // key 75
-    1.349, // key 76
-    1.489, // key 77
-    1.451, // key 78
-    1.413, // key 79
+    0.792, // key 75
+    1.280, // key 76
+    1.454, // key 77
+    1.437, // key 78
+    1.391, // key 79
     2.138, // key 80
-    1.612, // key 81
-    1.691, // key 82
-    1.682, // key 83
-    2.125, // key 84
-    2.430, // key 85
-    1.873, // key 86
-    3.519, // key 87
-    3.431, // key 88
-    2.924, // key 89
-    3.251, // key 90
-    2.747, // key 91
-    2.991, // key 92
-    2.910, // key 93
-    3.841, // key 94
-    3.882, // key 95
-    3.680, // key 96
-    4.717, // key 97
-    4.111, // key 98
-    5.863, // key 99
-    3.179, // key 100
-    6.118, // key 101
-    2.784, // key 102
-    0.785, // key 103
-    4.609, // key 104
-    2.187, // key 105
+    1.591, // key 81
+    1.689, // key 82
+    1.674, // key 83
+    2.090, // key 84
+    2.424, // key 85
+    1.816, // key 86
+    3.520, // key 87
+    3.374, // key 88
+    2.919, // key 89
+    3.182, // key 90
+    2.701, // key 91
+    2.981, // key 92
+    2.895, // key 93
+    3.811, // key 94
+    3.871, // key 95
+    3.496, // key 96
+    4.710, // key 97
+    4.084, // key 98
+    5.667, // key 99
+    3.150, // key 100
+    6.025, // key 101
+    2.758, // key 102
+    0.748, // key 103
+    4.606, // key 104
+    2.149, // key 105
     1.314, // key 106
-    6.195, // key 107
-    3.517, // key 108
+    6.735, // key 107
+    3.140, // key 108
 ];
 
 /// Piecewise-linear interpolation over `(midi_key, value)` anchor points.
@@ -260,6 +270,19 @@ pub fn key_scaling(key: i16) -> KeyScaling {
         _ => (3, 48),
     };
 
+    // Longitudinal fundamental: fL1 = cL / 2L, with cL the effective
+    // longitudinal wave speed of the wound string — the copper winding adds
+    // mass but no stiffness, so it sits well below plain steel's ~5100 m/s
+    // and recovers toward it as the winding thins out up the scale. The
+    // per-key jitter keeps neighbouring keys' metallic clusters from
+    // landing on one frequency.
+    let (long_f1, long_modes) = if key <= 43 {
+        let c_long = piecewise(k, &[(21.0, 2500.0), (43.0, 3900.0)]);
+        (c_long / (2.0 * length) * (1.0 + 0.04 * jitter(key, 5)), 12)
+    } else {
+        (0.0, 0)
+    };
+
     KeyScaling {
         f0,
         b,
@@ -275,6 +298,8 @@ pub fn key_scaling(key: i16) -> KeyScaling {
         hammer_mass: 0.0118 - 0.0066 * along,
         hammer_k: piecewise_log(k, &[(21.0, 8.6), (108.0, 11.0)]),
         hammer_p: 2.2 + 0.8 * along,
+        long_f1,
+        long_modes,
         has_damper: key <= HIGHEST_DAMPED_KEY,
         pan: -0.45 + 0.9 * along,
         velocity_floor: 0.25 + 1.75 * along * along,

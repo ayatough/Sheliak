@@ -34,6 +34,13 @@ policy.
   and all but vanishes at pianissimo. A new automatable `Knock` parameter
   scales it (0–2, default 1). The "noise" is a fixed per-key sequence seeded
   from the key-number hash, so renders stay bit-identical.
+- **The piano's bass bites like a struck string, not a plucked one.** The
+  wound keys (up to G2) now carry a longitudinal-mode bank — the mode
+  series a hammer excites by stretching the string along its length,
+  around a kilohertz for the longest bass strings. It is driven by the
+  square of the contact force, so the metallic bite appears at forte and
+  vanishes at piano, which is the perceptual signature that separates a
+  piano bass from a bass guitar.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —

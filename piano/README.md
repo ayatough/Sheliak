@@ -44,6 +44,12 @@ writes `piano-demo.wav`.
 - **Voicing.** The per-key physical parameters are interpolated from anchors
   set by the published measurements, then levelled by a measured 88-entry
   output trim (`keys.rs`), the same job a technician's voicing does.
+- **Longitudinal bite.** A struck wound string also compresses along its
+  length, and that second mode series — around a kilohertz for the longest
+  bass strings — is driven by the square of the contact force. The wound
+  keys (up to G2) carry such a bank: at forte the bass bites like struck
+  metal, at piano it stays round. Without it a piano bass reads as a
+  plucked bass, which is exactly what the ears reported.
 - **Strike noise.** A deterministic noise burst — key knock, shank thunk,
   soundboard thump — fires at the moment of felt contact, shaped per
   register (a dark few-millisecond thump in the bass, a shorter brighter
@@ -75,6 +81,8 @@ change.
 | Knob | Where | Moves the sound |
 |---|---|---|
 | `KNOCK_SCALE`, `KNOCK_LP_*`, `KNOCK_TAU_*` | `src/model.rs` | Strike-noise level, colour and length per register |
+| `LONG_SCALE`, `LONG_SIGMA` | `src/model.rs` | Bass metallic bite: level and ring time |
+| `long_f1` (`c_long` anchors) | `src/keys.rs` | Pitch of the bass bite cluster |
 | `RADIATION_HZ` (180) | `src/model.rs` | Higher = less low fundamental, lighter bass |
 | `SOUNDBOARD_HZ` (1500) | `src/model.rs` | Higher = brighter, glassier; lower = warmer, darker |
 | Felt loss `0.5 * hammer.vh` | `src/model.rs` (`hammer_step`) | More = duller attack, tamer treble lobes |
