@@ -487,9 +487,205 @@ A sensible order to build it in: the parser and the formatter first, with
 
 # Stream 2 — Song structure
 
-Not specified yet; see the [roadmap](roadmap.md#next--structure) for the shape.
-Frontmatter as the song header comes first, because `key` and `scale` inheritance
-depends on it and every day it is postponed makes it a larger breaking change.
+**Status:** specified here, not yet implemented. Track A is the song header
+(§2), Track B is sections (§3–§5). A depends on nothing; B depends on A only
+for where `key` and `scale` come from.
+
+## 1. Why, and the one fact that makes it cheap
+
+Today a document is a loop. `loop` binds one phrase to each track and repeats
+forever, so the longest thing anybody can write is a bar or two — which is a
+pattern, not a song. Composition is mostly repetition with small changes, and
+the notation currently has no way to say "again, with the hats doubled" except
+by writing the whole thing out twice.
+
+The fact that makes this affordable: **the audio side already takes a song.**
+`LoopIR` is a flat event list plus `lengthSamples`, and `worklet.js` plays it by
+wrapping a sample counter. Nothing there knows or cares whether that span is one
+bar or four minutes. So this whole stream lives in `web/src/dsl/` and changes:
+
+- no Rust, no wasm, no ABI
+- not `params.rs` or `params.ts`
+- not `worklet.js`
+- not `audio/offline.ts`, so `sheliak render` gets songs for free
+
+A section is a span of the event list. That is the entire mechanism.
+
+## 2. Frontmatter — the song header
+
+```markdown
+---
+title: Nocturne
+bpm: 126
+key: C
+scale: minor
+---
+```
+
+Optional, and only recognised as the very first thing in the document — a `---`
+on line 1, terminated by the next `---` on its own line. A document without it
+behaves exactly as it does today.
+
+| Field | Default | |
+|---|---|---|
+| `title` | — | Names the song. Not used by the engine; the editor shows it |
+| `bpm` | `120` | |
+| `key` | `C` | Tonic pitch class, inherited by every `phrase` |
+| `scale` | `major` | Inherited by every `phrase` |
+| `bars` | `1` | Default length of a section that does not say |
+
+**Inheritance is nearest-wins: frontmatter → section → fence.** A `phrase` with
+its own `key=` keeps it; one without takes the section's, then the song's. This
+is the whole reason the header comes first: `key` and `scale` are already
+per-fence attributes, and every document written before the header exists is one
+more that spells them out on every phrase.
+
+`bpm` is the exception that keeps today's documents working: a `loop` fence's
+own `bpm=` still wins, because that is where it lives now.
+
+**Bare numbers are allowed here**, as they are in a fence's info string. The
+unit rule (docs/syntax.md) governs fence *bodies*, where a number could be
+milliseconds or seconds; `bpm: 126` has one meaning.
+
+## 3. Sections — `##` headings
+
+A `##` heading starts a section. **Document order is playback order.**
+
+````markdown
+## intro
+
+```loop bars=4
+lead: verse-lead
+```
+
+## verse
+
+```loop bars=8
+lead: verse-lead
+bass: verse-bass
+kick: four-floor
+```
+````
+
+- Everything before the first `##` is the preamble: `synth`, `plugin` and
+  `phrase` fences declared there belong to the whole song. In practice that is
+  where all of them go.
+- A section holds **at most one `loop` fence**, which is its arrangement.
+- **A section with no `loop` fence is prose, and is skipped** — not a silent
+  bar. A song file is still a document, and `## Notes` must not become four
+  bars of nothing.
+- The heading text names the section. Its attributes live on the `loop` fence
+  inside it: prose names things, fences configure them.
+
+### Attributes on a section's `loop`
+
+| Attribute | Default | |
+|---|---|---|
+| `bars` | frontmatter `bars`, else `1` | How long this section is |
+| `repeat` | `1` | How many times it plays before the next section |
+| `from` | — | Start from an earlier section's bindings (§4) |
+| `bpm` | the song's | Tempo for this section (§6) |
+
+`id=` is no longer needed on a section's loop and is ignored there; the heading
+is the name. It is still meaningful on a lone `loop` fence (§5).
+
+## 4. `from=` — a variation is a difference
+
+```markdown
+## chorus from=verse
+```
+
+is written as:
+
+````markdown
+## chorus
+
+```loop bars=8 from=verse
+hat: offbeats
+lead: chorus-lead
+bass: -
+```
+````
+
+The section begins as a copy of `verse`'s bindings. Each line then **adds** a
+track that was not bound, **replaces** one that was, or **removes** one with
+`-`. Nothing else is inherited — length and repeat are this section's own.
+
+This is the feature a DAW cannot express. Linking two regions makes them the
+same forever; detaching them makes the relationship invisible. `from=` says
+*the same, except this*, and keeps saying it.
+
+`from` must name an **earlier** section. A forward reference or a cycle is an
+error, not a resolution order to work out.
+
+## 5. What stays exactly as it is
+
+- **No frontmatter and no `##` → today's behaviour, byte for byte.** One `loop`
+  fence outside any section is the whole song, repeating, as now.
+- A `loop` fence outside any section in a document that *also* has sections is
+  an error: the arrangement is either one loop or a list of sections, and a
+  document with both has not said which.
+- **The song loops.** The transport has no notion of an end, and stopping at one
+  would be a second change with its own design. `sheliak render --loops` already
+  repeats whatever the document is.
+
+## 6. Tempo
+
+A section's `loop` may carry `bpm=`, and it applies for that section. Musical
+time inside it — `rate: 1/4`, delay `time: 3/16` — resolves against it, which is
+already how the compiler works; it simply resolves once per section instead of
+once per document.
+
+What this is **not** is a tempo map: nothing ramps, and a change lands on a
+section boundary. A ritardando is Stream 2's successor, not this.
+
+## 7. IR and the compile step
+
+`compile()` gains a section list and produces one `LoopIR` from it:
+
+```
+sections: [{ name, bars, repeat, bpm, lines, line }]
+      ↓ resolve `from`, expand `repeat`
+      ↓ lay out end to end, offsetting every event by the section's start
+LoopIR { lengthSamples: the whole song, events: [...] }
+```
+
+`LoopMeta` gains the section list so the GUI and `sheliak check` can report what
+is where. `LoopLineMeta` gains the section it came from.
+
+**The step sequencer is a per-section view.** It edits one section's phrases,
+which it already does — it just has to be told which section. That is a GUI
+change, not a notation one, and it is the part of Track B that can land last.
+
+## 8. Errors
+
+| | |
+|---|---|
+| `from` names an unknown section | naming an earlier section is the only legal form |
+| `from` names a later section, or itself | |
+| two `loop` fences in one section | a section has one arrangement |
+| a `loop` fence outside a section, in a document with sections | §5 |
+| `repeat` not a whole number ≥ 1 | |
+| frontmatter that does not close | a `---` with no matching `---` |
+| an unknown frontmatter field | typos in a header are silent otherwise |
+
+Every one is reported by line and column, and — as everywhere else — a document
+with an error keeps playing its last valid arrangement.
+
+## 9. Splitting the work
+
+| | | Done when |
+|---|---|---|
+| **A1** | Frontmatter parser, `key`/`scale`/`bpm`/`bars`/`title`, inheritance into fences | A document with a header compiles; one without is unchanged; every field's inheritance has a test |
+| **A2** | `docs/syntax.md`, `defaultDoc.ts` shows a header | |
+| **B1** | Section extraction: `##` headings, preamble, prose sections skipped | Sections found in order with their loop fences; a document with no `##` is unchanged |
+| **B2** | `from=` resolution and `repeat`, the errors in §8 | |
+| **B3** | Layout into one `LoopIR`; `LoopMeta` carries sections | A two-section song renders to one event list with the right offsets; `sheliak render` writes it |
+| **B4** | GUI: which section the sequencer is editing | |
+| **B5** | `sheliak check` reports the arrangement; `fmt` leaves headings alone | |
+
+A1–A2 are independent of everything. B1–B3 are one person's work and should not
+be split. B4 and B5 can follow.
 
 ---
 

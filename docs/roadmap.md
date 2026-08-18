@@ -51,7 +51,11 @@ them:
 ## Next — structure
 
 The document tree becomes the musical hierarchy. This is what makes Markdown
-load-bearing rather than a container.
+load-bearing rather than a container. **Specified in
+[workstreams.md](workstreams.md#stream-2--song-structure)**, where the shape
+below is worked out into tracks — and where the one fact that makes it cheap is
+written down: the audio side already takes a song, so a section is a span of the
+event list and nothing under `dsp/` changes.
 
 - **Frontmatter as the song header** — title, BPM, key, scale, meter, tempo map,
   engine version. `key` and `scale` inherit frontmatter → section → fence. This
