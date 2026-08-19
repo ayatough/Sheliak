@@ -104,6 +104,25 @@ synthesise only the tone, so the onset reads as a pluck.
 
 ### 2. A soundboard that is a resonator, not a filter
 
+**Done (first pass).** Implemented as the "cheapest honest version" below:
+48 damped modes, 60 Hz–1.4 kHz with hashed frequency jitter, rung by the
+summed string signal, hashed left/right output weights for width, all
+state in fixed arrays on `Piano`. The drive is normalised to `2σ·dt` per
+mode so a resonantly rung mode settles at the driving amplitude and
+`BOARD_MIX` reads directly as the halo's relative level (the first,
+unnormalised attempt accumulated ~10⁴× at resonance and blew past full
+scale — measure the resonant gain, not the per-sample gain). Level fitted
+against the reference set's measured inter-partial energy; alongside it,
+this round fitted the mobility ripple width per register (±13 dB at the
+bottom, from the recordings' partial scatter) and replaced the cents-based
+polarisation detune with a constant-hertz split (bridge anisotropy), which
+is what makes even the lowest partials of a real note beat at audible
+rates — the C2 beat depth now matches the recording. What remains here:
+the sustain-region diffuse energy of the recordings (room and duplex
+scale) is deliberately not reproduced; judge the dry halo by ear.
+
+The original brief, kept for context:
+
 Currently two shelving corners (`RADIATION_HZ`, `SOUNDBOARD_HZ`) stand in
 for the soundboard. A real board adds body resonances (a modal cluster
 roughly 50–400 Hz, density increasing upward) and couples the strike into a

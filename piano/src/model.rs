@@ -43,11 +43,13 @@
 use crate::keys::{key_hash, key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
 
 /// Deterministic per-mode radiation ripple, standing in for the soundboard's
-/// mobility peaks and dips: log-uniform within about ±4 dB, hashed from the
-/// key, the partial number and a channel salt — no random source anywhere.
-fn mobility(key: i16, n: u32, salt: u32) -> f32 {
+/// mobility peaks and dips: log-uniform within ±`spread`·20 dB, hashed from
+/// the key, the partial number and a channel salt — no random source
+/// anywhere. The reference recordings measure the ripple at roughly ±13 dB
+/// at the bottom of the keyboard, narrowing toward the treble.
+fn mobility(key: i16, n: u32, salt: u32, spread: f32) -> f32 {
     let h = key_hash(key, salt.wrapping_add(97 * n));
-    10.0f32.powf(((h & 0xFFFF) as f32 / 32768.0 - 1.0) * 0.2)
+    10.0f32.powf(((h & 0xFFFF) as f32 / 32768.0 - 1.0) * spread)
 }
 
 /// Simultaneous voices. A voice is one key strike; the same key struck twice
@@ -97,7 +99,7 @@ const HAMMER_SUBSTEPS: u32 = 8;
 // a fortissimo attack and all but vanishes at pianissimo.
 
 /// Burst level at fortissimo, before the `Knock` parameter scales it.
-const KNOCK_SCALE: f32 = 1.1;
+const KNOCK_SCALE: f32 = 0.7;
 /// Colour of the burst, low key to high: a dark bass thump to a brighter,
 /// clickier treble knock (one-pole lowpass corner, applied twice).
 const KNOCK_LP_LOW_HZ: f32 = 300.0;
@@ -450,6 +452,9 @@ impl Voice {
         let sigma_damper = 6.9078 / params.damper_s;
         let inv_b1 = 1.0 / (1.0 + scale.b);
         let nyquist_guard = 0.47 * sample_rate;
+        // Mobility ripple width, fitted: ±13 dB at the bottom of the
+        // keyboard narrowing to ±4 dB from the tenor up.
+        let ripple = 0.2 + 0.45 * ((0.3 - along) / 0.3).max(0.0);
 
         let mut m = 0;
         for s in 0..banks {
@@ -461,7 +466,32 @@ impl Voice {
                     break;
                 }
                 let nf = n as f32;
-                let fn_hz = nf * fs0 * ((1.0 + scale.b * nf * nf) * inv_b1).sqrt();
+                // Beyond the first string, every mode takes its own hashed
+                // sliver of extra detune (scaled by the Detune parameter
+                // through `detune`): mode-to-mode beat rates then differ,
+                // which is the slow, uneven shimmer of a real unison.
+                let wobble = if s > 0 {
+                    let j = ((key_hash(key, 41 + 31 * s as u32 + 97 * n as u32) & 0xFFFF) as f32
+                        / 32768.0
+                        - 1.0)
+                        * 0.9
+                        * detune;
+                    2.0f32.powf(j / 1200.0)
+                } else {
+                    1.0
+                };
+                let mut fn_hz = nf * fs0 * wobble * ((1.0 + scale.b * nf * nf) * inv_b1).sqrt();
+                // The horizontal polarisation sits a constant number of
+                // hertz off the vertical one (bridge anisotropy), not a
+                // constant number of cents — which is why even the lowest
+                // partials of a real note beat at audible rates.
+                if s == after {
+                    let j = (key_hash(key, 18) & 0xFFFF) as f32 / 32768.0 - 1.0;
+                    // Smallest on the heavy wound singles — the reference
+                    // A0 barely beats — rising to ~0.6 Hz by the tenor.
+                    let split = 0.08 + 0.52 * (along / 0.25).min(1.0) + 0.1 * j;
+                    fn_hz += split * params.detune;
+                }
                 if fn_hz > nyquist_guard {
                     break;
                 }
@@ -504,8 +534,8 @@ impl Voice {
                     .max(SOUNDBOARD_FLOOR);
                 let radiate =
                     omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard * bank_gain[s];
-                self.wo_l[m] = mobility(key, n as u32, 6) * radiate;
-                self.wo_r[m] = mobility(key, n as u32, 7) * radiate;
+                self.wo_l[m] = mobility(key, n as u32, 6, ripple) * radiate;
+                self.wo_r[m] = mobility(key, n as u32, 7, ripple) * radiate;
                 self.kick[m] = excite / (scale.modal_mass * omega * banks as f32);
                 if s == 0 && string_modes < EXC_SLOTS {
                     self.exc[string_modes] = excite;
@@ -557,8 +587,8 @@ impl Voice {
             let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
             let soundboard = 1.0 / (1.0 + (fn_hz / KNOCK_BODY_HZ) * (fn_hz / KNOCK_BODY_HZ)).sqrt();
             let radiate = omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard;
-            self.wo_l[m] = mobility(key, n as u32, 8) * radiate;
-            self.wo_r[m] = mobility(key, n as u32, 9) * radiate;
+            self.wo_l[m] = mobility(key, n as u32, 8, 0.2) * radiate;
+            self.wo_r[m] = mobility(key, n as u32, 9, 0.2) * radiate;
             self.kick[m] = LONG_SCALE * long_gain * excite / (scale.modal_mass * omega);
             self.q[m] = 0.0;
             self.v[m] = 0.0;
@@ -668,8 +698,18 @@ fn hammer_velocity(velocity: f32, dynamics: f32, floor: f32) -> f32 {
     floor + (7.0 - floor) * velocity.clamp(0.0, 1.0).powf(gamma)
 }
 
-/// The whole instrument: voices, pedal, and the master path (gain, tone
-/// filter, DC blocker).
+/// Modes in the soundboard resonator bank.
+const BOARD_MODES: usize = 48;
+/// Board frequency span in Hz: the modal cluster of a grand's board.
+const BOARD_LOW_HZ: f32 = 60.0;
+const BOARD_HIGH_HZ: f32 = 1400.0;
+/// Mix of the board's own ringing into the output. Fitted so the
+/// inter-partial (off-resonance) energy of a sustained bass note moves
+/// toward the reference recordings' measured level.
+const BOARD_MIX: f32 = 0.45;
+
+/// The whole instrument: voices, pedal, the soundboard resonator, and the
+/// master path (gain, tone filter, DC blocker).
 pub struct Piano {
     voices: Box<[Voice]>,
     params: Params,
@@ -686,6 +726,18 @@ pub struct Piano {
     dc_yl: f32,
     dc_xr: f32,
     dc_yr: f32,
+    // The soundboard as a resonator, not just a filter (ROADMAP
+    // workstream 2): a fixed bank of damped modes rung by the summed
+    // string signal. It is what puts energy *between* the partials — the
+    // diffuse halo a real note carries — and its hashed left/right weights
+    // widen the image. All state lives in these fixed arrays.
+    board_e: [f32; BOARD_MODES],
+    board_dec: [f32; BOARD_MODES],
+    board_wi: [f32; BOARD_MODES],
+    board_wl: [f32; BOARD_MODES],
+    board_wr: [f32; BOARD_MODES],
+    board_q: [f32; BOARD_MODES],
+    board_v: [f32; BOARD_MODES],
 }
 
 impl Piano {
@@ -711,7 +763,42 @@ impl Piano {
             dc_yl: 0.0,
             dc_xr: 0.0,
             dc_yr: 0.0,
+            board_e: [0.0; BOARD_MODES],
+            board_dec: [0.0; BOARD_MODES],
+            board_wi: [0.0; BOARD_MODES],
+            board_wl: [0.0; BOARD_MODES],
+            board_wr: [0.0; BOARD_MODES],
+            board_q: [0.0; BOARD_MODES],
+            board_v: [0.0; BOARD_MODES],
         };
+        let dt = 1.0 / sample_rate;
+        for i in 0..BOARD_MODES {
+            let along = i as f32 / (BOARD_MODES - 1) as f32;
+            let jit = |salt: u32| (key_hash(i as i16, salt) & 0xFFFF) as f32 / 32768.0 - 1.0;
+            let f = (BOARD_LOW_HZ
+                * (BOARD_HIGH_HZ / BOARD_LOW_HZ).powf(along)
+                * (1.0 + 0.05 * jit(11)))
+            .min(0.45 * sample_rate);
+            // The low cluster rings a few seconds; the top far less.
+            let t60 = 3.0 - 2.4 * along;
+            let sigma = 6.9078 / t60;
+            piano.board_e[i] = 2.0 * (0.5 * core::f32::consts::TAU * f * dt).sin();
+            piano.board_dec[i] = (-sigma * dt).exp();
+            // Resonant balance: per-sample drive of 2σ·dt accumulates until
+            // damping cancels it, so a mode rung at resonance settles at
+            // about the driving amplitude — sample-rate independent, and
+            // `BOARD_MIX` then reads directly as the halo's relative level.
+            piano.board_wi[i] = (1.0 + 0.5 * jit(12)) * 2.0 * sigma * dt;
+            let sign = |salt: u32| {
+                if key_hash(i as i16, salt) & 1 == 0 {
+                    1.0f32
+                } else {
+                    -1.0
+                }
+            };
+            piano.board_wl[i] = 10.0f32.powf(jit(13) * 0.3) * sign(15);
+            piano.board_wr[i] = 10.0f32.powf(jit(14) * 0.3) * sign(16);
+        }
         piano.refresh_tone();
         piano.gain = 10.0f32.powf(piano.params.gain_db / 20.0);
         piano
@@ -840,6 +927,8 @@ impl Piano {
         self.dc_yl = 0.0;
         self.dc_xr = 0.0;
         self.dc_yr = 0.0;
+        self.board_q = [0.0; BOARD_MODES];
+        self.board_v = [0.0; BOARD_MODES];
     }
 
     pub fn active_voices(&self) -> usize {
@@ -954,6 +1043,36 @@ impl Piano {
             } else {
                 voice.quiet_blocks = 0;
             }
+        }
+
+        // The soundboard rings under everything: the summed string signal
+        // drives the modal bank, and the bank's own decaying answer — at
+        // its frequencies, not the strings' — is the diffuse halo between
+        // the partials.
+        for i in 0..frames {
+            let x = 0.5 * (left[i] + right[i]);
+            let mut board_l = 0.0f32;
+            let mut board_r = 0.0f32;
+            for ((((((q, v), e), dec), wi), wl), wr) in self
+                .board_q
+                .iter_mut()
+                .zip(self.board_v.iter_mut())
+                .zip(&self.board_e)
+                .zip(&self.board_dec)
+                .zip(&self.board_wi)
+                .zip(&self.board_wl)
+                .zip(&self.board_wr)
+            {
+                *v += x * wi;
+                *q += e * *v;
+                *v -= e * *q;
+                *q *= dec;
+                *v *= dec;
+                board_l += wl * *v;
+                board_r += wr * *v;
+            }
+            left[i] += BOARD_MIX * board_l;
+            right[i] += BOARD_MIX * board_r;
         }
 
         // Master path: smoothed gain, the tone one-pole, and a DC blocker —

@@ -35,6 +35,11 @@ writes `piano-demo.wav`.
   Both rates and the aftersound level are fitted per register to the
   Salamander Grand reference recordings (CC-BY Yamaha C5); without the
   fast first stage a piano note reads as a sustained, plucked string.
+- **A soundboard that rings.** A fixed bank of 48 damped modes (60 Hz to
+  1.4 kHz, hashed frequencies and left/right weights) is rung by the summed
+  string signal and mixed back in: the diffuse halo between the partials
+  that a real note carries, and a wider stereo image. Its level is fitted
+  to the reference recordings' measured inter-partial energy.
 - **A soundboard band shape, measured.** Radiation falls below ~105 Hz and
   declines through the midrange (≈10 dB/octave above 200 Hz, shelving at
   −20 dB near the board's critical frequency), with a hashed per-mode
@@ -68,9 +73,8 @@ writes `piano-demo.wav`.
   string tone does, so it dominates a fortissimo attack and all but
   vanishes at pianissimo. The `Knock` parameter scales it.
 
-Not modelled yet, in honesty: a resonating soundboard (a tone filter
-stands in for it), sympathetic resonance between keys, una corda and
-sostenuto, and repedalling half-damping. The top octave's fortissimo
+Not modelled yet, in honesty: sympathetic resonance between keys, una
+corda and sostenuto, and repedalling half-damping. The top octave's fortissimo
 levelling leans on the voicing table rather than the contact physics.
 [ROADMAP.md](ROADMAP.md) is the ordered plan for closing these gaps,
 written to be picked up by a fresh agent.
@@ -91,6 +95,7 @@ change.
 | Knob | Where | Moves the sound |
 |---|---|---|
 | `KNOCK_SCALE`, `KNOCK_LP_*`, `KNOCK_TAU_*` | `src/model.rs` | Strike-noise level, colour and length per register |
+| `BOARD_MIX`, `BOARD_*_HZ`, `BOARD_MODES` | `src/model.rs` | The board's ringing halo: level, span, density |
 | `LONG_SCALE`, `LONG_SIGMA` | `src/model.rs` | Bass metallic bite: level and ring time |
 | `long_f1` (`c_long` anchors) | `src/keys.rs` | Pitch of the bass bite cluster |
 | `RADIATION_HZ` (105) | `src/model.rs` | Higher = less low fundamental, lighter bass |

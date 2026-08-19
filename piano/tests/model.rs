@@ -298,10 +298,10 @@ fn a_bass_note_bites_at_forte_with_longitudinal_partials() {
 fn knock_alone(key: i16, vel: f32) -> Vec<f32> {
     let mut piano = Piano::new(SR);
     piano.set_param(P_KNOCK, 2.0);
-    let with = render(&mut piano, 0.3, key, vel, None);
+    let with = render(&mut piano, 1.0, key, vel, None);
     let mut piano = Piano::new(SR);
     piano.set_param(P_KNOCK, 0.0);
-    let without = render(&mut piano, 0.3, key, vel, None);
+    let without = render(&mut piano, 1.0, key, vel, None);
     with.iter().zip(&without).map(|(a, b)| a - b).collect()
 }
 
@@ -312,8 +312,10 @@ fn the_knock_is_a_short_transient_that_vanishes_with_the_touch() {
         let p = peak(&knock);
         assert!(p > 1.0e-3, "key {key}: no knock at fortissimo: {p}");
 
-        // A transient, not a tone: from its own peak it must fall to −40 dB
-        // inside 20 ms.
+        // A transient, not a tone: from its own peak the direct burst must
+        // fall about 28 dB inside 20 ms — what remains is the soundboard's
+        // halo, which the burst legitimately rings — and that halo too must
+        // be 40 dB down within half a second.
         let peak_at = knock
             .iter()
             .enumerate()
@@ -322,8 +324,13 @@ fn the_knock_is_a_short_transient_that_vanishes_with_the_touch() {
             .unwrap();
         let tail = peak(&knock[peak_at + (0.02 * SR) as usize..]);
         assert!(
-            tail < p * 0.01,
+            tail < p * 0.04,
             "key {key}: the knock rings past 20 ms (peak {p}, tail {tail})"
+        );
+        let halo = peak(&knock[peak_at + (0.5 * SR) as usize..]);
+        assert!(
+            halo < p * 0.01,
+            "key {key}: the knock's board halo will not die (peak {p}, halo {halo})"
         );
 
         // And it must all but vanish when the key is barely touched.

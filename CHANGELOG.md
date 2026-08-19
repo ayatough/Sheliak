@@ -52,6 +52,12 @@ policy.
   `examples/analyze.rs` (per-partial measurement) and
   `examples/note_wav.rs` (single-key render) make the fitting loop
   repeatable against any reference piano.
+- **The piano's soundboard now rings.** A 48-mode resonator bank rung by
+  the string signal adds the diffuse halo between the partials that a real
+  note carries and widens the stereo image; per-register mobility ripple
+  and a constant-hertz polarisation split (measured, like everything else,
+  against the reference recordings) give each note the uneven shimmer and
+  slow beats of a real unison.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —
