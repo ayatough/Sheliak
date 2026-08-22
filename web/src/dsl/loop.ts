@@ -83,6 +83,11 @@ export interface LoopParseOptions {
    * which is not true and is the louder of the two.
    */
   declaredPhrases?: ReadonlySet<string>;
+  /**
+   * The song header's `bars` (Stream 2 §2), used when this fence does not say.
+   * A loop that states its own length keeps it.
+   */
+  defaultBars?: number;
 }
 
 export interface LoopParseResult {
@@ -107,7 +112,7 @@ export function parseLoop(
   const sink = new ErrorSink();
   const fencePos: Pos = { line: startLine - 1, col: 1 };
 
-  const bars = readPositive(attrs['bars'], DEFAULT_BARS, 'bars', fencePos, sink);
+  const bars = readPositive(attrs['bars'], opts.defaultBars ?? DEFAULT_BARS, 'bars', fencePos, sink);
   const bpm = readPositive(attrs['bpm'], DEFAULT_BPM, 'bpm', fencePos, sink);
   const id = attrs['id'] ?? '';
 

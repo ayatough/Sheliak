@@ -8,7 +8,14 @@
 
 const F = '```';
 
-export const DEFAULT_DOC = `# Sheliak — a four-track groove
+export const DEFAULT_DOC = `---
+title: A four-track groove
+bpm: 126
+key: C
+scale: minor
+---
+
+# Sheliak — a four-track groove
 
 Edit the text and it recompiles 150 ms later, without stopping playback.
 The order the synth fences appear in is the track index (0..7); each loop line

@@ -135,6 +135,12 @@ export interface Phrase {
 
 export interface PhraseParseOptions {
   bodyStartLine?: number;
+  /**
+   * What the song header said (Stream 2 §2). Nearest wins: a fence with its own
+   * `key=` keeps it, so inheritance can never change a document that already
+   * spelled these out.
+   */
+  inherited?: { key?: string; scale?: string };
 }
 
 export interface PhraseParseResult {
@@ -165,11 +171,11 @@ export function parsePhrase(
   const id = attrs['id'] ?? '';
   if (id === '') sink.push(fencePos, 'phrase needs an id, e.g. ```phrase id=verse-lead');
 
-  const key = attrs['key'] ?? DEFAULT_KEY;
+  const key = attrs['key'] ?? opts.inherited?.key ?? DEFAULT_KEY;
   const tonic = keyToPitchClass(key);
   if (tonic === null) sink.push(fencePos, `key must be a pitch class like C, Eb or F#, got "${key}"`);
 
-  const scale = attrs['scale'] ?? DEFAULT_SCALE;
+  const scale = attrs['scale'] ?? opts.inherited?.scale ?? DEFAULT_SCALE;
   if (!SCALES[scale]) {
     sink.push(fencePos, `unknown scale "${scale}" (${Object.keys(SCALES).join(', ')})`);
   }

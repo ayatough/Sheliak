@@ -5,6 +5,7 @@
 // the caller keeps that track's last valid patch, while the others reload.
 
 import { extractFences, findFence, type Fence } from './fences.ts';
+import { parseFrontmatter, type SongHeader } from './frontmatter.ts';
 import { parseSynth } from './synth.ts';
 import { parseLoop, type LoopIR, type LoopMeta } from './loop.ts';
 import { parsePhrase, type Phrase } from './phrase.ts';
@@ -54,8 +55,10 @@ export interface CompileResult {
   phrases: Record<string, Phrase>;
   loop?: LoopIR;
   loopMeta?: LoopMeta;
-  /** BPM in effect (from the loop fence, else the default). */
+  /** BPM in effect (the loop fence, else the song header, else the default). */
   bpm: number;
+  /** The song header, empty when the document has none. */
+  header: SongHeader;
   errors: DslError[];
   /** Fences found in the document, for diagnostics/UI. */
   fences: Fence[];
@@ -70,9 +73,16 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
   const trackFences = fences.filter((f) => f.lang === 'synth' || f.lang === 'plugin');
   const loopFence = findFence(fences, 'loop');
 
-  // The loop fence owns the tempo; patches need it to resolve musical units
-  // (`rate: 1/4`, delay `time: 3/16`, ...).
-  let bpm = DEFAULT_BPM;
+  // The song header (Stream 2 §2), if there is one. Its fields are defaults:
+  // anything a fence says for itself wins, so adding a header to a document
+  // that already spelled everything out cannot change what it sounds like.
+  const front = parseFrontmatter(markdown);
+  errors.push(...front.errors);
+  const header = front.header;
+
+  // Tempo: the loop fence still wins, because that is where it lives today.
+  // Patches need it to resolve musical units (`rate: 1/4`, delay `time: 3/16`).
+  let bpm = header.bpm ?? DEFAULT_BPM;
   if (loopFence?.attrs['bpm'] !== undefined) {
     const v = Number(loopFence.attrs['bpm']);
     if (Number.isFinite(v) && v > 0) bpm = v;
@@ -144,7 +154,10 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
       });
       continue;
     }
-    const r = parsePhrase(fence.body, fence.attrs, { bodyStartLine: fence.bodyStartLine });
+    const r = parsePhrase(fence.body, fence.attrs, {
+      bodyStartLine: fence.bodyStartLine,
+      inherited: { key: header.key, scale: header.scale },
+    });
     errors.push(...r.errors);
     if (r.phrase && id !== '') phrases[id] = r.phrase;
   }
@@ -155,6 +168,7 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     trackCount: used.length,
     phrases,
     bpm,
+    header,
     errors,
     fences,
   };
@@ -175,6 +189,7 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
       trackIds,
       phrases,
       declaredPhrases,
+      defaultBars: header.bars,
     });
     errors.push(...r.errors);
     if (r.loop) result.loop = r.loop;

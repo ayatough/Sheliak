@@ -24,6 +24,41 @@ a field that is genuinely a normalized `0.0`–`1.0` ratio and says so below.
 Musical time is resolved against the loop's BPM on the TypeScript side, and
 rewritten when the BPM changes.
 
+## The song header
+
+An optional YAML block at the very top of the document, closed by a second
+`---` on its own line.
+
+```markdown
+---
+title: Nocturne
+bpm: 126
+key: C
+scale: minor
+---
+```
+
+| Field | Default | |
+|---|---|---|
+| `title` | — | Names the song. The engine does not use it |
+| `bpm` | `120` | Unless a `loop` fence says otherwise |
+| `key` | `C` | Inherited by every `phrase` that does not say |
+| `scale` | `major` | Inherited by every `phrase` that does not say |
+| `bars` | `1` | Default length of a `loop` that does not say |
+
+**Nearest wins.** A fence that states `key=` keeps it; one that does not takes
+the song's. That is what the header is for: `key` and `scale` are per-fence
+attributes, so without it every phrase in a song spells them out and all of them
+have to change together to change the mode.
+
+`bpm` is the exception that keeps existing documents working — a `loop` fence's
+own `bpm=` still wins, because that is where tempo lives today.
+
+A bare number is allowed here, unlike in a fence body: the unit rule exists
+because a number there could be milliseconds or seconds, and `bpm: 126` has one
+meaning. An unknown field is an error, because a typo in a header is otherwise
+silent.
+
 ## Fences
 
 A song is a Markdown document. Three info strings are recognized:
