@@ -487,9 +487,17 @@ A sensible order to build it in: the parser and the formatter first, with
 
 # Stream 2 — Song structure
 
-**Status:** specified here, not yet implemented. Track A is the song header
-(§2), Track B is sections (§3–§5). A depends on nothing; B depends on A only
-for where `key` and `scale` come from.
+**Status:** A1–A2 and B1–B3 have landed — a document with `##` sections compiles
+to one `LoopIR` and plays, in the browser and in `sheliak render`. B4 (the GUI
+saying which section it edits) and B5 (`check` reporting the arrangement) are
+open; until B4, the panel's `bars`/`bpm` boxes go read-only on a song of several
+sections, because they would edit the first one while showing the whole song.
+
+One deviation from §6 is recorded there: a section's `bpm=` schedules its notes,
+but musical time *inside a patch* still resolves at the song's tempo.
+
+Track A is the song header (§2), Track B is sections (§3–§5). A depends on
+nothing; B depends on A only for where `key` and `scale` come from.
 
 ## 1. Why, and the one fact that makes it cheap
 
@@ -631,10 +639,18 @@ error, not a resolution order to work out.
 
 ## 6. Tempo
 
-A section's `loop` may carry `bpm=`, and it applies for that section. Musical
-time inside it — `rate: 1/4`, delay `time: 3/16` — resolves against it, which is
-already how the compiler works; it simply resolves once per section instead of
-once per document.
+A section's `loop` may carry `bpm=`, and it applies for that section.
+
+This was specified as "musical time inside it — `rate: 1/4`, delay `time: 3/16`
+— resolves against it", on the assumption that the compiler already worked that
+way. It does not, and B1–B3 did not make it: those units live in a `synth`
+fence, and a patch is compiled to a `Float32Array` and uploaded to the engine
+**once**, not once per section. Making them per-section means re-uploading every
+patch on a section boundary, which is engine work rather than notation work.
+
+So what landed is: **a section's `bpm=` schedules its notes**, and a patch's own
+musical time resolves at the song's tempo (the header's, else the first
+section's). In a document whose sections share a tempo there is no difference.
 
 What this is **not** is a tempo map: nothing ramps, and a change lands on a
 section boundary. A ritardando is Stream 2's successor, not this.

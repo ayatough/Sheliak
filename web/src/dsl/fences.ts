@@ -19,6 +19,12 @@ export interface Fence {
   fenceLine: number;
   /** 1-based document line of the FIRST body line (fenceLine + 1). */
   bodyStartLine: number;
+  /**
+   * 1-based document line of the closing marker, or of the last line when the
+   * fence is never closed. `fenceLine..endLine` is everything the fence covers,
+   * which is how `sections.ts` tells a `##` heading from a `##` in a grid.
+   */
+  endLine: number;
 }
 
 const OPEN_RE = /^(\s{0,3})(`{3,}|~{3,})(.*)$/;
@@ -73,6 +79,7 @@ export function extractFences(md: string): Fence[] {
       body: bodyLines.join('\n'),
       fenceLine,
       bodyStartLine: fenceLine + 1,
+      endLine: closed ? j + 1 : Math.max(lines.length, fenceLine),
     });
 
     i = closed ? j + 1 : j;

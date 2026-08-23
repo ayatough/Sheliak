@@ -13,6 +13,65 @@ policy.
 ## [Unreleased]
 
 ### Added
+- **A song has a header.** An optional `---` block at the very top carries
+  `title`, `bpm`, `key`, `scale` and `bars`:
+
+  ```markdown
+  ---
+  title: Nocturne
+  bpm: 126
+  key: C
+  scale: minor
+  ---
+  ```
+
+  It exists for inheritance. `key` and `scale` are per-fence attributes, so
+  without a header every phrase in a song spells them out and all of them have
+  to change together to change the mode. **Nearest wins** — a fence that says
+  `key=` keeps it — so adding a header to a document that already spelled
+  everything out cannot change what it sounds like, and a `loop` fence's own
+  `bpm=` still wins because that is where tempo lives. An unknown field is an
+  error, because a typo in a header is otherwise silent.
+- **A document can be a song, not just a loop.** A `##` heading starts a
+  section, document order is playback order, and the sections are laid end to
+  end into the one event list the audio side already plays — so this is
+  notation and compiler work only: no Rust, no wasm, no ABI, and `sheliak
+  render` writes songs without being told about them.
+
+  ````markdown
+  ## verse
+
+  ```loop bars=8
+  lead: verse-lead
+  bass: verse-bass
+  ```
+
+  ## chorus
+
+  ```loop bars=8 from=verse repeat=2
+  hat:  offbeats
+  bass: -
+  ```
+  ````
+
+  `from=` is the part a DAW cannot express. Linking two regions makes them the
+  same forever and detaching them makes the relationship invisible; `from=` says
+  *the same, except this*, and keeps saying it — each line adds a track,
+  replaces one, or removes one with `-`. It must name a section above this one,
+  which is also what makes a cycle impossible to write. `repeat=` plays a
+  section more than once.
+
+  A heading with no `loop` fence is **prose and is skipped**, not a bar of
+  silence: `## Notes` must not play. A document with no `##` above its `loop`
+  fence compiles exactly as it did before, and a `loop` fence outside every
+  section in a document that has sections is an error rather than a guess.
+
+  Two limits worth knowing. A section's `bpm=` schedules its notes, but musical
+  time inside a `synth` fence — an LFO `rate: 1/4`, a delay `time: 3/16` — still
+  resolves at the song's tempo, because a patch is uploaded to the engine once
+  rather than per section. And the GUI cannot yet say which section it is
+  editing, so on a song of several sections the panel's `bars` and `bpm` boxes
+  go read-only instead of quietly rewriting the first one.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —

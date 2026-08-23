@@ -44,7 +44,7 @@ scale: minor
 | `bpm` | `120` | Unless a `loop` fence says otherwise |
 | `key` | `C` | Inherited by every `phrase` that does not say |
 | `scale` | `major` | Inherited by every `phrase` that does not say |
-| `bars` | `1` | Default length of a `loop` that does not say |
+| `bars` | `1` | Default length of a `loop`, or a section, that does not say |
 
 **Nearest wins.** A fence that states `key=` keeps it; one that does not takes
 the song's. That is what the header is for: `key` and `scale` are per-fence
@@ -479,8 +479,10 @@ kick: four-floor
 | Attribute | Default | |
 |---|---|---|
 | `id` | — | |
-| `bars` | `1` | |
-| `bpm` | `120` | |
+| `bars` | song header's `bars`, else `1` | |
+| `bpm` | song header's `bpm`, else `120` | |
+| `repeat` | `1` | How many times this section plays (sections only) |
+| `from` | — | Start from an earlier section's bindings (sections only) |
 
 Each line binds a track id — a `synth` fence's `id`, resolved to a track index
 by fence order — to a phrase id. A phrase repeats to fill the loop, so the loop
@@ -488,7 +490,73 @@ length has to be a multiple of the phrase length; an undefined phrase, an
 unknown track or a length that does not divide is an error. Two phrases may use
 different resolutions on different tracks: they still span the same loop.
 
-The loop always loops. Sequencing several phrases on one track is Stream 2.
+One `loop` fence on its own is the whole song, repeating. Several of them, one
+per `##` section, is an arrangement.
+
+## Sections
+
+A `##` heading starts a section, and **document order is playback order**:
+
+````markdown
+## intro
+
+```loop bars=4
+lead: verse-lead
+```
+
+## verse
+
+```loop bars=8 repeat=2
+lead: verse-lead
+bass: verse-bass
+kick: four-floor
+```
+````
+
+- Everything above the first `##` is the preamble. `synth`, `plugin` and
+  `phrase` fences go there; they belong to the whole song.
+- A section holds **at most one** `loop` fence, which is its arrangement.
+- **A heading with no `loop` fence is prose and is skipped** — not a bar of
+  silence. A song file is still a document, and `## Notes` must not play.
+- The heading text names the section; its attributes live on the `loop` fence.
+  `id=` is not needed there.
+- A document with no `##` section above a `loop` fence is a single loop, exactly
+  as it has always been. A `loop` fence outside every section in a document that
+  *has* sections is an error: the arrangement is one or the other, not both.
+- The song still loops. The transport has no notion of an end.
+
+### `from=` — a variation is a difference
+
+````markdown
+## chorus
+
+```loop bars=8 from=verse
+hat:  offbeats
+lead: chorus-lead
+bass: -
+```
+````
+
+`chorus` begins as a copy of `verse`'s bindings. Each line then **adds** a track
+that was not bound, **replaces** one that was, or **removes** one with `-`.
+Nothing else is inherited: `bars`, `bpm` and `repeat` are this section's own.
+
+`from` must name a section **above** this one — which is also what makes a cycle
+impossible to write. A forward reference, a section naming itself, or a name
+that belongs to a prose heading is an error rather than a resolution order to
+work out.
+
+### Tempo in a section
+
+A section's `loop` may carry `bpm=`, and the notes in it are scheduled at that
+tempo. This is not a tempo map: nothing ramps, and a change lands on a section
+boundary.
+
+One thing does **not** yet follow a section's tempo: musical time inside a
+`synth` fence — an LFO `rate: 1/4`, a delay `time: 3/16` — resolves once, at the
+song's tempo, because a patch is uploaded to the engine once rather than per
+section. In a document whose sections share a tempo, which is nearly all of
+them, there is no difference.
 
 ## Errors
 

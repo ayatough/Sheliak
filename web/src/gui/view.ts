@@ -9,6 +9,7 @@
 import type { CompileResult, CompiledTrack } from '../dsl/compile.ts';
 import { setLoopAttr } from '../dsl/edit.ts';
 import { applyText, type Op } from '../dsl/ops.ts';
+import type { LoopLineMeta } from '../dsl/loop.ts';
 import type { Phrase } from '../dsl/phrase.ts';
 import {
   projectPhrase,
@@ -91,7 +92,20 @@ export class GuiView {
     this.renderTrackTabs();
     this.renderParams();
 
-    if (result.loopMeta) {
+    // These two write straight into the first `loop` fence. In a song made of
+    // several `##` sections that fence is the first section only, so the boxes
+    // would show the whole song and change one part of it. Until the GUI can
+    // say which section it is editing (Stream 2 B4), it says it cannot. One
+    // section is not ambiguous, so it keeps working as it always has.
+    const sections = result.loopMeta?.sections;
+    const perSection = sections !== undefined && sections.length > 1;
+    const hint = perSection ? `this song has ${sections.length} sections — edit them as text for now` : '';
+    for (const input of [this.el.bars, this.el.bpm]) {
+      input.disabled = perSection;
+      input.title = hint;
+    }
+
+    if (result.loopMeta && !perSection) {
       if (document.activeElement !== this.el.bars) this.el.bars.value = String(result.loopMeta.bars);
       if (document.activeElement !== this.el.bpm) this.el.bpm.value = String(result.loopMeta.bpm);
     }
@@ -114,7 +128,12 @@ export class GuiView {
     const seq = this.el.seq;
     seq.textContent = '';
 
-    const bound = new Map((result.loopMeta?.lines ?? []).map((l) => [l.track, l]));
+    // First wins: in a sectioned song a track appears once per section, and the
+    // sequencer shows the first one it plays in until it can be told otherwise.
+    const bound = new Map<number, LoopLineMeta>();
+    for (const line of result.loopMeta?.lines ?? []) {
+      if (!bound.has(line.track)) bound.set(line.track, line);
+    }
 
     for (let track = 0; track < result.trackCount; track++) {
       const id = this.trackId(track);

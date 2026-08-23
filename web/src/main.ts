@@ -4,6 +4,7 @@ import './style.css';
 import { AudioEngine, WCLAP_BUNDLE_URLS, type EngineState } from './audio/engine.ts';
 import { pluginFields, type PluginPanel } from './gui/pluginPanel.ts';
 import { compile, type CompileResult } from './dsl/compile.ts';
+import type { LoopLineMeta } from './dsl/loop.ts';
 import { phraseExpandedLines } from './dsl/phrase.ts';
 import { GuiView } from './gui/view.ts';
 import { DEFAULT_DOC } from './defaultDoc.ts';
@@ -238,16 +239,30 @@ function formatLoop(result: CompileResult): string {
   if (!loop) return '';
   const meta = result.loopMeta;
   const names = new Map(result.tracks.map((t) => [t.track, t.id]));
+  const bindings = (lines: readonly LoopLineMeta[], indent: string): string =>
+    lines
+      .map(
+        (l) =>
+          `#${indent}[${l.track}] ${l.trackId}: ${l.phraseId} ×${l.repeats}` +
+          ` (1/${l.cellsPerBeat * 4} grid)${l.inherited ? '  from=' : ''}\n`,
+      )
+      .join('');
+
   let head = '';
   if (meta) {
-    head =
-      `# ${meta.id || 'loop'}  bars=${meta.bars}  bpm=${meta.bpm}  sampleRate=${currentSampleRate()}\n` +
-      meta.lines
-        .map(
-          (l) =>
-            `#   [${l.track}] ${l.trackId}: ${l.phraseId} ×${l.repeats} (1/${l.cellsPerBeat * 4} grid)\n`,
-        )
-        .join('');
+    head = `# ${meta.id || 'loop'}  bars=${meta.bars}  bpm=${meta.bpm}  sampleRate=${currentSampleRate()}\n`;
+    if (meta.sections) {
+      // A song: what plays when, rather than one list of bindings.
+      for (const s of meta.sections) {
+        head +=
+          `#   ## ${s.name}  bars=${s.bars}  bpm=${s.bpm}` +
+          (s.repeat > 1 ? `  ×${s.repeat}` : '') +
+          `  @${s.startSamples}\n` +
+          bindings(s.lines, '     ');
+      }
+    } else {
+      head += bindings(meta.lines, '   ');
+    }
   }
 
   // The expanded view for phrases (docs/workstreams.md §5): what each note ends

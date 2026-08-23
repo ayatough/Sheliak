@@ -8,6 +8,8 @@ import { extractFences, findFence, type Fence } from './fences.ts';
 import { parseFrontmatter, type SongHeader } from './frontmatter.ts';
 import { parseSynth } from './synth.ts';
 import { parseLoop, type LoopIR, type LoopMeta } from './loop.ts';
+import { extractSections, type Section } from './sections.ts';
+import { buildArrangement } from './arrangement.ts';
 import { parsePhrase, type Phrase } from './phrase.ts';
 import { parsePlugin, type PluginIR } from './plugin.ts';
 import { expandedView, DEFAULT_BPM, type PatchIR } from './ir.ts';
@@ -59,6 +61,11 @@ export interface CompileResult {
   bpm: number;
   /** The song header, empty when the document has none. */
   header: SongHeader;
+  /**
+   * The `##` sections, in playback order. Empty when the document is a single
+   * `loop` fence, which is what every document written before Stream 2 is.
+   */
+  sections: Section[];
   errors: DslError[];
   /** Fences found in the document, for diagnostics/UI. */
   fences: Fence[];
@@ -72,6 +79,13 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
   // `loop` line binds to is the order of appearance among them together.
   const trackFences = fences.filter((f) => f.lang === 'synth' || f.lang === 'plugin');
   const loopFence = findFence(fences, 'loop');
+
+  // The arrangement is either one `loop` fence or a list of `##` sections
+  // (Stream 2 §3). A document with no `##` heading holding a loop has no
+  // sections, and takes the path it always has.
+  const structure = extractSections(markdown, fences);
+  const sectioned = structure.sections.length > 0;
+  errors.push(...structure.errors);
 
   // The song header (Stream 2 §2), if there is one. Its fields are defaults:
   // anything a fence says for itself wins, so adding a header to a document
@@ -169,6 +183,7 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     phrases,
     bpm,
     header,
+    sections: structure.sections,
     errors,
     fences,
   };
@@ -182,7 +197,35 @@ export function compile(markdown: string, sampleRate: number): CompileResult {
     });
   }
 
-  if (loopFence) {
+  if (sectioned) {
+    // Both forms at once is not two arrangements, it is a document that has not
+    // said which one it means (§5).
+    for (const orphan of structure.orphans) {
+      errors.push({
+        line: orphan.fenceLine,
+        col: 1,
+        message:
+          'a `loop` fence outside any `##` section, in a document that has sections' +
+          ' — the arrangement is either one loop or a list of sections, not both',
+      });
+    }
+
+    const r = buildArrangement(structure.sections, {
+      sampleRate,
+      bpm,
+      trackIds,
+      phrases,
+      declaredPhrases,
+      defaultBars: header.bars,
+      prose: structure.prose,
+    });
+    errors.push(...r.errors);
+    // An orphan loop or a duplicate heading leaves the section list playable
+    // but not what the document describes, so nothing is sent to the transport.
+    const structural = structure.orphans.length > 0 || structure.errors.length > 0;
+    if (r.loop && !structural) result.loop = r.loop;
+    if (r.meta) result.loopMeta = r.meta;
+  } else if (loopFence) {
     const r = parseLoop(loopFence.body, loopFence.attrs, {
       bodyStartLine: loopFence.bodyStartLine,
       sampleRate,

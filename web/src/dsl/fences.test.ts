@@ -66,6 +66,20 @@ describe('extractFences', () => {
     expect(fences[0]!.body).toBe('osc:');
   });
 
+  it('spans from its opening marker to its closing one', () => {
+    // `fenceLine..endLine` is what `sections.ts` uses to tell a `##` heading
+    // from a `##` written inside somebody's fence.
+    const fences = extractFences('a\n```synth\nosc:\n## not a heading\n```\nb\n');
+    expect(fences[0]).toMatchObject({ fenceLine: 2, endLine: 5 });
+  });
+
+  it('runs an unterminated fence to the end of the document', () => {
+    // CommonMark behaviour, and the safer half-typed state: what follows an
+    // open fence is inside it, not a heading that appeared out of nowhere.
+    const fences = extractFences('a\n```synth\nosc:\n## verse');
+    expect(fences[0]).toMatchObject({ fenceLine: 2, endLine: 4 });
+  });
+
   it('findFence picks the first matching language', () => {
     const fences = extractFences(DOC);
     expect(findFence(fences, 'loop')!.attrs['bpm']).toBe('124');

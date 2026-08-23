@@ -56,12 +56,42 @@ export interface LoopLineMeta {
   repeats: number;
   /** Cells per beat of the bound phrase, for the sequencer. */
   cellsPerBeat: number;
+  /** The `##` section this line came from; absent for a lone `loop` fence. */
+  section?: string;
+  /** True when the binding came from `from=` rather than from a line here. */
+  inherited?: boolean;
+}
+
+/** What `from=` copies: one section's bindings, after its own `from=` merge. */
+export interface Binding {
+  trackId: string;
+  phraseId: string;
 }
 
 export interface LoopMeta {
   id: string;
   bars: number;
   bpm: number;
+  /** One pass through this arrangement, at its own tempo. */
+  lengthSamples: number;
+  lines: LoopLineMeta[];
+  /** Present when the document is a list of `##` sections (Stream 2 §3). */
+  sections?: SectionMeta[];
+}
+
+/** One `##` section's place in the song, for the GUI and `sheliak check`. */
+export interface SectionMeta {
+  name: string;
+  /** 1-based document line of the `##` heading. */
+  line: number;
+  bars: number;
+  bpm: number;
+  /** How many times it plays before the next section. */
+  repeat: number;
+  /** One pass through it, in samples, at its own tempo. */
+  lengthSamples: number;
+  /** Where it starts in the song, in samples. */
+  startSamples: number;
   lines: LoopLineMeta[];
 }
 
@@ -88,11 +118,35 @@ export interface LoopParseOptions {
    * A loop that states its own length keeps it.
    */
   defaultBars?: number;
+  /**
+   * Bindings this section inherits with `from=` (Stream 2 §4). This fence's own
+   * lines then add, replace, or remove (`-`) against them.
+   */
+  inherited?: readonly Binding[];
+  /** The `##` heading this fence sits under, stamped onto the line metadata. */
+  section?: string;
+}
+
+/** One binding after `from=` has been merged with this fence's own lines. */
+interface MergedLine extends Binding {
+  /** Document line to report against — the fence itself, when inherited. */
+  n: number;
+  trackIdCol: number;
+  phraseCol: number;
+  /** Came from `from=`, so no line in this fence says it. */
+  inherited: boolean;
 }
 
 export interface LoopParseResult {
   loop: LoopIR | null;
   meta: LoopMeta | null;
+  /**
+   * The merged bindings — `from=` plus this fence's own lines, in order, before
+   * any of them is checked against the document. This is what a later section's
+   * `from=` copies, and it exists whether or not this fence compiled: a section
+   * with a typo in it should not silently change what inherits from it.
+   */
+  bindings: Binding[];
   errors: DslError[];
 }
 
@@ -124,9 +178,9 @@ export function parseLoop(
     trackLines.push({ text, n: startLine + i });
   }
 
-  if (trackLines.length === 0) {
+  if (trackLines.length === 0 && !opts.inherited?.length) {
     sink.push(fencePos, 'loop needs at least one track line, e.g. "lead: verse-lead"');
-    return { loop: null, meta: null, errors: sink.errors };
+    return { loop: null, meta: null, bindings: [], errors: sink.errors };
   }
 
   const spb = samplesPerBeat(bpm, opts.sampleRate);
@@ -134,7 +188,6 @@ export function parseLoop(
 
   const events: LoopEvent[] = [];
   const lineMetas: LoopLineMeta[] = [];
-  const seenIds = new Set<string>();
   /**
    * A line that could not be resolved for a reason already reported elsewhere.
    * It yields no diagnostic of its own but still invalidates the loop, so the
@@ -142,6 +195,20 @@ export function parseLoop(
    * with a track quietly missing from it while a phrase is half-typed.
    */
   let incomplete = false;
+
+  // `from=` (Stream 2 §4): the section starts as a copy of an earlier one's
+  // bindings, and this fence's lines add, replace or remove against them. The
+  // merge happens before anything is validated, so replacing an inherited
+  // binding is a replacement rather than a duplicate.
+  const merged: MergedLine[] = (opts.inherited ?? []).map((b) => ({
+    trackId: b.trackId,
+    phraseId: b.phraseId,
+    n: fencePos.line,
+    trackIdCol: 1,
+    phraseCol: 1,
+    inherited: true,
+  }));
+  const ownIds = new Set<string>();
 
   for (const line of trackLines) {
     const colon = line.text.indexOf(':');
@@ -153,6 +220,38 @@ export function parseLoop(
     const trackId = line.text.slice(0, colon).trim();
     const phraseId = line.text.slice(colon + 1).trim();
     const phraseCol = colon + 2 + (line.text.slice(colon + 1).length - line.text.slice(colon + 1).trimStart().length);
+
+    if (ownIds.has(trackId)) {
+      sink.push({ line: line.n, col: trackIdCol }, `duplicate loop line for track "${trackId}"`);
+      continue;
+    }
+    ownIds.add(trackId);
+
+    const at = merged.findIndex((m) => m.trackId === trackId);
+    if (phraseId === '-') {
+      // Removing what was never there is a typo, not a no-op: silence is
+      // exactly what both outcomes look like.
+      if (at < 0) {
+        sink.push(
+          { line: line.n, col: phraseCol },
+          `nothing to remove — track "${trackId}" is not bound here` +
+            (opts.inherited?.length ? '' : ' (`-` removes a binding inherited with `from=`)'),
+        );
+      } else {
+        merged.splice(at, 1);
+      }
+      continue;
+    }
+
+    const entry: MergedLine = { trackId, phraseId, n: line.n, trackIdCol, phraseCol, inherited: false };
+    if (at < 0) merged.push(entry);
+    else merged[at] = entry;
+  }
+
+  const bindings: Binding[] = merged.map((m) => ({ trackId: m.trackId, phraseId: m.phraseId }));
+
+  for (const line of merged) {
+    const { trackId, phraseId, trackIdCol, phraseCol } = line;
 
     let track: number;
     if (opts.trackIds) {
@@ -170,12 +269,6 @@ export function parseLoop(
     } else {
       track = lineMetas.length;
     }
-
-    if (seenIds.has(trackId)) {
-      sink.push({ line: line.n, col: trackIdCol }, `duplicate loop line for track "${trackId}"`);
-      continue;
-    }
-    seenIds.add(trackId);
 
     if (phraseId === '') {
       sink.push({ line: line.n, col: phraseCol }, `track "${trackId}" names no phrase`);
@@ -215,17 +308,20 @@ export function parseLoop(
       continue;
     }
 
-    lineMetas.push({ trackId, track, phraseId, repeats, cellsPerBeat: phrase.cellsPerBeat });
+    const lineMeta: LoopLineMeta = { trackId, track, phraseId, repeats, cellsPerBeat: phrase.cellsPerBeat };
+    if (opts.section !== undefined) lineMeta.section = opts.section;
+    if (line.inherited) lineMeta.inherited = true;
+    lineMetas.push(lineMeta);
     emitPhrase(phrase, track, repeats, spb, opts.sampleRate, lengthSamples, events, sink, {
       line: line.n,
       col: phraseCol,
     });
   }
 
-  const meta: LoopMeta = { id, bars, bpm, lines: lineMetas };
-  if (!sink.ok || incomplete) return { loop: null, meta, errors: sink.errors };
+  const meta: LoopMeta = { id, bars, bpm, lengthSamples, lines: lineMetas };
+  if (!sink.ok || incomplete) return { loop: null, meta, bindings, errors: sink.errors };
 
-  return { loop: { lengthSamples, events: sortEvents(events) }, meta, errors: [] };
+  return { loop: { lengthSamples, events: sortEvents(events) }, meta, bindings, errors: [] };
 }
 
 /** noteOff before noteOn on the same sample; emission order breaks the rest. */
