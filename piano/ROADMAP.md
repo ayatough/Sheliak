@@ -11,11 +11,15 @@ where it lives, and how to know it worked.
 `piano/` is a physically modelled piano as a native CLAP instrument. Modal
 strings (1–3 per key plus a polarisation bank on bass singles, stiff-string
 inharmonicity, Railsback stretch), a nonlinear felt hammer integrated against
-the string during contact, dampers with a pedal, an 88-entry measured voicing
-table. **Verified**: 24 offline tests (determinism, tuning vs theory, decay,
-pedal, boundedness), clap-validator 0.4.1 fully green (35 passed, 0 failed,
-9 skipped for undeclared extensions), plays end-to-end under
-`sheliak-render --clap-instrument` and loads in any CLAP DAW.
+the string during contact, a deterministic strike noise (knock and thump)
+fired at felt contact, dampers with a pedal, an 88-entry measured voicing
+table. **Verified**: 27 offline tests (determinism, tuning vs theory, decay,
+pedal, boundedness, the strike noise's presence, decay and velocity law);
+clap-validator 0.4.1 was fully green before the strike noise (35 passed,
+0 failed, 9 skipped for undeclared extensions) and the parameter added since
+is a plain automatable number, but that run has not been repeated; plays
+end-to-end under `sheliak-render --clap-instrument` and loads in any CLAP
+DAW.
 
 Read `piano/README.md` first — build, the tuning-knob table, and the
 edit → listen → `--retrim` → test loop. Read `AGENTS.md` at the repository
@@ -37,17 +41,47 @@ mechanism per round, so the author can hear what changed.
    rolloff below 180 Hz, polarisation bank on single strings.
 2. *"Now it sounds like a harpsichord"* → fixed: treble partials decayed an
    order too slowly (`sigma2` ×3), soundboard rolloff above 1.5 kHz.
-3. *"Quality is still low; is it the missing hammer knock?"* → **open, and
-   the author is right.** The strike transient is pure string vibration;
-   every percussive noise component of a real strike is absent. This is
-   workstream 1.
+3. *"Quality is still low; is it the missing hammer knock?"* → the author
+   was right: the strike transient was pure string vibration. Workstream 1
+   below is now implemented — **awaiting the author's ears.** An earlier
+   attempt on another branch bundled the knock with several other changes
+   and came back as *"sounds like a bass"*; this pass adds the knock alone,
+   on top of the state the author last heard, so the verdict can land on
+   one mechanism.
 
 ## Workstreams, in order of audible payoff
 
 ### 1. The strike noise — key knock, shank thunk, soundboard thump
 
-The single biggest gap. A real note is *strike noise + string tone*; we
-synthesise only the tone, so the onset reads as a pluck.
+**Implemented; listening pending.** A real note is *strike noise + string
+tone*; until now only the tone was synthesised, so the onset read as a
+pluck. What landed, and where the knobs are:
+
+- `Strike` in `src/model.rs`: one xorshift sequence seeded from
+  `keys.rs::key_hash(key, 4)`, split into a *knock* (resonant lowpass,
+  800 Hz → 3.2 kHz along the keyboard, brighter with `Hammer Hardness` and
+  with hammer speed, τ 3 → 1.2 ms) and a *thump* (resonant lowpass near
+  230 Hz with a per-key scatter, Q 2, τ 3 → 2.5 ms), through the strings'
+  radiation highpass (twice) and, for the thump, the soundboard corner.
+- Fired at the sample the felt first delivers force, not at note-on, so a
+  soft note's knock lands late with its hammer.
+- Level: each component is *calibrated* at note-on by running the burst
+  once silently and scaling to a target peak (`KNOCK_PEAK_*`,
+  `THUMP_PEAK_*`, bass → treble), so keys do not differ by the luck of
+  their sequences and the level holds at any sample rate. The target
+  follows `speed^1.8` (`KNOCK_VELOCITY_POWER`) against the tone's roughly
+  `speed^1.4`, so the burst is about half the tone's peak at fortissimo in
+  the tenor and vanishes at pianissimo.
+- `Knock` parameter (id 9, 0–2, default 1). `examples/levels.rs` measures
+  the trim with it at 0. `render_wav --knock 0` renders the tone alone.
+- Tests: presence at fortissimo (15 % to 125 % of the tone's peak), −40 dB
+  inside 25 ms of onset, onset inside 4 ms, absence at velocity 0.005, and
+  a steeper velocity law than the tone.
+
+If the ears say "too much / too little", `KNOCK_PEAK_*` and `THUMP_PEAK_*`
+are the knobs, then `--retrim` is *not* needed (the survey excludes the
+burst). If they say "clicky" or "boxy", the colours (`KNOCK_HZ_*`,
+`THUMP_HZ`, `THUMP_Q`) are next. The original brief, kept for reference:
 
 - Add a deterministic broadband transient at note-on: a short noise burst
   (seeded per key from `keys.rs::jitter` — **no RNG**, determinism is

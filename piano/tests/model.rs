@@ -3,7 +3,7 @@
 //! failure modes a diff cannot show.
 
 use sheliak_piano::keys::{key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
-use sheliak_piano::model::{Piano, MAX_VOICES, P_DETUNE, P_STRETCH, P_SUSTAIN};
+use sheliak_piano::model::{Piano, MAX_VOICES, P_DETUNE, P_KNOCK, P_STRETCH, P_SUSTAIN};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 128;
@@ -241,6 +241,82 @@ fn a_louder_note_is_brighter_not_just_louder() {
     assert!(
         loud > soft * 1.5,
         "the felt nonlinearity is not brightening loud notes (pp {soft}, ff {loud})"
+    );
+}
+
+// ------------------------------------------------------------- strike noise
+
+/// The strike noise on its own: the burst adds to the strings without
+/// feeding back into them and the master path is linear, so the difference
+/// between a render with `Knock` at 1 and one with it at 0 is exactly the
+/// noise as heard.
+fn knock_alone(key: i16, vel: f32) -> (Vec<f32>, Vec<f32>) {
+    let mut piano = Piano::new(SR);
+    piano.set_param(P_KNOCK, 1.0);
+    let with = render(&mut piano, 0.5, key, vel, None);
+    let mut piano = Piano::new(SR);
+    piano.set_param(P_KNOCK, 0.0);
+    let without = render(&mut piano, 0.5, key, vel, None);
+    let knock = with.iter().zip(&without).map(|(a, b)| a - b).collect();
+    (knock, without)
+}
+
+#[test]
+fn a_fortissimo_strike_knocks_and_the_knock_is_over_at_once() {
+    for &key in &[24, 48, 60, 84, 105] {
+        let (knock, tone) = knock_alone(key, 1.0);
+        let knock_peak = peak(&knock);
+        let tone_peak = peak(&tone);
+        // Present: a fortissimo knock is a real part of the attack, not a
+        // garnish — and not far louder than the tone it precedes, even at
+        // the top, where the tone is weak and the click nearly matches it.
+        assert!(
+            knock_peak > tone_peak * 0.15 && knock_peak < tone_peak * 1.25,
+            "key {key}: knock {knock_peak} against tone {tone_peak}"
+        );
+        // Over: 25 ms after it begins, the noise is at least 40 dB down.
+        let onset = knock
+            .iter()
+            .position(|s| s.abs() > knock_peak * 0.01)
+            .expect("the knock has an onset");
+        let later = &knock[onset + (0.025 * SR) as usize..];
+        let tail = peak(later);
+        assert!(
+            tail < knock_peak * 0.01,
+            "key {key}: the knock still rings 25 ms on ({tail} against {knock_peak})"
+        );
+        // And it lands with the hammer, inside the first few milliseconds.
+        assert!(
+            onset < (0.004 * SR) as usize,
+            "key {key}: the knock arrives {onset} samples late"
+        );
+    }
+}
+
+#[test]
+fn a_pianissimo_strike_has_no_knock() {
+    for &key in &[24, 60, 105] {
+        let (knock, tone) = knock_alone(key, 0.005);
+        let knock_peak = peak(&knock);
+        let tone_peak = peak(&tone);
+        assert!(tone_peak > 0.0, "key {key}: the softest note is silent");
+        assert!(
+            knock_peak < tone_peak * 0.01,
+            "key {key}: a pianissimo strike knocks ({knock_peak} against {tone_peak})"
+        );
+    }
+}
+
+#[test]
+fn the_knock_grows_faster_with_touch_than_the_tone() {
+    let key = 60;
+    let (soft_knock, soft_tone) = knock_alone(key, 0.5);
+    let (loud_knock, loud_tone) = knock_alone(key, 1.0);
+    let knock_ratio = peak(&loud_knock) / peak(&soft_knock);
+    let tone_ratio = peak(&loud_tone) / peak(&soft_tone);
+    assert!(
+        knock_ratio > tone_ratio * 1.5,
+        "the knock does not follow touch more steeply than the tone (knock ×{knock_ratio}, tone ×{tone_ratio})"
     );
 }
 

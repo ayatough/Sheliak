@@ -18,7 +18,7 @@
 //! contact-alignment lobes are steepest at full force.
 
 use sheliak_piano::keys::{key_scaling, FIRST_KEY, LAST_KEY};
-use sheliak_piano::model::Piano;
+use sheliak_piano::model::{Piano, P_KNOCK};
 
 const TARGET_MF: f32 = 0.028;
 const TARGET_FF: f32 = 0.16;
@@ -26,6 +26,11 @@ const TARGET_FF: f32 = 0.16;
 fn peak_of(key: i16, vel: f32) -> f32 {
     let sr = 48_000.0;
     let mut piano = Piano::new(sr);
+    // The survey levels the string tone alone. The strike noise is voiced
+    // relative to the tone inside the model (`KNOCK_LEVEL`), so letting it
+    // into the measurement would only dim the tone wherever the burst
+    // happens to be loud.
+    piano.set_param(P_KNOCK, 0.0);
     piano.note_on(key, vel);
     let mut l = [0.0f32; 128];
     let mut r = [0.0f32; 128];

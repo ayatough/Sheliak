@@ -300,7 +300,7 @@ fn the_parameters_carry_their_own_ranges_and_names() {
         let params = (*plugin).get_extension.unwrap()(plugin, c"clap.params".as_ptr())
             as *const clap_plugin_params;
         assert!(!params.is_null(), "no clap.params extension");
-        assert_eq!((*params).count.unwrap()(plugin), 9);
+        assert_eq!((*params).count.unwrap()(plugin), 10);
 
         let mut info = std::mem::zeroed::<clap_param_info>();
         assert!((*params).get_info.unwrap()(plugin, 0, &mut info));

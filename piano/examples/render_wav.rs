@@ -4,10 +4,14 @@
 //! The passage exercises what the tests can only measure: a bass octave, a
 //! pedalled arpeggio, a staccato chord, and a fortissimo-versus-pianissimo
 //! pair on the same key.
+//!
+//! `--knock <0..2>` sets the strike-noise level (default 1) and `--out <path>`
+//! the file written, so two renders — with and without the knock — can be
+//! compared by ear, or subtracted to hear the noise on its own.
 
 use std::io::Write;
 
-use sheliak_piano::model::{Piano, P_SUSTAIN};
+use sheliak_piano::model::{Piano, P_KNOCK, P_SUSTAIN};
 
 const SR: f32 = 48_000.0;
 
@@ -46,7 +50,19 @@ fn score() -> Score {
 }
 
 fn main() -> std::io::Result<()> {
+    let mut knock = 1.0f64;
+    let mut out = String::from("piano-demo.wav");
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--knock" => knock = args.next().and_then(|v| v.parse().ok()).unwrap_or(knock),
+            "--out" => out = args.next().unwrap_or(out),
+            _ => {}
+        }
+    }
+
     let mut piano = Piano::new(SR);
+    piano.set_param(P_KNOCK, knock);
     let score = score();
     let seconds = 7.5f32;
     let frames = (seconds * SR) as usize;
@@ -114,11 +130,11 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    std::fs::File::create("piano-demo.wav")?.write_all(&wav)?;
+    std::fs::File::create(&out)?.write_all(&wav)?;
     let peak = left
         .iter()
         .chain(&right)
         .fold(0.0f32, |m, s| m.max(s.abs()));
-    println!("wrote piano-demo.wav ({seconds} s, peak {peak:.3})");
+    println!("wrote {out} ({seconds} s, peak {peak:.3}, knock {knock})");
     Ok(())
 }

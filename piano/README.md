@@ -59,11 +59,22 @@ writes `piano-demo.wav`.
 - **Voicing.** The per-key physical parameters are interpolated from anchors
   set by the published measurements, then levelled by a measured 88-entry
   output trim (`keys.rs`), the same job a technician's voicing does.
+- **The strike noise.** At the instant the felt lands, each voice fires a
+  short deterministic noise burst in two parts: a broadband *knock* (the
+  hammer and its shank — brighter and shorter toward the treble, brighter
+  still for a harder hammer or a faster blow) and a low *thump* (the blow
+  reaching the board and key bed — heavier in the bass). Both leave through
+  the same radiation and soundboard corners as the strings. The burst
+  follows touch more steeply than the tone, so it is a real part of a
+  fortissimo attack and absent from a pianissimo one; the `Knock` parameter
+  scales it. The noise sequence is hashed from the key number and its peak
+  is calibrated at note-on, so it renders identically every time and knocks
+  at the same level on every key.
 
-Not modelled yet, in honesty: the strike noise (key knock and soundboard
-thump — the biggest audible gap), a resonating soundboard (a tone filter
-stands in for it), sympathetic resonance between keys, una corda and
-sostenuto, and repedalling half-damping. The top octave's fortissimo
+Not modelled yet, in honesty: a resonating soundboard (a tone filter stands
+in for it, and the strike's thump is a shaped burst rather than the board's
+own modes), sympathetic resonance between keys, una corda and sostenuto,
+and repedalling half-damping. The top octave's fortissimo
 levelling leans on the voicing table rather than the contact physics.
 [ROADMAP.md](ROADMAP.md) is the ordered plan for closing these gaps,
 written to be picked up by a fresh agent.
@@ -74,9 +85,10 @@ Two layers, from cheap to deep.
 
 **In the DAW, live:** `Hammer Hardness` (dark→bright at the source),
 `Brightness` (a plain output lowpass), `Unison Detune` (beating and the
-two-stage decay), `Decay`, `Damper`, `Stretch`, `Dynamics` (velocity curve).
-Hardness, Detune, Stretch, Decay, Damper and Dynamics are read at note-on —
-retrigger the note to hear the change.
+two-stage decay), `Decay`, `Damper`, `Stretch`, `Dynamics` (velocity curve),
+`Knock` (the strike noise, 0 = tone alone, 2 = twice the measured level).
+Hardness, Detune, Stretch, Decay, Damper, Dynamics and Knock are read at
+note-on — retrigger the note to hear the change.
 
 **In the source, rebuilt:** the character constants live in two files.
 
@@ -92,11 +104,16 @@ retrigger the note to hear the change.
 | `detune_cents`, polarisation `0.4 * detune` | `src/keys.rs`, `src/model.rs` | Unison shimmer and bass aftersound |
 | `b` anchors (inharmonicity) | `src/keys.rs` | Metallic stretch of the partial series |
 | `velocity_floor` | `src/keys.rs` | Treble dynamic-range compression |
+| `KNOCK_PEAK_*`, `THUMP_PEAK_*` | `src/model.rs` | Strike-noise level per register, as a peak against the tone's ~0.13 |
+| `KNOCK_HZ_*`, `KNOCK_TAU_*` | `src/model.rs` | Colour and length of the knock, bass to treble |
+| `THUMP_HZ`, `THUMP_Q`, `THUMP_TAU_*` | `src/model.rs` | Pitch, ring and length of the thump |
+| `KNOCK_VELOCITY_POWER` | `src/model.rs` | How much faster than the tone the noise grows with touch |
 
 The listening loop:
 
 ```bash
 cargo run --release --example bass_demo     # or render_wav — writes a WAV
+cargo run --release --example render_wav -- --knock 0 --out tone-only.wav  # A/B the strike noise
 # edit, listen, repeat…
 cargo run --release --example levels -- --retrim   # after level-shifting changes
 # paste the printed block over OUTPUT_TRIM in src/keys.rs, then once more:
@@ -105,7 +122,9 @@ cargo test                                  # tuning/decay/level tests still hol
 ```
 
 `--retrim` re-levels the keyboard after any change that shifts loudness
-(damping, radiation, hammer curves). Skip it for pitch-only changes.
+(damping, radiation, hammer curves). Skip it for pitch-only changes. The
+survey measures the tone with `Knock` at 0: the strike noise is voiced
+against the tone inside the model, so it must not steer the table.
 
 ## Determinism
 

@@ -25,6 +25,19 @@ policy.
   `sheliak-render` can treat it as a `pinned` plugin rather than an
   audition. No samples anywhere; where to listen:
   `cargo run --release --example render_wav --manifest-path piano/Cargo.toml`.
+- **The piano's strike has its knock.** A real note is percussion plus tone,
+  and until now only the tone was synthesised, so every onset read as a pluck.
+  Each strike now fires a short noise burst at the instant the felt lands: a
+  broadband knock (the hammer and its shank, brighter and shorter toward the
+  treble) and a low thump (the blow reaching the board and key bed, heavier
+  in the bass), both radiating through the same corners as the strings. The
+  burst is a fixed sequence hashed from the key number — no random source,
+  renders stay bit-identical — and its level is calibrated per note-on so
+  every key knocks at the level set for it rather than at the luck of its
+  sequence. It follows touch more steeply than the tone does: prominent at
+  fortissimo, gone at pianissimo. A new automatable `Knock` parameter
+  (0–2, default 1) scales it; `render_wav --knock 0` renders the tone alone
+  for comparison.
 - **The GUI panel draws a plugin's controls, from the plugin.** Selecting a
   plugin track shows one control per CLAP parameter: the plugin's own names, its
   ranges, and its own spelling of every value — `8000 Hz`, `0.400 s`, `Square` —

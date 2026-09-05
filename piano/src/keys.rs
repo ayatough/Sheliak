@@ -84,7 +84,7 @@ pub struct KeyScaling {
 /// Regenerate it after any change to the model or to `key_scaling` — the
 /// numbers are downstream of both.
 const OUTPUT_TRIM: [f32; 88] = [
-    0.236, // key 21
+    0.237, // key 21
     0.246, // key 22
     0.265, // key 23
     0.270, // key 24
@@ -95,14 +95,14 @@ const OUTPUT_TRIM: [f32; 88] = [
     0.349, // key 29
     0.274, // key 30
     0.268, // key 31
-    0.301, // key 32
+    0.300, // key 32
     0.354, // key 33
     0.283, // key 34
     0.303, // key 35
     0.309, // key 36
     0.362, // key 37
-    0.414, // key 38
-    0.396, // key 39
+    0.415, // key 38
+    0.397, // key 39
     0.425, // key 40
     0.448, // key 41
     0.480, // key 42
@@ -110,8 +110,8 @@ const OUTPUT_TRIM: [f32; 88] = [
     0.333, // key 44
     0.355, // key 45
     0.365, // key 46
-    0.382, // key 47
-    0.433, // key 48
+    0.383, // key 47
+    0.434, // key 48
     0.447, // key 49
     0.479, // key 50
     0.529, // key 51
@@ -119,7 +119,7 @@ const OUTPUT_TRIM: [f32; 88] = [
     0.635, // key 53
     0.663, // key 54
     0.721, // key 55
-    0.789, // key 56
+    0.790, // key 56
     0.844, // key 57
     0.924, // key 58
     0.958, // key 59
@@ -130,10 +130,10 @@ const OUTPUT_TRIM: [f32; 88] = [
     1.310, // key 64
     1.180, // key 65
     1.109, // key 66
-    1.301, // key 67
+    1.300, // key 67
     1.281, // key 68
     1.304, // key 69
-    1.233, // key 70
+    1.232, // key 70
     1.343, // key 71
     1.358, // key 72
     1.491, // key 73
@@ -145,32 +145,32 @@ const OUTPUT_TRIM: [f32; 88] = [
     1.574, // key 79
     2.160, // key 80
     1.693, // key 81
-    1.745, // key 82
+    1.746, // key 82
     1.736, // key 83
-    2.310, // key 84
+    2.309, // key 84
     2.502, // key 85
     2.229, // key 86
-    3.472, // key 87
+    3.473, // key 87
     3.679, // key 88
     3.051, // key 89
-    3.760, // key 90
+    3.761, // key 90
     3.122, // key 91
-    3.132, // key 92
+    3.133, // key 92
     3.060, // key 93
     4.150, // key 94
     4.101, // key 95
     4.621, // key 96
     4.904, // key 97
     4.372, // key 98
-    6.926, // key 99
+    6.927, // key 99
     3.501, // key 100
-    6.926, // key 101
+    6.927, // key 101
     2.979, // key 102
     0.980, // key 103
     4.478, // key 104
-    2.433, // key 105
-    1.301, // key 106
-    5.048, // key 107
+    2.432, // key 105
+    1.300, // key 106
+    5.049, // key 107
     4.963, // key 108
 ];
 
@@ -195,13 +195,21 @@ fn piecewise_log(key: f32, points: &[(f32, f32)]) -> f32 {
     10.0f32.powf(piecewise(key, points))
 }
 
-/// A deterministic per-key value in -1..1, from nothing but the key number.
-fn jitter(key: i16, salt: u32) -> f32 {
+/// A deterministic 32-bit hash of the key number and a salt — the only
+/// "randomness" the instrument has. `jitter` derives the per-key voicing
+/// scatter from it, and the strike noise in `model.rs` seeds its burst from
+/// it, so a key's noise is as much a property of that key as its stiffness.
+pub fn key_hash(key: i16, salt: u32) -> u32 {
     let mut h = (key as u32).wrapping_add(salt.wrapping_mul(0x9E37_79B9));
     h ^= h >> 16;
     h = h.wrapping_mul(0x85EB_CA6B);
     h ^= h >> 13;
-    (h & 0xFFFF) as f32 / 32768.0 - 1.0
+    h
+}
+
+/// A deterministic per-key value in -1..1, from nothing but the key number.
+fn jitter(key: i16, salt: u32) -> f32 {
+    (key_hash(key, salt) & 0xFFFF) as f32 / 32768.0 - 1.0
 }
 
 /// Tuning stretch for one key in cents, scaled by the Stretch parameter.

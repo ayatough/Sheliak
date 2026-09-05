@@ -40,7 +40,7 @@
 //! — the per-key variation in `keys.rs` is hashed from the key number — so
 //! the same events at the same sample rate render the same samples.
 
-use crate::keys::{key_scaling, stretch_cents, FIRST_KEY, LAST_KEY};
+use crate::keys::{key_hash, key_scaling, stretch_cents, KeyScaling, FIRST_KEY, LAST_KEY};
 
 /// Simultaneous voices. A voice is one key strike; the same key struck twice
 /// briefly uses two while the first fades.
@@ -71,6 +71,51 @@ const EXC_SLOTS: usize = 128;
 /// Hammer integration substeps per audio sample while in contact.
 const HAMMER_SUBSTEPS: u32 = 8;
 
+// The strike noise. A real note is percussion plus tone: the hammer shank
+// flexes and the felt slaps the strings (a broadband knock), and the blow
+// jolts the bridge, board and key bed (a low thump). The strings' modal
+// banks reproduce none of it, so an instrument made of strings alone reads
+// as a pluck. Both components are made here from one deterministic noise
+// sequence seeded by the key number, shaped by a resonant lowpass each,
+// decaying in a few milliseconds, and fired at the instant the felt first
+// touches the string. They radiate through the same corners as the strings
+// so they sit inside the instrument rather than on top of it.
+
+/// Peak of each component at fortissimo with `Knock` at 1, bottom key to
+/// top, in the same units as the string tone — whose fortissimo peak the
+/// voicing table puts near 0.13 in the bass and tenor, falling to about
+/// 0.05 at the top. A bass blow moves the board as much as it clicks; a
+/// treble blow is mostly click, and is pulled back with its weaker tone so
+/// the top of the keyboard is not all knock.
+const KNOCK_PEAK_LOW: f32 = 0.10;
+const KNOCK_PEAK_HIGH: f32 = 0.04;
+const THUMP_PEAK_LOW: f32 = 0.04;
+const THUMP_PEAK_HIGH: f32 = 0.008;
+/// The knock's colour, bottom key to top: the corner of its resonant
+/// lowpass. A bass hammer is heavy and slow, a treble hammer light and
+/// quick; the click climbs with it.
+const KNOCK_HZ_LOW: f32 = 800.0;
+const KNOCK_HZ_HIGH: f32 = 3200.0;
+/// Time constant of the knock's envelope, bottom key to top.
+const KNOCK_TAU_LOW: f32 = 0.003;
+const KNOCK_TAU_HIGH: f32 = 0.0012;
+/// The thump's colour: the board's low body, the same object under every
+/// key, so the corner barely moves along the keyboard.
+const THUMP_HZ: f32 = 230.0;
+/// Resonance of the thump's lowpass — enough to ring for a cycle or two, a
+/// thud rather than a hiss — and of the knock's, which is broadband.
+const THUMP_Q: f32 = 2.0;
+const KNOCK_Q: f32 = 1.0;
+/// Time constant of the thump's envelope, bottom key to top: a bass blow
+/// breathes for several milliseconds, a treble blow is over at once.
+const THUMP_TAU_LOW: f32 = 0.003;
+const THUMP_TAU_HIGH: f32 = 0.0025;
+/// The burst's level follows the normalised hammer speed raised to this
+/// power. The string tone grows roughly as speed^1.4, so the burst rises
+/// faster: it dominates a fortissimo attack and all but vanishes at
+/// pianissimo, as a real strike's noise does.
+const KNOCK_VELOCITY_POWER: f32 = 1.8;
+
 /// Per-sample extra decay while a voice is being faded out (a steal or a
 /// restrike): about 40 ms to -60 dB at 48 kHz.
 const FADE: f32 = 0.9985;
@@ -92,7 +137,8 @@ pub const P_DAMPER_S: u32 = 5;
 pub const P_STRETCH: u32 = 6;
 pub const P_DYNAMICS: u32 = 7;
 pub const P_SUSTAIN: u32 = 8;
-pub const PARAM_COUNT: usize = 9;
+pub const P_KNOCK: u32 = 9;
+pub const PARAM_COUNT: usize = 10;
 
 /// The playing parameters, in their own units (the CLAP value is this value).
 ///
@@ -109,6 +155,7 @@ pub struct Params {
     pub stretch: f32,
     pub dynamics: f32,
     pub sustain: f32,
+    pub knock: f32,
 }
 
 impl Default for Params {
@@ -123,6 +170,7 @@ impl Default for Params {
             stretch: 1.0,
             dynamics: 0.5,
             sustain: 0.0,
+            knock: 1.0,
         }
     }
 }
@@ -140,6 +188,7 @@ impl Params {
             P_STRETCH => self.stretch = v.clamp(0.0, 2.0),
             P_DYNAMICS => self.dynamics = v.clamp(0.0, 1.0),
             P_SUSTAIN => self.sustain = if v >= 0.5 { 1.0 } else { 0.0 },
+            P_KNOCK => self.knock = v.clamp(0.0, 2.0),
             _ => {}
         }
     }
@@ -155,8 +204,195 @@ impl Params {
             P_STRETCH => self.stretch,
             P_DYNAMICS => self.dynamics,
             P_SUSTAIN => self.sustain,
+            P_KNOCK => self.knock,
             _ => 0.0,
         }) as f64
+    }
+}
+
+/// A two-pole resonant lowpass (a trapezoidal state-variable filter), the
+/// colour of each strike-noise component. Unconditionally stable, so the
+/// corner can sit anywhere below Nyquist at any sample rate.
+#[derive(Clone, Copy, Default)]
+struct Resonance {
+    a1: f32,
+    a2: f32,
+    a3: f32,
+    ic1: f32,
+    ic2: f32,
+}
+
+impl Resonance {
+    fn set(&mut self, hz: f32, q: f32, sample_rate: f32) {
+        let g = (core::f32::consts::PI * hz.min(0.45 * sample_rate) / sample_rate).tan();
+        let k = 1.0 / q;
+        self.a1 = 1.0 / (1.0 + g * (g + k));
+        self.a2 = g * self.a1;
+        self.a3 = g * self.a2;
+    }
+
+    fn clear(&mut self) {
+        self.ic1 = 0.0;
+        self.ic2 = 0.0;
+    }
+
+    #[inline]
+    fn lowpass(&mut self, x: f32) -> f32 {
+        let v3 = x - self.ic2;
+        let v1 = self.a1 * self.ic1 + self.a2 * v3;
+        let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
+        self.ic1 = 2.0 * v1 - self.ic1;
+        self.ic2 = 2.0 * v2 - self.ic2;
+        v2
+    }
+}
+
+/// The strike noise of one voice: a keyed noise sequence, two shaped and
+/// enveloped components, and the radiation path they leave through. Armed
+/// at note-on, fired at first felt contact, over within tens of
+/// milliseconds.
+struct Strike {
+    /// Samples the burst still has to run; zero while silent.
+    remaining: u32,
+    /// The xorshift state — a fixed sequence from the key's hash, so the
+    /// "noise" renders the same samples every time the key is struck.
+    rng: u32,
+    /// Armed level of each component at fortissimo × velocity × `Knock`.
+    knock_amp: f32,
+    thump_amp: f32,
+    /// Per-sample envelope decay of each component.
+    knock_decay: f32,
+    thump_decay: f32,
+    knock_env: f32,
+    thump_env: f32,
+    /// The slower of the two envelopes, which sets how long the burst runs.
+    longest_tau: f32,
+    knock_colour: Resonance,
+    thump_colour: Resonance,
+    /// The strings' shaping, as one-poles: radiation twice (its magnitude
+    /// is `f²/(f²+fc²)`, the square of a one-pole highpass) and the
+    /// soundboard corner once, on the thump only — the knock is action
+    /// noise, radiated as much by the case and keyboard as by the board.
+    radiation_c: f32,
+    soundboard_c: f32,
+    hp1: f32,
+    hp2: f32,
+    sb: f32,
+}
+
+impl Strike {
+    fn new() -> Self {
+        Strike {
+            remaining: 0,
+            rng: 1,
+            knock_amp: 0.0,
+            thump_amp: 0.0,
+            knock_decay: 0.0,
+            thump_decay: 0.0,
+            knock_env: 0.0,
+            thump_env: 0.0,
+            longest_tau: 0.0,
+            knock_colour: Resonance::default(),
+            thump_colour: Resonance::default(),
+            radiation_c: 0.0,
+            soundboard_c: 0.0,
+            hp1: 0.0,
+            hp2: 0.0,
+            sb: 0.0,
+        }
+    }
+
+    /// Lights the burst: the envelopes start at their armed levels and the
+    /// filters start from rest.
+    fn fire(&mut self, sample_rate: f32) {
+        if self.knock_amp <= 0.0 && self.thump_amp <= 0.0 {
+            return;
+        }
+        self.knock_env = self.knock_amp;
+        self.thump_env = self.thump_amp;
+        self.knock_colour.clear();
+        self.thump_colour.clear();
+        self.hp1 = 0.0;
+        self.hp2 = 0.0;
+        self.sb = 0.0;
+        // Fourteen time constants is -120 dB on the envelope; the extra
+        // 30 ms lets the filters' own ringing die before the burst stops
+        // being computed.
+        self.remaining = ((14.0 * self.longest_tau + 0.03) * sample_rate) as u32;
+    }
+
+    /// Sets the armed levels so that the knock will peak at `knock_target`
+    /// and the thump at `thump_target`. The burst is deterministic and its
+    /// two components add linearly, so each can simply be run once here,
+    /// silently and alone, and measured — some hundreds of samples, once per
+    /// note-on. Without this the peak of a short noise burst would vary by
+    /// several decibels from key to key with the luck of each key's
+    /// sequence, and would move with the sample rate and the colour.
+    fn calibrate(&mut self, sample_rate: f32, knock_target: f32, thump_target: f32) {
+        let seed = self.rng;
+        let peak_of = |strike: &mut Strike, knock_amp: f32, thump_amp: f32| {
+            strike.rng = seed;
+            strike.knock_amp = knock_amp;
+            strike.thump_amp = thump_amp;
+            strike.fire(sample_rate);
+            // The peak falls inside the first few time constants.
+            let samples = (6.0 * strike.longest_tau * sample_rate) as u32;
+            let mut peak = 0.0f32;
+            for _ in 0..samples {
+                peak = peak.max(strike.step().abs());
+            }
+            peak
+        };
+        let knock_peak = peak_of(self, 1.0, 0.0);
+        let thump_peak = peak_of(self, 0.0, 1.0);
+        self.knock_amp = if knock_peak > 0.0 {
+            knock_target / knock_peak
+        } else {
+            0.0
+        };
+        self.thump_amp = if thump_peak > 0.0 {
+            thump_target / thump_peak
+        } else {
+            0.0
+        };
+        // Back to the armed, silent state, with the sequence rewound so the
+        // real burst is the one just measured.
+        self.rng = seed;
+        self.remaining = 0;
+        self.knock_env = 0.0;
+        self.thump_env = 0.0;
+        self.knock_colour.clear();
+        self.thump_colour.clear();
+        self.hp1 = 0.0;
+        self.hp2 = 0.0;
+        self.sb = 0.0;
+    }
+
+    /// One sample of the burst, or exactly zero once it is over.
+    #[inline]
+    fn step(&mut self) -> f32 {
+        if self.remaining == 0 {
+            return 0.0;
+        }
+        self.remaining -= 1;
+        let mut s = self.rng;
+        s ^= s << 13;
+        s ^= s >> 17;
+        s ^= s << 5;
+        self.rng = s;
+        let white = (s as i32 as f32) * (1.0 / 2_147_483_648.0);
+
+        let knock = self.knock_colour.lowpass(white * self.knock_env);
+        let thump = self.thump_colour.lowpass(white * self.thump_env);
+        self.knock_env *= self.knock_decay;
+        self.thump_env *= self.thump_decay;
+
+        self.sb += self.soundboard_c * (thump - self.sb);
+        let x = knock + self.sb;
+        self.hp1 += self.radiation_c * (x - self.hp1);
+        let high1 = x - self.hp1;
+        self.hp2 += self.radiation_c * (high1 - self.hp2);
+        high1 - self.hp2
     }
 }
 
@@ -200,6 +436,7 @@ struct Voice {
     /// contact displacement is read from.
     string0_modes: usize,
     hammer: Hammer,
+    strike: Strike,
     pan_l: f32,
     pan_r: f32,
     // Modal state and per-mode constants, laid out as parallel arrays so the
@@ -239,6 +476,7 @@ impl Voice {
                 release_count: 0,
                 gap_limit: 0,
             },
+            strike: Strike::new(),
             pan_l: 0.0,
             pan_r: 0.0,
             q: [0.0; SLOTS],
@@ -314,6 +552,8 @@ impl Voice {
         let angle = (scale.pan + 1.0) * core::f32::consts::FRAC_PI_4;
         self.pan_l = angle.cos();
         self.pan_r = angle.sin();
+
+        self.arm_strike(key, &scale, params, sample_rate);
 
         let sigma_damper = 6.9078 / params.damper_s;
         let inv_b1 = 1.0 / (1.0 + scale.b);
@@ -398,6 +638,52 @@ impl Voice {
         }
         for w in &mut self.wo_r[..m] {
             *w *= norm;
+        }
+    }
+
+    /// Readies the strike noise for this blow. Nothing sounds until the
+    /// hammer actually lands; this only decides what it will sound like.
+    fn arm_strike(&mut self, key: i16, scale: &KeyScaling, params: &Params, sample_rate: f32) {
+        let along = (key - FIRST_KEY) as f32 / (LAST_KEY - FIRST_KEY) as f32;
+        let dt = 1.0 / sample_rate;
+        // Hammer speed as a fraction of the way from this key's slowest to
+        // a fortissimo blow — the same scale the Dynamics curve maps touch
+        // onto, so the burst follows the player's touch, not raw MIDI.
+        let speed = ((self.hammer.vh - scale.velocity_floor) / (7.0 - scale.velocity_floor))
+            .clamp(0.0, 1.0);
+        let level = params.knock * speed.powf(KNOCK_VELOCITY_POWER);
+        let knock_target = level * (KNOCK_PEAK_LOW + (KNOCK_PEAK_HIGH - KNOCK_PEAK_LOW) * along);
+        let thump_target = level * (THUMP_PEAK_LOW + (THUMP_PEAK_HIGH - THUMP_PEAK_LOW) * along);
+
+        let strike = &mut self.strike;
+        strike.rng = key_hash(key, 4) | 1;
+        let knock_tau = KNOCK_TAU_LOW * (KNOCK_TAU_HIGH / KNOCK_TAU_LOW).powf(along);
+        let thump_tau = THUMP_TAU_LOW * (THUMP_TAU_HIGH / THUMP_TAU_LOW).powf(along);
+        strike.knock_decay = (-dt / knock_tau).exp();
+        strike.thump_decay = (-dt / thump_tau).exp();
+        // A harder hammer and a faster blow both click brighter: the felt
+        // is compressed further into its stiff region, and the slap is
+        // shorter.
+        let knock_hz = KNOCK_HZ_LOW
+            * (KNOCK_HZ_HIGH / KNOCK_HZ_LOW).powf(along)
+            * 2.0f32.powf(0.6 * (params.hardness - 0.5))
+            * (0.7 + 0.6 * speed);
+        strike.knock_colour.set(knock_hz, KNOCK_Q, sample_rate);
+        // The thump's pitch scatters a little from key to key — the key
+        // bed and the case are not struck at one point.
+        let scatter = (key_hash(key, 5) & 0xFFFF) as f32 / 32768.0 - 1.0;
+        let thump_hz = THUMP_HZ * 2.0f32.powf(0.25 * scatter);
+        strike.thump_colour.set(thump_hz, THUMP_Q, sample_rate);
+        let pole = |hz: f32| 1.0 - (-core::f32::consts::TAU * hz * dt).exp();
+        strike.radiation_c = pole(RADIATION_HZ);
+        strike.soundboard_c = pole(SOUNDBOARD_HZ);
+        strike.longest_tau = knock_tau.max(thump_tau);
+        if level > 0.0 {
+            strike.calibrate(sample_rate, knock_target, thump_target);
+        } else {
+            strike.knock_amp = 0.0;
+            strike.thump_amp = 0.0;
+            strike.remaining = 0;
         }
     }
 
@@ -664,6 +950,7 @@ impl Piano {
         }
 
         let dt = 1.0 / self.sample_rate;
+        let sample_rate = self.sample_rate;
         let pedal = self.pedal();
 
         for voice in self.voices.iter_mut() {
@@ -676,11 +963,17 @@ impl Piano {
             let mut level = 0.0f32;
 
             for i in 0..frames {
+                let was_in_contact = voice.hammer.contacted;
                 let impulse = voice.hammer_step(dt);
                 if impulse != 0.0 {
                     for (v, kick) in voice.v[..m].iter_mut().zip(&voice.kick[..m]) {
                         *v += impulse * kick;
                     }
+                }
+                // The felt has just landed: the knock and thump go with the
+                // first contact, not with the note-on.
+                if voice.hammer.contacted && !was_in_contact {
+                    voice.strike.fire(sample_rate);
                 }
 
                 let mut sum_l = 0.0f32;
@@ -706,6 +999,12 @@ impl Piano {
                     sum_l += wl * *v;
                     sum_r += wr * *v;
                 }
+
+                // The strike noise, while its burst still breathes — exactly
+                // zero afterwards, so a silent voice stays reclaimable.
+                let strike = voice.strike.step();
+                sum_l += strike;
+                sum_r += strike;
 
                 left[i] += sum_l * voice.pan_l;
                 right[i] += sum_r * voice.pan_r;
