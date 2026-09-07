@@ -25,6 +25,15 @@ policy.
   `sheliak-render` can treat it as a `pinned` plugin rather than an
   audition. No samples anywhere; where to listen:
   `cargo run --release --example render_wav --manifest-path piano/Cargo.toml`.
+- **The piano's notes decay in two stages.** The struck strings' in-phase
+  motion (the prompt sound) now loses energy `PROMPT_DECAY` times faster
+  than the key's long time constant, and one quieter, detuned bank per key
+  carries the aftersound at that long constant — Weinreich's two-stage
+  decay. A middle-register fortissimo is about 12 dB down at 400 ms and
+  20 dB down at a second, then rings on; before, every bank sustained at
+  the aftersound's rate, which is the even sustain of a plucked bass. The
+  voicing table was re-measured (`levels --retrim`) and a test asserts the
+  knee between the two stages.
 - **The piano's strike has its knock.** A real note is percussion plus tone,
   and until now only the tone was synthesised, so every onset read as a pluck.
   Each strike now fires a short noise burst at the instant the felt lands: a

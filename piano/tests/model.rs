@@ -125,6 +125,35 @@ fn a_held_note_rings_and_a_released_note_stops() {
 }
 
 #[test]
+fn a_struck_note_decays_in_two_stages() {
+    // Weinreich's prompt sound and aftersound: the first half second falls
+    // steeply, then the tail settles into a decay several times slower —
+    // and is still there seconds later. A single exponential (a plucked
+    // bass) fails the ratio; a note that is gone by 3 s fails the floor.
+    let mut piano = Piano::new(SR);
+    piano.set_param(P_KNOCK, 0.0);
+    let x = render(&mut piano, 3.0, 60, 1.0, None);
+    let level = |t0: f32, t1: f32| rms(&x[(t0 * SR) as usize..(t1 * SR) as usize]);
+    let onset = level(0.0, 0.08);
+    let db = |a: f32| 20.0 * (a / onset).log10();
+    let at_400 = db(level(0.4, 0.48));
+    let prompt_rate = -at_400 / 0.44; // dB per second over the first stage
+    let after_rate = (db(level(1.5, 1.6)) - db(level(2.5, 2.6))) / 1.0;
+    assert!(
+        at_400 < -8.0,
+        "the prompt sound lingers: {at_400:.1} dB at 400 ms"
+    );
+    assert!(
+        prompt_rate > 3.0 * after_rate,
+        "no knee between prompt sound and aftersound: {prompt_rate:.1} vs {after_rate:.1} dB/s"
+    );
+    assert!(
+        db(level(2.5, 2.6)) > -40.0,
+        "the aftersound is gone by 2.5 s"
+    );
+}
+
+#[test]
 fn the_top_of_the_keyboard_has_no_dampers() {
     // Key 105 (A7) has no damper: note-off must not shorten it much.
     let held = rms(&render(&mut Piano::new(SR), 1.0, 105, 0.9, None)[(0.7 * SR) as usize..]);

@@ -52,6 +52,13 @@ writes `piano-demo.wav`.
   millisecond of contact. Loud notes compress the felt into its stiff
   region, shortening the pulse and brightening the spectrum — velocity
   changes timbre, not just level.
+- **Two-stage decay.** Every key's banks are split into a *prompt sound* —
+  the struck strings moving together, losing energy to the bridge
+  `PROMPT_DECAY` times faster than the key's long time constant — and one
+  quieter, slightly detuned *aftersound* bank kept at that long constant
+  (Weinreich's two-stage decay). The note steps down 10–15 dB in its first
+  half second and then settles into a tail that is still there seconds
+  later, instead of sustaining evenly like a plucked bass.
 - **Dampers and pedal.** Note-off drops a damper (a much faster decay set)
   unless the sustain pedal holds it off; the top octave and a half has no
   dampers, as on the real instrument. The pedal arrives as MIDI CC 64 or as
@@ -99,9 +106,10 @@ note-on — retrigger the note to hear the change.
 | Felt loss `0.5 * hammer.vh` | `src/model.rs` (`hammer_step`) | More = duller attack, tamer treble lobes |
 | `sigma2` anchors | `src/keys.rs` | Higher = treble partials die faster (piano), lower = they ring (harpsichord) |
 | `t60` anchors | `src/keys.rs` | Overall note length per register |
+| `PROMPT_DECAY` (8), `AFTERSOUND_GAIN` (0.45) | `src/model.rs` | How fast the first stage falls and where the tail takes over; 1 / 1 = one even decay |
 | `hammer_k` / `hammer_p` anchors | `src/keys.rs` | Felt stiffness curve: brightness vs velocity |
 | `strike_pos` (0.12…0.10) | `src/keys.rs` | Comb position: which partials the hammer misses |
-| `detune_cents`, polarisation `0.4 * detune` | `src/keys.rs`, `src/model.rs` | Unison shimmer and bass aftersound |
+| `detune_cents`, polarisation `0.4 * detune` | `src/keys.rs`, `src/model.rs` | Unison shimmer and the aftersound's beating |
 | `b` anchors (inharmonicity) | `src/keys.rs` | Metallic stretch of the partial series |
 | `velocity_floor` | `src/keys.rs` | Treble dynamic-range compression |
 | `KNOCK_PEAK_*`, `THUMP_PEAK_*` | `src/model.rs` | Strike-noise level per register, as a peak against the tone's ~0.13 |

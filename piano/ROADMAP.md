@@ -9,12 +9,14 @@ where it lives, and how to know it worked.
 ## Where things stand
 
 `piano/` is a physically modelled piano as a native CLAP instrument. Modal
-strings (1–3 per key plus a polarisation bank on bass singles, stiff-string
+strings (1–3 per key, the last bank of each an aftersound at the long decay
+behind prompt-sound banks decaying `PROMPT_DECAY` times faster; stiff-string
 inharmonicity, Railsback stretch), a nonlinear felt hammer integrated against
 the string during contact, a deterministic strike noise (knock and thump)
 fired at felt contact, dampers with a pedal, an 88-entry measured voicing
-table. **Verified**: 27 offline tests (determinism, tuning vs theory, decay,
-pedal, boundedness, the strike noise's presence, decay and velocity law);
+table. **Verified**: 28 offline tests (determinism, tuning vs theory, decay and
+its two stages, pedal, boundedness, the strike noise's presence, decay and
+velocity law);
 clap-validator 0.4.1 was fully green before the strike noise (35 passed,
 0 failed, 9 skipped for undeclared extensions) and the parameter added since
 is a plain automatable number, but that run has not been repeated; plays
@@ -48,14 +50,35 @@ mechanism per round, so the author can hear what changed.
    and came back as *"sounds like a bass"*; this pass adds the knock alone,
    on top of the state the author last heard, so the verdict can land on
    one mechanism.
+4. *"Still sounds like a bass"* (with the knock alone, and again with the
+   knock lengthened or the soundboard corner raised — neither moved the
+   verdict). The author pointed at a commuted-synthesis piano
+   (Lorenzoncina/Physical-Modeling-Piano-Synthesis: Chaigne–Askenfelt
+   hammer, waveguide string, a *recorded* soundboard impulse response) that
+   an OpenPiano issue thread preferred. Ported to Python and measured
+   against this model, it is *darker* than ours (C4 onset centroid ~275 Hz
+   vs ~700 Hz) but far more percussive: its C4 is 15 dB down at 400 ms
+   where ours was 4 dB down, because ours decayed as one exponential at the
+   aftersound's rate — a plucked bass sustains exactly like that. Fixed as
+   physics: Weinreich's two-stage decay (prompt banks `PROMPT_DECAY` ×
+   faster, one aftersound bank at the long constant). Brightness was ruled
+   out as the cause by measurement: felt stiffness ×4 and ×16, a lighter
+   hammer, less felt loss and a higher soundboard corner each moved the
+   fortissimo spectrum by only 1–5 dB, since the contact is set by string
+   impedance and the agraffe reflection, not the felt. **Awaiting the
+   author's ears.** The reference's other ingredient, a real board's
+   150–600 Hz body ring, is workstream 2; convolving our output with that
+   recording (offline, in Python) is a cheap A/B for it.
 
 ## Workstreams, in order of audible payoff
 
 ### 1. The strike noise — key knock, shank thunk, soundboard thump
 
-**Implemented; listening pending.** A real note is *strike noise + string
-tone*; until now only the tone was synthesised, so the onset read as a
-pluck. What landed, and where the knobs are:
+**Implemented; heard once — "still a bass", which turned out to be the
+decay, not the knock (see item 4 above).** A real note is *strike noise +
+string tone*; until then only the tone was synthesised, so the onset read
+as a pluck. The knock's own level and colour have not been judged yet.
+What landed, and where the knobs are:
 
 - `Strike` in `src/model.rs`: one xorshift sequence seeded from
   `keys.rs::key_hash(key, 4)`, split into a *knock* (resonant lowpass,

@@ -64,6 +64,20 @@ const RADIATION_HZ: f32 = 180.0;
 /// all sustained treble partials and no warmth.
 const SOUNDBOARD_HZ: f32 = 1500.0;
 
+/// How much faster the prompt sound decays than the aftersound. The key
+/// scaling's `sigma0` is the aftersound's rate — the long tail that is
+/// still there seconds later — and the struck, in-phase strings lose energy
+/// this many times faster. Higher = a more percussive note that steps down
+/// into its tail sooner; 1 = a single decay, which sustains like a plucked
+/// bass. In the middle of the keyboard this puts the note about 12 dB down
+/// at 400 ms and 20 dB down at a second, as a real one is.
+const PROMPT_DECAY: f32 = 8.0;
+
+/// Level of the aftersound bank against a prompt bank. The tail takes
+/// over where the prompt sound has fallen below it, so a higher gain moves
+/// the knee earlier and lifts everything after it.
+const AFTERSOUND_GAIN: f32 = 0.45;
+
 /// Partials of the first string, the one the hammer's contact dynamics are
 /// integrated against.
 const EXC_SLOTS: usize = 128;
@@ -507,24 +521,42 @@ impl Voice {
         self.quiet_blocks = 0;
 
         // Stretch is a retuning of the whole key; detune separates the
-        // strings of the key around it. A single wound bass string still gets
-        // a second, slightly detuned bank standing in for its horizontal
+        // strings of the key around it.
+        //
+        // A piano note decays in two stages (Weinreich 1977). The hammer
+        // sets every string of the key moving together, vertically, and that
+        // in-phase motion drives the bridge hard and loses energy fast: the
+        // prompt sound. What survives is the motion the bridge barely sees —
+        // the strings drifted out of phase, and the horizontal polarisation —
+        // which rings on quietly for many seconds: the aftersound. The last
+        // bank of every key is that aftersound: a slightly detuned, quieter
+        // bank kept at the key's long decay, while the banks before it decay
+        // `PROMPT_DECAY` times faster. A single wound bass string gets the
+        // same two banks, the second standing in for its horizontal
         // polarisation: the fundamentals beat too slowly to hear, but the
         // upper partials shimmer at audible rates, which is what keeps a
         // lone string from sounding like one oscillator.
         let f0 = scale.f0 * 2.0f32.powf(stretch_cents(key, params.stretch) / 1200.0);
         let detune = scale.detune_cents * params.detune;
-        let polarization = scale.strings == 1;
-        let (banks, string_offsets, bank_gain) = if polarization {
-            (2, [0.0, 0.4 * detune, 0.0], [1.0, 0.5, 0.0])
-        } else {
-            (scale.strings, [0.0, detune, -0.7 * detune], [1.0, 1.0, 1.0])
-        };
-        let string_decay_var = if polarization {
-            // The polarisation bank rings longer — the aftersound.
-            [1.0, 0.8, 1.0]
-        } else {
-            [1.0, 0.93, 1.08]
+        let (banks, string_offsets, bank_gain, string_decay_var) = match scale.strings {
+            1 => (
+                2,
+                [0.0, 0.4 * detune, 0.0],
+                [1.0, AFTERSOUND_GAIN, 0.0],
+                [PROMPT_DECAY, 1.0, 1.0],
+            ),
+            2 => (
+                2,
+                [0.0, detune, 0.0],
+                [1.0, AFTERSOUND_GAIN, 0.0],
+                [PROMPT_DECAY, 1.0, 1.0],
+            ),
+            _ => (
+                3,
+                [0.0, detune, -0.7 * detune],
+                [1.0, 1.0, AFTERSOUND_GAIN],
+                [PROMPT_DECAY, 0.93 * PROMPT_DECAY, 1.0],
+            ),
         };
 
         // Hardness moves the felt along its stiffening curve: log-scaled K
