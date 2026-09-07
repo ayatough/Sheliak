@@ -25,6 +25,17 @@ policy.
   `sheliak-render` can treat it as a `pinned` plugin rather than an
   audition. No samples anywhere; where to listen:
   `cargo run --release --example render_wav --manifest-path piano/Cargo.toml`.
+- **The piano has a soundboard.** A modal board (`piano/src/board.rs`)
+  replaces the two shelving corners that stood in for it: 48 damped modes
+  fitted by `piano/tools/fit_board.py` to a recording of a grand's board
+  being tapped, one biquad each, two banks nudged apart for width, scaled
+  so the same board is heard at any sample rate. Strings and strike noise
+  both pass through it, each key is levelled by what the board lets through
+  of its partials, and the tap's low body hump is shelved down
+  (`BOARD_HUMP_DB`) so the low end is a body and not a boom. The author's
+  ears picked the recorded board's response out of an A/B as "the most
+  piano-like" of everything tried. Five new tests bound its ring, its body,
+  its width and its sample-rate independence.
 - **The piano's notes decay in two stages.** The struck strings' in-phase
   motion (the prompt sound) now loses energy `PROMPT_DECAY` times faster
   than the key's long time constant, and one quieter, detuned bank per key

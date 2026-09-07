@@ -40,6 +40,7 @@
 //! — the per-key variation in `keys.rs` is hashed from the key number — so
 //! the same events at the same sample rate render the same samples.
 
+use crate::board::{board_magnitude, Board};
 use crate::keys::{key_hash, key_scaling, stretch_cents, KeyScaling, FIRST_KEY, LAST_KEY};
 
 /// Simultaneous voices. A voice is one key strike; the same key struck twice
@@ -51,17 +52,14 @@ pub const MAX_VOICES: usize = 24;
 /// by its polarisation bank.
 const SLOTS: usize = 256;
 
-/// Radiation corner in Hz: partials below this radiate progressively worse,
-/// as a soundboard does. This is what keeps a bass note sounding like a
-/// piano rather than an electric bass — on the real instrument the
-/// fundamental of the bottom octave is nearly absent from the sound, and the
-/// pitch is carried by the partials above it.
+/// The strike noise's own colouring, on its way into the board: below this
+/// corner the burst is thinned (twice over) the way a small radiator loses
+/// its lowest frequencies, and the thump is kept below the corner that
+/// follows. The strings no longer pass through these — they go through the
+/// modal board in `board.rs`.
 const RADIATION_HZ: f32 = 180.0;
 
-/// The other side of the soundboard's shaping: above this corner its
-/// response falls away at 6 dB per octave. The string's bridge force is
-/// bright — without this rolloff the instrument reads as a harpsichord,
-/// all sustained treble partials and no warmth.
+/// The thump's ceiling; see above.
 const SOUNDBOARD_HZ: f32 = 1500.0;
 
 /// How much faster the prompt sound decays than the aftersound. The key
@@ -592,6 +590,7 @@ impl Voice {
         let nyquist_guard = 0.47 * sample_rate;
 
         let mut m = 0;
+        let mut power = 0.0f32;
         for s in 0..banks {
             let fs0 = f0 * 2.0f32.powf(string_offsets[s] / 1200.0);
             let svar = string_decay_var[s];
@@ -625,17 +624,17 @@ impl Voice {
                 self.dec_damped[m] = (-sigma_d * dt).exp();
                 // Output weight carries omega and the modal mass so that,
                 // against the kick below, the radiated level of an impulse is
-                // independent of which key's mass received it — then the
-                // soundboard's radiation rolloff, which starves the lowest
-                // partials the way a real instrument does.
-                let radiation = fn_hz * fn_hz / (fn_hz * fn_hz + RADIATION_HZ * RADIATION_HZ);
-                let soundboard =
-                    1.0 / (1.0 + (fn_hz / SOUNDBOARD_HZ) * (fn_hz / SOUNDBOARD_HZ)).sqrt();
-                let radiate =
-                    omega * scale.modal_mass * OUTPUT_SCALE * radiation * soundboard * bank_gain[s];
+                // independent of which key's mass received it. This is the
+                // bridge force, uncoloured: the board in `board.rs` does the
+                // colouring for every voice at once.
+                let radiate = omega * scale.modal_mass * OUTPUT_SCALE * bank_gain[s];
                 self.wo_l[m] = (nf * core::f32::consts::PI * scale.read_l).sin() * radiate;
                 self.wo_r[m] = (nf * core::f32::consts::PI * scale.read_r).sin() * radiate;
                 self.kick[m] = excite / (scale.modal_mass * omega * banks as f32);
+                // What this partial contributes to the key's radiated level,
+                // as heard through the board.
+                let heard = self.wo_l[m] * self.kick[m] * board_magnitude(fn_hz, sample_rate);
+                power += heard * heard;
                 if s == 0 && string_modes < EXC_SLOTS {
                     self.exc[string_modes] = excite;
                 }
@@ -651,16 +650,12 @@ impl Voice {
         self.mode_count = m;
 
         // Level the keyboard. A bass key radiates through a hundred partials
-        // and a top key through five, which left to physics alone tilts the
-        // instrument by tens of dB. Normalise each voice by its own radiated
-        // response to a unit impulse — an incoherent (power) sum, since the
-        // partials' phases decohere within the first cycle — anchored to the
-        // hammer momentum a fortissimo strike delivers.
-        let mut power = 0.0f32;
-        for (wl, kick) in self.wo_l[..m].iter().zip(&self.kick[..m]) {
-            let c = wl * kick;
-            power += c * c;
-        }
+        // and a top key through five, and the board lets through a different
+        // share of each, which left to physics alone tilts the instrument by
+        // tens of dB. Normalise each voice by its own response to a unit
+        // impulse as heard through the board — an incoherent (power) sum,
+        // since the partials' phases decohere within the first cycle —
+        // anchored to the hammer momentum a fortissimo strike delivers.
         let response = power.sqrt().max(1.0e-12);
         let momentum =
             scale.hammer_mass * hammer_velocity(1.0, params.dynamics, scale.velocity_floor) * 1.5;
@@ -809,6 +804,8 @@ pub struct Piano {
     dc_yl: f32,
     dc_xr: f32,
     dc_yr: f32,
+    board_l: Board,
+    board_r: Board,
 }
 
 impl Piano {
@@ -827,6 +824,8 @@ impl Piano {
             counter: 0,
             gain: 1.0,
             tone_coeff: 0.0,
+            board_l: Board::new(sample_rate, 0),
+            board_r: Board::new(sample_rate, 1),
             tone_l: 0.0,
             tone_r: 0.0,
             dc_r_coeff: 1.0 - core::f32::consts::TAU * 10.0 / sample_rate,
@@ -963,6 +962,8 @@ impl Piano {
         self.dc_yl = 0.0;
         self.dc_xr = 0.0;
         self.dc_yr = 0.0;
+        self.board_l.clear();
+        self.board_r.clear();
     }
 
     pub fn active_voices(&self) -> usize {
@@ -1057,16 +1058,18 @@ impl Piano {
             }
         }
 
-        // Master path: smoothed gain, the tone one-pole, and a DC blocker —
-        // a struck stiff string leaves a small static offset behind and the
-        // blocker is cheaper than arguing with it.
+        // Master path: the board, smoothed gain, the tone one-pole, and a DC
+        // blocker — a struck stiff string leaves a small static offset behind
+        // and the blocker is cheaper than arguing with it.
         let gain_target = 10.0f32.powf(self.params.gain_db / 20.0);
         let a = self.tone_coeff;
         let r = self.dc_r_coeff;
         for i in 0..frames {
             self.gain += 0.002 * (gain_target - self.gain);
-            self.tone_l += a * (left[i] - self.tone_l);
-            self.tone_r += a * (right[i] - self.tone_r);
+            let board_l = self.board_l.step(left[i]);
+            let board_r = self.board_r.step(right[i]);
+            self.tone_l += a * (board_l - self.tone_l);
+            self.tone_r += a * (board_r - self.tone_r);
 
             let xl = self.tone_l * self.gain;
             let yl = xl - self.dc_xl + r * self.dc_yl;
@@ -1080,5 +1083,7 @@ impl Piano {
             self.dc_yr = yr;
             right[i] = yr;
         }
+        self.board_l.settle();
+        self.board_r.settle();
     }
 }

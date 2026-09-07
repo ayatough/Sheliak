@@ -15,6 +15,7 @@
 //!
 //! The model itself lives in [`model`], and knows nothing about CLAP.
 
+pub mod board;
 pub mod keys;
 pub mod model;
 

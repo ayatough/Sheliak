@@ -52,6 +52,14 @@ writes `piano-demo.wav`.
   millisecond of contact. Loud notes compress the felt into its stiff
   region, shortening the pulse and brightening the spectrum — velocity
   changes timbre, not just level.
+- **The soundboard.** Everything leaves through a modal board (`board.rs`):
+  48 damped modes fitted by `tools/fit_board.py` to a recording of a
+  grand's board being tapped, one biquad each, in two banks with their
+  mode weights nudged apart for width. A note carries the board's ring and
+  the attack carries its thump. The tap's own low body hump (120–450 Hz,
+  some 20 dB above the rest) is pulled down `BOARD_HUMP_DB` through a
+  smooth shelf, and each key is levelled by what the board lets through of
+  its partials, so the voicing table stays near unity.
 - **Two-stage decay.** Every key's banks are split into a *prompt sound* —
   the struck strings moving together, losing energy to the bridge
   `PROMPT_DECAY` times faster than the key's long time constant — and one
@@ -70,18 +78,19 @@ writes `piano-demo.wav`.
   short deterministic noise burst in two parts: a broadband *knock* (the
   hammer and its shank — brighter and shorter toward the treble, brighter
   still for a harder hammer or a faster blow) and a low *thump* (the blow
-  reaching the board and key bed — heavier in the bass). Both leave through
-  the same radiation and soundboard corners as the strings. The burst
+  reaching the board and key bed — heavier in the bass), coloured by a
+  small radiator's lowpass and highpass corners and then, like the strings,
+  by the board. The burst
   follows touch more steeply than the tone, so it is a real part of a
   fortissimo attack and absent from a pianissimo one; the `Knock` parameter
   scales it. The noise sequence is hashed from the key number and its peak
   is calibrated at note-on, so it renders identically every time and knocks
   at the same level on every key.
 
-Not modelled yet, in honesty: a resonating soundboard (a tone filter stands
-in for it, and the strike's thump is a shaped burst rather than the board's
-own modes), sympathetic resonance between keys, una corda and sostenuto,
-and repedalling half-damping. The top octave's fortissimo
+Not modelled yet, in honesty: sympathetic resonance between keys, una
+corda and sostenuto, and repedalling half-damping. The board is a fitted
+recording rather than a plate model, so its modes do not move with a
+change of scale or bracing. The top octave's fortissimo
 levelling leans on the voicing table rather than the contact physics.
 [ROADMAP.md](ROADMAP.md) is the ordered plan for closing these gaps,
 written to be picked up by a fresh agent.
@@ -101,8 +110,10 @@ note-on — retrigger the note to hear the change.
 
 | Knob | Where | Moves the sound |
 |---|---|---|
-| `RADIATION_HZ` (180) | `src/model.rs` | Higher = less low fundamental, lighter bass |
-| `SOUNDBOARD_HZ` (1500) | `src/model.rs` | Higher = brighter, glassier; lower = warmer, darker |
+| `BOARD_MODES` | `src/board.rs`, from `tools/fit_board.py <tap.wav>` | The board itself: refit from another tap for another instrument |
+| `BOARD_HUMP_DB` (10), `BOARD_HUMP_HZ` (500) | `src/board.rs` | How far the tap's low body hump is pulled down, and where the shelf ends; 0 dB = the recording as fitted, boomy |
+| `BOARD_GAIN` (0.1), `BOARD_WIDTH` (0.25) | `src/board.rs` | Board level (then `--retrim`) and left/right spread of the modes |
+| `RADIATION_HZ` (180), `SOUNDBOARD_HZ` (1500) | `src/model.rs` | The strike noise's own corners: thinner or fuller knock, brighter or duller thump |
 | Felt loss `0.5 * hammer.vh` | `src/model.rs` (`hammer_step`) | More = duller attack, tamer treble lobes |
 | `sigma2` anchors | `src/keys.rs` | Higher = treble partials die faster (piano), lower = they ring (harpsichord) |
 | `t60` anchors | `src/keys.rs` | Overall note length per register |
@@ -130,7 +141,7 @@ cargo test                                  # tuning/decay/level tests still hol
 ```
 
 `--retrim` re-levels the keyboard after any change that shifts loudness
-(damping, radiation, hammer curves). Skip it for pitch-only changes. The
+(damping, the board, hammer curves). Skip it for pitch-only changes. The
 survey measures the tone with `Knock` at 0: the strike noise is voiced
 against the tone inside the model, so it must not steer the table.
 

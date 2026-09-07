@@ -303,16 +303,19 @@ fn a_fortissimo_strike_knocks_and_the_knock_is_over_at_once() {
             knock_peak > tone_peak * 0.15 && knock_peak < tone_peak * 1.25,
             "key {key}: knock {knock_peak} against tone {tone_peak}"
         );
-        // Over: 25 ms after it begins, the noise is at least 40 dB down.
+        // Over: the burst itself is finished inside 25 ms, but it has set
+        // the board ringing, and the board's own modes take a few times
+        // longer to die (`tests/board.rs` bounds them). 150 ms after it
+        // begins, the noise and its ring are at least 40 dB down.
         let onset = knock
             .iter()
             .position(|s| s.abs() > knock_peak * 0.01)
             .expect("the knock has an onset");
-        let later = &knock[onset + (0.025 * SR) as usize..];
+        let later = &knock[onset + (0.15 * SR) as usize..];
         let tail = peak(later);
         assert!(
             tail < knock_peak * 0.01,
-            "key {key}: the knock still rings 25 ms on ({tail} against {knock_peak})"
+            "key {key}: the knock still rings 150 ms on ({tail} against {knock_peak})"
         );
         // And it lands with the hammer, inside the first few milliseconds.
         assert!(

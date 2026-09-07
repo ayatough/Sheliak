@@ -13,10 +13,11 @@ strings (1–3 per key, the last bank of each an aftersound at the long decay
 behind prompt-sound banks decaying `PROMPT_DECAY` times faster; stiff-string
 inharmonicity, Railsback stretch), a nonlinear felt hammer integrated against
 the string during contact, a deterministic strike noise (knock and thump)
-fired at felt contact, dampers with a pedal, an 88-entry measured voicing
-table. **Verified**: 28 offline tests (determinism, tuning vs theory, decay and
+fired at felt contact, a modal soundboard fitted to a recorded board tap
+that everything leaves through, dampers with a pedal, an 88-entry measured
+voicing table. **Verified**: 33 offline tests (determinism, tuning vs theory, decay and
 its two stages, pedal, boundedness, the strike noise's presence, decay and
-velocity law);
+velocity law, the board's ring, body, width and sample-rate independence);
 clap-validator 0.4.1 was fully green before the strike noise (35 passed,
 0 failed, 9 skipped for undeclared extensions) and the parameter added since
 is a plain automatable number, but that run has not been repeated; plays
@@ -69,6 +70,15 @@ mechanism per round, so the author can hear what changed.
    author's ears.** The reference's other ingredient, a real board's
    150–600 Hz body ring, is workstream 2; convolving our output with that
    recording (offline, in Python) is a cheap A/B for it.
+5. *"flatboard-IR is the most piano-like — but the low end is peaky and
+   painful"*, of an A/B that included the two-stage decay alone, the
+   reference model itself, and our strings with the shelving corners
+   removed and the reference's *recorded board tap* convolved on top. So
+   the board was the missing body: workstream 2 landed as a modal bank
+   fitted to that tap (`board.rs`, `tools/fit_board.py`), with the tap's
+   120–450 Hz hump shelved down `BOARD_HUMP_DB` for the "painful" part.
+   **Awaiting the author's ears** on the hump amount (A/B renders at 0, 10
+   and 16 dB went out) and on the two-stage decay under the board.
 
 ## Workstreams, in order of audible payoff
 
@@ -123,10 +133,24 @@ burst). If they say "clicky" or "boxy", the colours (`KNOCK_HZ_*`,
 
 ### 2. A soundboard that is a resonator, not a filter
 
-Currently two shelving corners (`RADIATION_HZ`, `SOUNDBOARD_HZ`) stand in
-for the soundboard. A real board adds body resonances (a modal cluster
-roughly 50–400 Hz, density increasing upward) and couples the strike into a
-diffuse, stereo-wide body response.
+**Implemented; listening pending on the amount.** `src/board.rs` is a bank
+of 48 damped modes (one biquad each, left and right banks with weights
+nudged apart by a hash of the mode index) fitted by `tools/fit_board.py`
+with the matrix-pencil method to the first 300 ms of a recorded grand's
+board tap — the one distributed with
+Lorenzoncina/Physical-Modeling-Piano-Synthesis, which the ears picked. The
+whole mix (strings and strike) passes through it in the master path; the
+old per-partial shelving corners are gone from the strings (they still
+colour the strike noise alone), and `Voice::setup` levels each key by
+`board_magnitude` at its partials so the voicing table stays near unity.
+The tap's body hump is shelved down by `BOARD_HUMP_DB` (10) below
+`BOARD_HUMP_HZ` (500). If the ears want another instrument, tap another
+board and refit; the fit is deterministic and the table is data. What the
+brief asked for, kept for reference:
+
+A real board adds body resonances (a modal cluster roughly 50–400 Hz,
+density increasing upward) and couples the strike into a diffuse,
+stereo-wide body response.
 
 - Cheapest honest version: a fixed bank of ~24–48 damped modes (the same
   magic-circle resonator the strings already use) fed by the summed bridge
