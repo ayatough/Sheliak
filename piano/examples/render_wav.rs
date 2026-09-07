@@ -8,6 +8,11 @@
 //! `--knock <0..2>` sets the strike-noise level (default 1) and `--out <path>`
 //! the file written, so two renders — with and without the knock — can be
 //! compared by ear, or subtracted to hear the noise on its own.
+//!
+//! `--passage <name>` picks what is played: `demo` (above, the default),
+//! `sweep` (every minor third from A0 to C8, one note at a time, to hear
+//! each register on its own), or `octaves` (the C of every octave held for
+//! two seconds, to hear the decay from bottom to top).
 
 use std::io::Write;
 
@@ -49,22 +54,59 @@ fn score() -> Score {
     Score { notes, pedal }
 }
 
+/// Up the keyboard a minor third at a time, forte, each note alone.
+fn sweep() -> Score {
+    let notes = (21..=108)
+        .step_by(3)
+        .enumerate()
+        .map(|(i, key)| (0.3 + i as f32 * 0.5, key as i16, 0.8, 0.45))
+        .collect();
+    Score {
+        notes,
+        pedal: Vec::new(),
+    }
+}
+
+/// The C of every octave, fortissimo, held two seconds each.
+fn octaves() -> Score {
+    let notes = (24..=108)
+        .step_by(12)
+        .enumerate()
+        .map(|(i, key)| (0.3 + i as f32 * 2.2, key as i16, 1.0, 2.0))
+        .collect();
+    Score {
+        notes,
+        pedal: Vec::new(),
+    }
+}
+
 fn main() -> std::io::Result<()> {
     let mut knock = 1.0f64;
     let mut out = String::from("piano-demo.wav");
+    let mut passage = String::from("demo");
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--knock" => knock = args.next().and_then(|v| v.parse().ok()).unwrap_or(knock),
             "--out" => out = args.next().unwrap_or(out),
+            "--passage" => passage = args.next().unwrap_or(passage),
             _ => {}
         }
     }
 
     let mut piano = Piano::new(SR);
     piano.set_param(P_KNOCK, knock);
-    let score = score();
-    let seconds = 7.5f32;
+    let score = match passage.as_str() {
+        "sweep" => sweep(),
+        "octaves" => octaves(),
+        _ => score(),
+    };
+    let seconds = score
+        .notes
+        .iter()
+        .map(|&(t, _, _, dur)| t + dur)
+        .fold(0.0f32, f32::max)
+        + 2.5;
     let frames = (seconds * SR) as usize;
 
     // Flatten the score into per-frame events.

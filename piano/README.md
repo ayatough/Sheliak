@@ -133,6 +133,7 @@ The listening loop:
 ```bash
 cargo run --release --example bass_demo     # or render_wav — writes a WAV
 cargo run --release --example render_wav -- --knock 0 --out tone-only.wav  # A/B the strike noise
+cargo run --release --example render_wav -- --passage sweep --out sweep.wav   # or octaves: register by register
 # edit, listen, repeat…
 cargo run --release --example levels -- --retrim   # after level-shifting changes
 # paste the printed block over OUTPUT_TRIM in src/keys.rs, then once more:
